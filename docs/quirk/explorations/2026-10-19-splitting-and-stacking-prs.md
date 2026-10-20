@@ -45,7 +45,7 @@ The timing matters. GitHub's native stacked PRs went GA on 2026-10-06, thirteen 
 - GitLab auto-detects stacks (an MR targeting another open MR's source branch) up to 20 MRs. Since 19.2 the MRs must share an author, or the stack stops at the first one that doesn't. — [GitLab stacked MRs](https://docs.gitlab.com/user/project/merge_requests/reviews/stacked_merge_requests/)
 - GitLab MR dependencies (Premium/Ultimate) block an MR until its blockers merge, and closed blockers still block. Nothing in the docs ties them to stacks. Using them to enforce stack order is an inference. — [MR dependencies](https://docs.gitlab.com/user/project/merge_requests/dependencies/)
 - `glab stack` is still labeled "an experiment and is not ready for production use." — [glab stack](https://docs.gitlab.com/cli/stack/)
-- On a classic stack, merging an upper PR merges it into its parent branch, so the code never reaches main. This follows from the base-branch model. No official doc states it. (inference)
+- On a classic stack, merging an upper PR merges it into its parent branch, not main. Its code reaches main only when the parent merges, folded into the parent's PR instead of landing on its own. This follows from the base-branch model. No official doc states it. (inference)
 
 ### Theme: managing a stack is mostly a rebase problem
 

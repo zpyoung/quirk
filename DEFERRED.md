@@ -157,3 +157,11 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 
+
+## DEFER-19: Look up stack parents directly instead of trusting capped PR/MR listings
+- **Deferred**: 2026-10-20
+- **Session context**: fixes for the PR #54 full-code-review findings on zpyoung/enhance-pr-stack
+- **Why deferred**: skills/stacking-prs/scripts/stack.sh reads at most 200 open and 100 merged GitHub PRs (100 each on GitLab). A parent outside that window ends the walk early or drops a merged parent, so `in_stack` or `merged_parents` can be wrong in a busy repo. The fix in this pass only warns (forge_unavailable) when a listing hits its cap. The full fix is a targeted lookup per chain link: `gh pr list --head <base>` for a missing parent and `--state merged --head <base>` for the bottom's base, with matching glab calls. Left out because it adds forge calls per layer and needs new stub fixtures across the stack suite.
+- **Estimated effort**: M
+- **Priority**: P2
+- **Proposed owner**: unassigned

@@ -195,6 +195,62 @@ def test_manage_backup_filter_deletes_long_and_abbreviated_update_refs() -> None
     )
 
 
+@pytest.mark.parametrize("abbreviated", ["false", "true"])
+def test_manage_documented_fixup_rebase_keeps_backups_in_place(tmp_path: Path, abbreviated: str) -> None:
+    # runs manage.md's own command against real git, so the editor hookup is covered, not just the sed
+    command = re.search(
+        r'^(GIT_SEQUENCE_EDITOR=.*\\\n  git rebase -i --autosquash --update-refs "\$BASE")$',
+        MANAGE_PATH.read_text(), re.M,
+    )
+    assert command is not None
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+        "GIT_EDITOR": "true",
+    }
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, env=env, text=True, capture_output=True, check=True,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "commit.gpgsign", "false")
+    git("config", "rebase.abbreviateCommands", abbreviated)
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    for branch in ("lower", "upper"):
+        git("switch", "-q", "-c", branch)
+        (tmp_path / f"{branch}.txt").write_text("before\n")
+        git("add", f"{branch}.txt")
+        git("commit", "-q", "-m", branch)
+    (tmp_path / "lower.txt").write_text("after\n")
+    git("add", "lower.txt")
+    git("commit", "-q", "--fixup=" + git("rev-parse", "lower"))
+    old = {b: git("rev-parse", b) for b in ("lower", "upper")}
+    for branch in old:
+        git("branch", f"backup/{branch}_20261020_141500", branch)
+
+    subprocess.run(
+        ["bash", "-ec", command.group(1)], cwd=tmp_path,
+        env={**env, "BASE": git("rev-parse", "main")}, capture_output=True, text=True, check=True,
+    )
+
+    for branch, sha in old.items():
+        assert git("rev-parse", branch) != sha
+        assert git("rev-parse", f"backup/{branch}_20261020_141500") == sha
+    assert git("show", "lower:lower.txt") == "after"
+    assert git("rev-list", "--count", "main..upper") == "2"
+
+
+def test_router_sends_a_merged_parent_to_land_before_split() -> None:
+    rows = [line for line in SKILL_PATH.read_text().splitlines() if line.startswith("| `")]
+    merged = next(i for i, row in enumerate(rows) if "`merged_parents` is non-empty" in row)
+    not_in_stack = next(i for i, row in enumerate(rows) if "`in_stack` is false" in row)
+    assert merged < not_in_stack
+    assert "land.md#post-merge-sync" in rows[merged]
+
+
 def test_manage_ts_recovery_ignores_backups_of_prefix_sharing_branches(tmp_path: Path) -> None:
     text = MANAGE_PATH.read_text()
     assert text.count("re-derive") == 1

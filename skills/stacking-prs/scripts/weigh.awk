@@ -15,11 +15,38 @@ function fmt(x,    s) {
     return s
 }
 
-function jesc(s) {
+function jesc(s,    i, c, out) {
     gsub(/\\/, "\\\\", s)
     gsub(/"/, "\\\"", s)
     gsub(/\t/, "\\t", s)
-    return s
+    if (s !~ /[\001-\037]/) return s
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        out = out ((c in json_ctl) ? json_ctl[c] : c)
+    }
+    return out
+}
+
+# git_path: a path as git prints it in a header, unquoted. git quotes a path holding a quote, backslash, or
+# control character (C escapes, octal for the rest), and ends an unquoted ---/+++ path holding a space with a tab.
+function git_path(s,    out, i, c, n, d) {
+    if (substr(s, 1, 1) != "\"") { sub(/\t$/, "", s); return s }
+    out = ""
+    for (i = 2; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") break
+        if (c == "\\") {
+            c = substr(s, ++i, 1)
+            if (c ~ /[0-7]/) {
+                n = c + 0
+                for (d = 1; d < 3 && substr(s, i + 1, 1) ~ /[0-7]/; d++) n = n * 8 + substr(s, ++i, 1)
+                c = sprintf("%c", n)
+            } else if (c in git_esc) c = git_esc[c]
+        }
+        out = out c
+    }
+    return out
 }
 
 function hunk_count(range,    i) {
@@ -177,6 +204,10 @@ function dir_of(fp,    i) {
 }
 
 BEGIN {
+    for (i = 1; i < 32; i++) json_ctl[sprintf("%c", i)] = sprintf("\\u%04x", i)
+    split("a 7 b 8 f 12 n 10 r 13 t 9 v 11", esc_pairs, " ")
+    for (i = 1; i < 14; i += 2) git_esc[esc_pairs[i]] = sprintf("%c", esc_pairs[i + 1])
+
     exclude_re = ENVIRON["EXCLUDE_PATTERNS"]
     fixture_re = ENVIRON["FIXTURE_PATTERNS"]
     risky_re = ENVIRON["RISKY_PATTERNS"]
@@ -202,8 +233,20 @@ BEGIN {
 
 /^diff --git / {
     nf++
-    path = $0
-    sub(/^.* b\//, "", path)
+    # "a/P b/P" repeats one path, so an unrenamed header splits at its middle even when P holds " b/"
+    path = substr($0, 12)
+    half = (length(path) - 1) / 2
+    if (substr(path, 1, 1) == "\"") {
+        qb = 0
+        for (k = length(path) - 3; k > 1; k--) if (substr(path, k, 4) == " \"b/") { qb = k; break }
+        path = qb ? git_path(substr(path, qb + 1)) : path
+        sub(/^b\//, "", path)
+    } else if (half == int(half) && substr(path, 1, half) == "a/" substr(path, half + 4) &&
+               substr(path, half + 1, 3) == " b/") {
+        path = substr(path, half + 4)
+    } else {
+        sub(/^.* b\//, "", path)
+    }
     fpath[nf] = path
     fadd[nf] = 0; fdel[nf] = 0; fbin[nf] = 0
     old_path = ""
@@ -240,19 +283,19 @@ in_hunk {
 }
 
 /^--- / {
-    p = substr($0, 5)
+    p = git_path(substr($0, 5))
     if (p != "/dev/null") { sub(/^a\//, "", p); old_path = p }
     next
 }
 
 /^\+\+\+ / {
-    p = substr($0, 5)
+    p = git_path(substr($0, 5))
     if (p == "/dev/null") fpath[nf] = old_path
     else { sub(/^b\//, "", p); fpath[nf] = p }
     next
 }
 
-/^rename to / { fpath[nf] = substr($0, 11); next }
+/^rename to / { fpath[nf] = git_path(substr($0, 11)); next }
 
 /^Binary files / { fbin[nf] = 1; next }
 

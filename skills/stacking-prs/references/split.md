@@ -279,7 +279,7 @@ gh pr ready <existing_pr> --undo
 # GitLab: glab mr update <iid> --draft --repo "$NS/$PROJECT"
 ```
 
-Tell the user the PR went back to draft and that its existing approvals stay on it. Step 7 marks the bottom PR ready once every header is right.
+Tell the user the PR went back to draft. Whether its approvals survived the push and retarget depends on the forge's settings, so don't promise they did. On GitHub/GHES, read `gh pr view <existing_pr> --json reviewDecision` and report what it says. Step 7 marks the bottom PR ready once every header is right.
 
 **f. Register natively (only when `native_available` is true).** Once every PR exists and is retargeted, list the stack's branches bottom to top:
 

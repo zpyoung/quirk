@@ -8,32 +8,34 @@ Every sequence below follows the router's rules. Ask the user to approve the pla
 
 Make the fix as a fixup commit, fold it into the commit it amends, and let `--update-refs` move every branch above it. The order is fixup, then backups, then rebase, then push, then verify.
 
+Before anything else, run `git status --porcelain`. If it prints anything, stop and ask the user to commit or stash that work first, because `git commit --fixup` takes everything staged and would fold unrelated changes into the layer and push them.
+
 ### 1. Check the worktrees first (stop here if one is in the way)
 
 `git rebase --update-refs` silently skips a branch that is checked out in another worktree, which would leave that layer behind. Read `layers[].worktree` from the Step 0 JSON, or look for the `layer_in_other_worktree` warning. If any layer has a path there, stop before writing anything and name the worktree and the layer. Ask the user to pick one:
 
 - **Free the worktree.** The user switches that worktree off the branch or removes it. Re-run `stack.sh` and continue.
-- **Rebase that layer separately afterward.** Run the steps below from the highest layer that is free in this worktree. After the push in step 4, restack the layer that was checked out elsewhere by running this from inside that worktree, where the branch is current, so `restack.sh` doesn't exit 3:
+- **Restack the layers above it separately afterward.** Set `TOP` to the layer just below the lowest layer checked out elsewhere, even when layers above that one are free. A rebase that ran past the occupied layer would replay its commits into the layers above it, and its own restack would then leave them on stale copies. The layer being amended must be at or below `TOP`. If it isn't, the worktree has to be freed instead. Run steps 2 to 4 with that `TOP`, which leaves every layer above it untouched. Then restack each layer above `TOP`, bottom to top, free ones included. Run each from the worktree that has the layer checked out, or from this one when it's free, so `restack.sh` doesn't exit 3:
 
   ```bash
-  cd <that worktree>
+  cd <the worktree holding <layer>, or this one>
   "${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/restack.sh" \
-    --branch <layer> --onto <rebased parent branch> \
+    --branch <layer> --onto <parent> --onto-ref "refs/heads/<parent>" \
     --old-tip "$(git rev-parse backup/<parent>_<timestamp>)" --no-push
   ```
 
-  `--onto` is the parent as it is now, and `--old-tip` is the parent's head before the rebase, read from the parent's backup. Then push that layer with lease from any worktree, as in step 4. The layer being amended can't be the one checked out elsewhere. It has to be free.
+  `--onto-ref` is the parent as it is now, and `--old-tip` is its head before it moved, read from the step 3 backup. Every layer has one, because step 3 backs up all of `LAYERS`. Push each restacked layer with lease, as in step 4, before restacking the next one. Then add these layers to `MOVED` so step 5 verifies them too.
 
 ### 2. Show the plan, get approval, then commit the fix as a fixup
 
 The fixup commit is a git write, so nothing below runs until the user approves. Set up the names the plan uses, then show the plan.
 
-`LAYERS` is every layer's branch, bottom to top, from the stack JSON. `TOP` is the highest layer that is free in this worktree, which is the last entry unless step 1 left a layer behind:
+`LAYERS` is every layer's branch, bottom to top, from the stack JSON. `TOP` is the last entry, unless step 1 set it lower:
 
 ```bash
 LAYERS=()
 while IFS= read -r b; do LAYERS+=("$b"); done < <("${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/stack.sh" | jq -r '.layers[].branch')
-TOP=${LAYERS[${#LAYERS[@]}-1]}   # or the highest free layer
+TOP=${LAYERS[${#LAYERS[@]}-1]}   # or the layer step 1 picked
 ```
 
 Pick the commit the fix belongs to. `git log --oneline <parent>..<layer>` lists the layer's own commits. The plan names that commit, the layers that will move, the backup branches step 3 creates, and the pushes step 4 makes. Get approval before the first git write.
@@ -81,9 +83,12 @@ for b in "${LAYERS[@]}"; do
   if [ "$(git rev-parse "$b")" != "$(git rev-parse "backup/${b}_${TS}")" ]; then MOVED+=("$b"); fi
 done
 for b in "${MOVED[@]}"; do
-  git push --force-with-lease --force-if-includes <remote> "$b"
+  git push --force-with-lease --force-if-includes <remote> "$b" ||
+    { echo "push of $b was rejected; stopping before the layers above it" >&2; break; }
 done
 ```
+
+If a push is rejected, stop there. Someone else moved that branch, so the layers above it must not be published on top of the stale one. Fetch, compare the remote branch with the backup, and show the user before any retry. Never fall back to `--force`.
 
 ### 5. Verify and show the user
 

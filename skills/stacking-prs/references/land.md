@@ -43,7 +43,7 @@ Run this when the user says the bottom merged, or when `stack.sh` reports `broke
    "$RESTACK" --branch <layer 3> --onto <layer 2> --old-tip <layer 2 old_head> --pr <number of layer 3>
    ```
 
-   `restack.sh` makes `backup/<branch>_<timestamp>`, rebases with `--onto`, pushes with `--force-with-lease --force-if-includes`, and retargets the PR when its base differs. Add `--forge gitlab` on GitLab when the remote host doesn't say so. Read the exit code after every layer:
+   `restack.sh` makes `backup/<branch>_<timestamp>`, rebases with `--onto`, pushes with `--force-with-lease --force-if-includes`, and retargets the PR when its base differs. It can't tell GHES from the remote host, so add `--forge ghes` to every call on GHES. Add `--forge gitlab` on GitLab when the remote host doesn't say so. Read the exit code after every layer:
 
    | Exit | Meaning | What to do |
    |---|---|---|
@@ -52,18 +52,18 @@ Run this when the user says the bottom merged, or when `stack.sh` reports `broke
    | 2 | Conflict. The rebase was aborted and the branch is back at its old head | Stop, list `conflicted_files`, point to the backup, and don't auto-resolve |
    | 3 | The branch is checked out in another worktree. Nothing changed | Ask the user to free it, or run `restack.sh` from inside that worktree |
    | 4 | The push was rejected. The local rebase and backup are kept | Stop. The remote moved, so fetch and compare before any retry, and never fall back to `--force` |
-   | 5 | The retarget failed after the push | Finish the remaining layers, then give the user `pr_url` to retarget by hand |
+   | 5 | The retarget failed | Finish the remaining layers, then ask the user to retarget by hand, giving `pr_url` when it isn't null |
 
 4. **Refresh every header.** Run [Split Step 7](split.md#step-7-refresh-every-stack-header-then-mark-the-bottom-ready) on every remaining PR, because positions and bases changed.
 5. **Mark the new bottom ready.** Run `gh pr ready <number>` (GitLab: `glab mr update <iid> --ready`) on the new bottom only, after the headers are right. Every other layer stays in draft.
-6. **Delete the merged local branch** with `git branch -D <merged branch>`. Keep the `backup/*` branches. `git branch -d` would refuse after a squash merge, so `-D` is expected here.
+6. **Delete the merged local branch, only if its tip is the head that merged.** Compare `git rev-parse <merged branch>` with the merged PR's `head_sha` from `merged_parents[]`. If they differ, the branch holds commits that never merged, so keep it and tell the user. If step 1 took the old tip from the local branch because `merged_parents[]` was empty, read the merged PR's head with `gh pr view <number> --json headRefOid` (GitLab: `glab mr view <iid> -F json`, field `sha`) for this check. When they match, run `git branch -D <merged branch>`. Keep the `backup/*` branches. `git branch -d` would refuse after a squash merge, so `-D` is expected here.
 7. Offer to run Land again on the new bottom.
 
 ### Merged anchor with several open children
 
 After step 1's re-read, check for this shape before planning anything: forge mode, `layers: []`, `in_stack: false`, one `merged_parents[]` entry per child, and a `branched_stack` warning whose `branches` names the children. It means the merged branch you passed as `--branch` had more than one open PR targeting it, so there is no single chain to restack.
 
-1. **Show the fork.** List each child from `branched_stack` with its PR number and the `head_sha` from its `merged_parents[]` entry. Ask which children to sync now. Don't pick for the user.
+1. **Show the fork.** `merged_parents[].number` is the merged PR, not the child's. For each child in `branched_stack.branches`, run `stack.sh --branch <child>` and read the child's PR number from the `layers[]` entry whose `branch` is that child. List each child with that number and the `head_sha` from the `merged_parents[]` entry whose `child` it is. Ask which children to sync now. Don't pick for the user.
 2. **Sync one confirmed child at a time.** Run `stack.sh --branch <child>` so the JSON holds that child's chain, then continue the classic post-merge sync above from its step 2, using that JSON. Don't repeat step 1, because its plain re-read would use the checked-out merged anchor and return the empty fork again. Any later re-read in this flow is `stack.sh --branch <child>` too. Step 3's first row uses that child's own `merged_parents[].head_sha` as `--old-tip`, with `--onto` set to trunk. The layers above it follow the usual `old_head` rule.
 3. **Get restack plan approval for each child's chain** before its first `restack.sh` run, as step 2 requires. Approval for one child doesn't cover another.
 4. Children the user didn't confirm stay untouched. Tell the user they are still based on the merged branch, and offer to run Land again for them.

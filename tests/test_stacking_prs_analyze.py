@@ -8,6 +8,14 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+# settings analyze.sh reads from the environment; inherited values would override each case's config
+ANALYZER_SETTINGS = (
+    "TARGET_LINES_PER_SPLIT", "HARD_CAP", "SKIP_THRESHOLD",
+    "TEST_WEIGHT", "FIXTURE_WEIGHT", "RISKY_WEIGHT", "PROSE_WEIGHT",
+    "COMMENT_WEIGHT", "IMPORT_WEIGHT", "MOVED_WEIGHT", "DELETION_WEIGHT",
+    "EXCLUDE_PATTERNS", "FIXTURE_PATTERNS", "RISKY_PATTERNS", "PROSE_PATTERNS",
+)
+
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,14 +26,17 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def _write(repo: Path, files: Dict[str, Optional[str]]) -> None:
+def _write(repo: Path, files: Dict[str, Union[str, bytes, None]]) -> None:
     for rel, content in files.items():
         path = repo / rel
         if content is None:
             path.unlink()
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content)
 
 
 def _run(
@@ -58,12 +69,13 @@ def _run(
     # written untracked after the commits so the config itself isn't part of the diff
     if project_config is not None:
         _write_config(repo / ".quirk" / "stacking-prs.json", project_config)
+    inherited = {k: v for k, v in os.environ.items() if k not in ANALYZER_SETTINGS}
     return subprocess.run(
         [str(ANALYZE), "main"],
         cwd=repo,
         capture_output=True,
         text=True,
-        env={**os.environ, "HOME": str(home), **(env or {})},
+        env={**inherited, "HOME": str(home), **(env or {})},
     )
 
 
@@ -360,9 +372,48 @@ def test_split_goals_come_from_config_layers(tmp_path):
         ({"weights": {"comment": "abc"}}, "project config"),
         ({"hard_cap": "big"}, "HARD_CAP"),
         ({"skip_threshold": 500}, "skip_threshold"),
+        ({"patterns": {"risky": 1}}, "patterns.risky"),
+        ({"patterns": {"risky": ["(^|/)infra/", 2]}}, "patterns.risky"),
+        ({"patterns": {"exclude": ["(^|/)infra/", ""]}}, "patterns.exclude"),
     ],
 )
 def test_bad_config_is_rejected(tmp_path, config, needle):
     result = _run(tmp_path, {}, {"src/a.py": "a = 1\n"}, project_config=config)
     assert result.returncode != 0
     assert needle in result.stderr
+
+
+@pytest.mark.parametrize("empty", ["", []])
+def test_empty_config_pattern_keeps_the_default(tmp_path, empty):
+    report = analyze(tmp_path, {}, {"src/a.py": "a = 1\n"}, project_config={"patterns": {"risky": empty}})
+    assert weight_of(report, "src/a.py") == pytest.approx(1.0)
+
+
+def test_inter_hunk_context_config_does_not_fuse_hunks(tmp_path):
+    base = {"src/a.py": "".join(f"line_{n} = {n}\n" for n in range(9))}
+    feature = {"src/a.py": base["src/a.py"].replace("line_1 =", "one =").replace("line_4 =", "four =").replace("line_7 =", "seven =")}
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "diff.interHunkContext", "GIT_CONFIG_VALUE_0": "5"}
+    report = analyze(tmp_path, base, feature, env=env)
+    assert report["total_lines"] == 6
+
+
+def test_paths_with_spaces_quotes_and_controls_keep_their_names_and_weights(tmp_path):
+    names = ["app/plain.py", "app/has space.py", 'app/has"quote.py', "app/has\ttab.py", "app/has\nnl.py"]
+    src = "# c1\n# c2\n# c3\n# c4\nx = 1\n"
+    report = analyze(tmp_path, {}, {name: src for name in names})
+    assert sorted(r["file"] for r in report["files"]) == sorted(names)
+    assert [g["directory"] for g in report["directory_groups"]] == ["app"]
+    assert report["total_comment_lines"] == 20
+    assert report["weighted_review_lines"] == pytest.approx(10.0)
+
+
+def test_binary_path_with_an_embedded_b_slash_is_kept_whole(tmp_path):
+    report = analyze(tmp_path, {}, {"docs b/report.bin": b"PNG\0\0\1\2binary"})
+    assert [r["file"] for r in report["files"]] == ["docs b/report.bin"]
+    assert [g["directory"] for g in report["directory_groups"]] == ["docs b"]
+    assert report["binary_files"] == ["docs b/report.bin"]
+
+
+def test_a_non_utf8_source_line_is_weighed_not_fatal(tmp_path):
+    report = analyze(tmp_path, {}, {"src/latin1.py": b"name = '\xe9t\xe9'\n"})
+    assert weight_of(report, "src/latin1.py") == pytest.approx(1.0)

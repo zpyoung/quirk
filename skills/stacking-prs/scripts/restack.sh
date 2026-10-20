@@ -15,7 +15,7 @@
 #   2 rebase conflict: rebase aborted, branch restored to its pre-run head
 #   3 <b> is checked out in another worktree: nothing changed
 #   4 push rejected (lease or includes check): local rebase and backup kept
-#   5 retarget failed after a successful push: JSON carries the PR URL
+#   5 retarget failed: `pushed` says whether the push ran, and pr_url is null when its lookup failed
 #
 # --old-tip is the head SHA of the parent as the layer was built on it. Replaying
 # `<old-tip>..<b>` onto the new base takes only the layer's own commits, whether the parent
@@ -138,20 +138,49 @@ parse_args() {
     return 0
 }
 
+REMOTE_URL=""
+REMOTE_HOST=""
+REMOTE_PATH=""
+
+# Same parsing as stack.sh: REMOTE_HOST and REMOTE_PATH from the remote URL, both empty for a local path.
+parse_remote() {
+    local rest
+    REMOTE_URL=$(git remote get-url "$REMOTE" 2>/dev/null || true)
+    case "$REMOTE_URL" in
+        *://*)
+            rest="${REMOTE_URL#*://}"
+            [[ "$rest" == */* ]] || return 0
+            REMOTE_HOST="${rest%%/*}"
+            REMOTE_PATH="${rest#*/}"
+            ;;
+        *:*)
+            REMOTE_HOST="${REMOTE_URL%%:*}"
+            REMOTE_PATH="${REMOTE_URL#*:}"
+            [[ "$REMOTE_HOST" != */* ]] || { REMOTE_HOST=""; REMOTE_PATH=""; return 0; }
+            ;;
+        *) return 0 ;;
+    esac
+    REMOTE_HOST="${REMOTE_HOST##*@}"
+    REMOTE_HOST=$(printf '%s' "${REMOTE_HOST%%:*}" | tr '[:upper:]' '[:lower:]')
+    REMOTE_PATH="${REMOTE_PATH%/}"
+    REMOTE_PATH="${REMOTE_PATH%.git}"
+    [[ -n "$REMOTE_HOST" && -n "$REMOTE_PATH" ]] || { REMOTE_HOST=""; REMOTE_PATH=""; }
+}
+
+# glab_r: glab bound to the remote's project, so a retarget can't edit an MR in another repo
+glab_r() {
+    if [[ -n "$REMOTE_HOST" ]]; then glab "$@" -R "$REMOTE_URL"; else glab "$@"; fi
+}
+
 # Same resolution as stack.sh: --forge, else STACK_FORGE, else the remote host.
 resolve_forge() {
-    local url auth host
+    parse_remote
     if [[ -n "$FORGE_ARG" ]]; then
         FORGE="$FORGE_ARG"
     elif [[ -n "${STACK_FORGE:-}" ]]; then
         FORGE="$STACK_FORGE"
     else
-        url=$(git remote get-url "$REMOTE" 2>/dev/null || true)
-        auth="${url#*://}"
-        auth="${auth%%/*}"
-        auth="${auth#*@}"
-        host=$(printf '%s' "${auth%%:*}" | tr '[:upper:]' '[:lower:]')
-        case "$host" in
+        case "$REMOTE_HOST" in
             github.com) FORGE="github" ;;
             *gitlab*) FORGE="gitlab" ;;
             *) FORGE="none" ;;
@@ -161,6 +190,8 @@ resolve_forge() {
         github | ghes | gitlab | none) ;;
         *) fail 1 "forge must be one of github|ghes|gitlab|none (got '$FORGE')" ;;
     esac
+    # gh reads GH_REPO for every command, so a retarget can't edit a PR in another repo
+    if [[ -n "$REMOTE_HOST" ]]; then export GH_REPO="$REMOTE_HOST/$REMOTE_PATH"; fi
 }
 
 # Print the path of another worktree that has $1 checked out; nothing when there is none.
@@ -303,7 +334,7 @@ read_pr() {
     local json
     case "$FORGE" in
         gitlab)
-            json=$(glab mr view "$PR" -F json 2>/dev/null) || json=""
+            json=$(glab_r mr view "$PR" -F json 2>/dev/null) || json=""
             PR_URL=$(printf '%s' "$json" | jq -r '.web_url // empty' 2>/dev/null || true)
             PR_BASE=$(printf '%s' "$json" | jq -r '.target_branch // empty' 2>/dev/null || true)
             ;;
@@ -322,7 +353,7 @@ retarget() {
         return 0
     fi
     case "$FORGE" in
-        gitlab) glab mr update "$PR" --target-branch "$ONTO" >&2 || return 1 ;;
+        gitlab) glab_r mr update "$PR" --target-branch "$ONTO" >&2 || return 1 ;;
         *) gh pr edit "$PR" --base "$ONTO" >&2 || return 1 ;;
     esac
     RETARGETED=true

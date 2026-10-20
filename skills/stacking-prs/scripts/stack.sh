@@ -8,11 +8,12 @@
 # Output: detection JSON, or {"schema":1,"skipped":[...]} for --check-ci
 #
 # Never writes: no fetch, checkout, branch, push, or forge mutation. Only `gh`/`glab` read calls.
-# A forge failure degrades to local (ancestry) mode with a forge_unavailable warning.
+# A failed PR/MR listing degrades to local (ancestry) mode with a forge_unavailable warning. A failed
+# GitLab enrichment or GitHub native-stack lookup keeps classic mode and emits the same warning.
 #
 # `current_branch` is the branch the walk is anchored on: --branch, else the checked-out branch.
-# GitLab calls use glab's `:id` placeholder (listed by `glab api --help`), which glab fills from
-# the current repo.
+# Forge reads target the repository of --remote's URL. When that URL names no host (a local path),
+# gh and glab fall back to their default repository, and glab's `:id` placeholder to the current repo.
 
 set -euo pipefail
 
@@ -265,7 +266,7 @@ scan_ci() {
     root=$(git rev-parse --show-toplevel)
     for file in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
         [[ -f "$file" ]] || continue
-        scan=$(awk "$CI_AWK" "$file")
+        scan=$(awk "$CI_AWK" "$file") || continue
         for base in "$@"; do
             if scan_skips "$scan" "$base"; then
                 printf '%s\t.github/workflows/%s\n' "$base" "$(basename "$file")" >>"$TMP/ci_hits"
@@ -290,26 +291,67 @@ run_check_ci() {
 # ---- forge resolution ------------------------------------------------------
 
 FORGE="none"
+REMOTE_URL=""
+REMOTE_HOST=""
+REMOTE_PATH=""
+
+# Splits the remote URL (scheme://[user@]host[:port]/path or scp-style [user@]host:path) into
+# REMOTE_HOST and REMOTE_PATH; both stay empty for a local path.
+parse_remote() {
+    local rest
+    REMOTE_URL=$(git remote get-url "$REMOTE" 2>/dev/null || true)
+    case "$REMOTE_URL" in
+        *://*)
+            rest="${REMOTE_URL#*://}"
+            [[ "$rest" == */* ]] || return 0
+            REMOTE_HOST="${rest%%/*}"
+            REMOTE_PATH="${rest#*/}"
+            ;;
+        *:*)
+            REMOTE_HOST="${REMOTE_URL%%:*}"
+            REMOTE_PATH="${REMOTE_URL#*:}"
+            [[ "$REMOTE_HOST" != */* ]] || { REMOTE_HOST=""; REMOTE_PATH=""; return 0; }
+            ;;
+        *) return 0 ;;
+    esac
+    REMOTE_HOST="${REMOTE_HOST##*@}"
+    REMOTE_HOST=$(printf '%s' "${REMOTE_HOST%%:*}" | tr '[:upper:]' '[:lower:]')
+    REMOTE_PATH="${REMOTE_PATH%/}"
+    REMOTE_PATH="${REMOTE_PATH%.git}"
+    [[ -n "$REMOTE_HOST" && -n "$REMOTE_PATH" ]] || { REMOTE_HOST=""; REMOTE_PATH=""; }
+}
+
+# glab_r: glab bound to the remote's project. `glab api` takes no -R, so glab_api names the project
+# and host itself.
+glab_r() {
+    if [[ -n "$REMOTE_HOST" ]]; then glab "$@" -R "$REMOTE_URL"; else glab "$@"; fi
+}
+
+glab_api() {
+    local path="$1"
+    if [[ -n "$REMOTE_HOST" ]]; then
+        glab api --hostname "$REMOTE_HOST" "projects/$(jq -rn --arg p "$REMOTE_PATH" '$p | @uri')/$path"
+    else
+        glab api "projects/:id/$path"
+    fi
+}
 
 resolve_forge() {
-    local url auth host
+    parse_remote
     if [[ -n "${STACK_FORGE:-}" ]]; then
         case "$STACK_FORGE" in
             github | ghes | gitlab | none) FORGE="$STACK_FORGE" ;;
             *) die "STACK_FORGE must be one of github|ghes|gitlab|none (got '$STACK_FORGE')" ;;
         esac
-        return
+    else
+        case "$REMOTE_HOST" in
+            github.com) FORGE="github" ;;
+            *gitlab*) FORGE="gitlab" ;;
+            *) FORGE="none" ;;
+        esac
     fi
-    url=$(git remote get-url "$REMOTE" 2>/dev/null || true)
-    auth="${url#*://}"
-    auth="${auth%%/*}"
-    auth="${auth#*@}"
-    host=$(printf '%s' "${auth%%:*}" | tr '[:upper:]' '[:lower:]')
-    case "$host" in
-        github.com) FORGE="github" ;;
-        *gitlab*) FORGE="gitlab" ;;
-        *) FORGE="none" ;;
-    esac
+    # gh reads GH_REPO for every command, including `gh api`'s {owner}/{repo} placeholders
+    if [[ -n "$REMOTE_HOST" ]]; then export GH_REPO="$REMOTE_HOST/$REMOTE_PATH"; fi
 }
 
 # GitHub rollup entries are CheckRuns (status/conclusion) or StatusContexts (state).
@@ -319,8 +361,8 @@ def up: (. // "") | ascii_upcase;
 def ci_of:
     (.statusCheckRollup // []) as $r
     | if ($r | length) == 0 then "none"
-      elif any($r[]; (.conclusion | up | isin(["FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED"]))
-                     or (.state | up | isin(["FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED"]))) then "fail"
+      elif any($r[]; (.conclusion | up | isin(["FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE","STALE"]))
+                     or (.state | up | isin(["FAILURE","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE","STALE"]))) then "fail"
       elif any($r[]; (.conclusion | up | isin(["PENDING","QUEUED","IN_PROGRESS","EXPECTED"]))
                      or (.state | up | isin(["PENDING","QUEUED","IN_PROGRESS","EXPECTED"]))
                      or (.status | up | isin(["PENDING","QUEUED","IN_PROGRESS","WAITING"]))
@@ -334,15 +376,32 @@ def review_of:
       else "none" end;
 '
 
+# list_failed <what>: notes a failed listing with the first line of the CLI's stderr
+list_failed() {
+    local why
+    why=$(grep -m1 . "$TMP/list_err" 2>/dev/null || true)
+    note "$1 failed${why:+: $why}"
+    return 1
+}
+
+# note_if_capped <file> <cap> <what>: a listing that hit its cap may be missing a stack parent
+note_if_capped() {
+    if jq -e --argjson cap "$2" 'length >= $cap' "$1" >/dev/null 2>&1; then
+        note "$3 returned its $2-item cap, so a layer or merged parent may be missing"
+    fi
+}
+
 # Each fetcher writes normalized $TMP/open.json and $TMP/merged.json, or notes why it cannot.
 fetch_github() {
     command -v gh >/dev/null 2>&1 || { note "gh is not installed"; return 1; }
     gh pr list --state open --limit 200 --json \
         number,url,headRefName,baseRefName,isDraft,state,reviewDecision,statusCheckRollup,headRefOid,isCrossRepository,author \
-        >"$TMP/raw_open.json" 2>/dev/null || { note "gh pr list (open) failed"; return 1; }
+        >"$TMP/raw_open.json" 2>"$TMP/list_err" || list_failed "gh pr list (open)" || return 1
     gh pr list --state merged --limit 100 --json \
         number,headRefName,baseRefName,headRefOid,mergeCommit,mergedAt \
-        >"$TMP/raw_merged.json" 2>/dev/null || { note "gh pr list (merged) failed"; return 1; }
+        >"$TMP/raw_merged.json" 2>"$TMP/list_err" || list_failed "gh pr list (merged)" || return 1
+    note_if_capped "$TMP/raw_open.json" 200 "gh pr list (open)"
+    note_if_capped "$TMP/raw_merged.json" 100 "gh pr list (merged)"
     jq "$GH_NORMALIZE"'
         map({number, url, head: .headRefName, base: .baseRefName, draft: (.isDraft // false),
              sha: .headRefOid, author: (.author.login // null), cross: (.isCrossRepository // false),
@@ -355,10 +414,12 @@ fetch_github() {
 
 fetch_gitlab() {
     command -v glab >/dev/null 2>&1 || { note "glab is not installed"; return 1; }
-    glab mr list -F json --per-page 100 >"$TMP/raw_open.json" 2>/dev/null ||
-        { note "glab mr list failed"; return 1; }
-    glab mr list -M -F json --per-page 100 >"$TMP/raw_merged.json" 2>/dev/null ||
-        { note "glab mr list -M failed"; return 1; }
+    glab_r mr list -F json --per-page 100 >"$TMP/raw_open.json" 2>"$TMP/list_err" ||
+        list_failed "glab mr list" || return 1
+    glab_r mr list -M -F json --per-page 100 >"$TMP/raw_merged.json" 2>"$TMP/list_err" ||
+        list_failed "glab mr list -M" || return 1
+    note_if_capped "$TMP/raw_open.json" 100 "glab mr list"
+    note_if_capped "$TMP/raw_merged.json" 100 "glab mr list -M"
     jq 'map({number: .iid, url: .web_url, head: .source_branch, base: .target_branch,
              draft: (.draft // .work_in_progress // false), sha: .sha,
              author: (.author.username // null), cross: false, ci: "unknown", review: "unknown",
@@ -377,10 +438,10 @@ fetch_gitlab() {
 # of a merged PR the chain starts at the one open PR above it, otherwise the branch itself is layer 1 as
 # a local layer. With several open PRs above a merged head there is no single chain: the result has an empty
 # chain and anchor_children naming each of them. fork_heads lists every set of open PRs sharing a base
-# anywhere along the chain.
+# anywhere along the chain. When a fork's PR shares a head name with a same-repo PR, the same-repo one wins.
 CHAIN_JQ='
 def o: $open | sort_by(.number);
-def by_head($h): [o[] | select(.head == $h)] | first;
+def by_head($h): [o[] | select(.head == $h)] | (map(select(.cross | not)) + map(select(.cross))) | first;
 def by_base($b): [o[] | select(.base == $b)];
 def kids($c): by_base($c[-1].head) | map(select(.head as $h | ($c | map(.head) | index($h)) == null));
 def down:
@@ -462,7 +523,7 @@ parent_of() {
 
 # prepare_eligible: writes the local branches parent_of may pick from (no backups, no trunk)
 prepare_eligible() {
-    git for-each-ref --format='%(refname:short)' refs/heads |
+    git for-each-ref --format='%(refname)' refs/heads | sed 's@^refs/heads/@@' |
         { grep -v '^backup/' || true; } | { grep -vxF -- "$TRUNK" || true; } >"$TMP/eligible"
 }
 
@@ -510,6 +571,11 @@ build_local_chain() {
             fi
         done
         while IFS= read -r head; do
+            kids=$(awk -F'\t' -v p="$head" '$2 == p { print $1 }' "$TMP/parents")
+            if [[ "$(printf '%s' "$kids" | grep -c . || true)" -gt 1 ]]; then
+                FORK_HEADS=$(printf '%s\n' "$kids" | jq -R . | jq -s --argjson known "$FORK_HEADS" \
+                    'reduce .[] as $h ($known; if index($h) == null then . + [$h] else . end)')
+            fi
             printf '%s\t%s\t%s\n' "$head" "$(awk -F'\t' -v b="$head" '$1 == b { print $2; exit }' "$TMP/parents")" \
                 "$(git rev-parse "$(tip_ref "$head")")" >>"$TMP/local_rows"
         done <"$TMP/local_names"
@@ -529,7 +595,7 @@ gitlab_enrich_layers() {
     while IFS= read -r iid; do
         ci="unknown"
         review="unknown"
-        if pipeline=$(glab mr view "$iid" -F json 2>/dev/null) && printf '%s' "$pipeline" | jq -e . >/dev/null 2>&1; then
+        if pipeline=$(glab_r mr view "$iid" -F json 2>/dev/null) && printf '%s' "$pipeline" | jq -e . >/dev/null 2>&1; then
             status=$(printf '%s' "$pipeline" | jq -r '.head_pipeline.status // empty')
             case "$status" in
                 "") ci="none" ;;
@@ -541,7 +607,7 @@ gitlab_enrich_layers() {
         else
             note "glab mr view $iid failed"
         fi
-        if approved=$(glab api "projects/:id/merge_requests/$iid/approvals" 2>/dev/null) &&
+        if approved=$(glab_api "merge_requests/$iid/approvals" 2>/dev/null) &&
             printf '%s' "$approved" | jq -e . >/dev/null 2>&1; then
             if [[ "$(printf '%s' "$approved" | jq -r '.approved // false')" == "true" ]]; then
                 review="approved"
@@ -557,19 +623,24 @@ gitlab_enrich_layers() {
     done < <(jq -r '.chain[] | select(.number != null) | .number' "$TMP/chain.json")
 }
 
-# native_stack_number: prints the stack number (or "null") when the bottom PR belongs to a native stack
+# detect_native: sets MODE=native and STACK_NUMBER only when every layer's PR is in the same native
+# stack, since a PR stacked on a native layer by base alone isn't registered with it
 detect_native() {
-    local bottom response
-    bottom=$(jq -r '.chain[0].number // empty' "$TMP/chain.json")
-    [[ -n "$bottom" ]] || return 0
-    if ! response=$(gh api "repos/{owner}/{repo}/pulls/$bottom" --jq '.stack // empty' 2>/dev/null); then
-        note "gh api pulls/$bottom failed"
-        return 0
-    fi
-    if printf '%s' "$response" | jq -e 'type == "object" and length > 0' >/dev/null 2>&1; then
-        MODE="native"
-        STACK_NUMBER=$(printf '%s' "$response" | jq -c '.number // .id // null')
-    fi
+    local number response id first=""
+    while IFS= read -r number; do
+        [[ "$number" != "null" ]] || return 0
+        if ! response=$(gh api "repos/{owner}/{repo}/pulls/$number" --jq '.stack // empty' 2>/dev/null); then
+            note "gh api pulls/$number failed"
+            return 0
+        fi
+        id=$(printf '%s' "$response" | jq -c 'if type == "object" and length > 0 then .number // .id // null else empty end' 2>/dev/null || true)
+        [[ -n "$id" ]] || return 0
+        [[ -z "$first" || "$id" == "$first" ]] || return 0
+        first="$id"
+    done < <(jq -r '.chain[].number' "$TMP/chain.json")
+    [[ -n "$first" ]] || return 0
+    MODE="native"
+    STACK_NUMBER="$first"
 }
 
 # worktrees_other: "branch<TAB>path" for branches checked out in a worktree other than this one
@@ -581,15 +652,17 @@ worktrees_other() {
         /^branch refs\/heads\// { if (path != here) print substr($0, 19) "\t" path }'
 }
 
-# layer_enrichment: "branch<TAB>behind<TAB>worktree" per layer
+# layer_enrichment: "branch<TAB>behind<TAB>worktree" per layer. behind counts from the layer's recorded
+# sha (the published PR head, or a local layer's tip), so unpushed local commits can't hide staleness.
 layer_enrichment() {
     local head base sha ref parent_ref behind wt
     worktrees_other >"$TMP/worktrees"
     : >"$TMP/enrich"
     while IFS=$'\t' read -r head base sha; do
-        ref=$(tip_ref "$head")
-        if [[ -z "$ref" && -n "$sha" ]] && git cat-file -e "$sha^{commit}" 2>/dev/null; then
+        if [[ -n "$sha" ]] && git cat-file -e "$sha^{commit}" 2>/dev/null; then
             ref="$sha"
+        else
+            ref=$(tip_ref "$head")
         fi
         parent_ref=""
         if ref_exists "refs/remotes/$REMOTE/$base"; then
@@ -618,7 +691,8 @@ if [[ $CHECK_CI -eq 1 ]]; then
 fi
 
 if [[ -z "$BRANCH" ]]; then
-    BRANCH=$(git symbolic-ref -q --short HEAD 2>/dev/null) || die "HEAD is detached; check out a branch or pass --branch"
+    BRANCH=$(git symbolic-ref -q HEAD 2>/dev/null) || die "HEAD is detached; check out a branch or pass --branch"
+    BRANCH="${BRANCH#refs/heads/}"
 fi
 
 TRUNK=$(detect_trunk "$TRUNK")
@@ -716,7 +790,7 @@ jq -n \
     | ($layers | map(select(.state != "local")) | length) as $open_n
     | ($chain | map(select(.cross) | .head)) as $cross
     | ($cf.anchor_children // []) as $anchor_kids
-    | (if $n > 0 and $mode != "local" and $layers[0].state != "local" then
+    | (if $n > 0 and $mode != "local" and $layers[0].state != "local" and $layers[0].base != $trunk then
          ($merged | map(select(.head == $layers[0].base)) | sort_by(.number) | last)
        elif ($anchor_kids | length) > 0 then
          ($merged | map(select(.head == $current)) | sort_by(.number) | last)

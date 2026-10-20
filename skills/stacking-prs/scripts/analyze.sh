@@ -59,7 +59,12 @@ load_config() {
             (if (.weights // {} | type) != "object" then "weights (must be an object)"
              else (.weights // {} | keys - $w | .[] | "weights." + .) end),
             (if (.patterns // {} | type) != "object" then "patterns (must be an object)"
-             else (.patterns // {} | keys - $p | .[] | "patterns." + .) end)' "$file")
+             else (.patterns // {} | keys - $p | .[] | "patterns." + .),
+                  (.patterns // {} | to_entries[]
+                   | select(.value | if type == "string" then false
+                                     elif type == "array" then any(.[]; type != "string" or . == "")
+                                     else true end)
+                   | "patterns." + .key + " (must be a regex or an array of non-empty regexes)") end)' "$file")
         [[ -z "$unknown" ]] || die "$file: unknown or malformed key(s): $(echo $unknown)"
         CONFIG_FILES+=("$file")
     done
@@ -94,7 +99,7 @@ resolve_pattern() {
     local name="$1" key="$2" default="$3" extra
     [[ -n "${!name:-}" ]] && return
     if extra=$(cfg_get "$PROJECT_CFG" ".patterns.$key") || extra=$(cfg_get "$USER_CFG" ".patterns.$key"); then
-        printf -v "$name" '%s' "$default|$extra"
+        printf -v "$name" '%s' "$default${extra:+|$extra}"
     else
         printf -v "$name" '%s' "$default"
     fi
@@ -203,15 +208,17 @@ merge_base_of() {
 # Detect binary files
 detect_binary_files() {
     local target_branch="$1"
-    git diff --numstat "$(merge_base_of "$target_branch")"...HEAD 2>/dev/null | grep -E "^-\s+-\s+" | awk '{print $3}' || true
+    git -c core.quotePath=false diff --numstat "$(merge_base_of "$target_branch")"...HEAD 2>/dev/null |
+        awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' || true
 }
 
-# Zero-context diff with fixed a/ b/ prefixes, so user diff config can't change what weigh.awk parses.
+# Zero-context, unfused hunks with fixed a/ b/ prefixes, so user diff config can't change what weigh.awk parses.
+# awk runs in the C locale because a non-UTF-8 source line makes a UTF-8 awk abort.
 weigh_diff() {
     local target_branch="$1"
-    git -c core.quotePath=false diff -U0 -M --no-color --no-ext-diff --no-textconv \
+    git -c core.quotePath=false diff -U0 --inter-hunk-context=0 -M --no-color --no-ext-diff --no-textconv \
         --src-prefix=a/ --dst-prefix=b/ "$(merge_base_of "$target_branch")"...HEAD \
-        | awk -f "$SCRIPT_DIR/weigh.awk"
+        | LC_ALL=C awk -f "$SCRIPT_DIR/weigh.awk"
 }
 
 # Main execution

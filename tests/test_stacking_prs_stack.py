@@ -411,6 +411,8 @@ def test_sc2_detection_is_the_same_from_any_layer(sb: Sandbox) -> None:
         ([{"conclusion": "CANCELLED"}], "fail"),
         ([{"conclusion": "TIMED_OUT"}], "fail"),
         ([{"conclusion": "ACTION_REQUIRED"}], "fail"),
+        ([{"status": "COMPLETED", "conclusion": "STARTUP_FAILURE"}], "fail"),
+        ([{"status": "COMPLETED", "conclusion": "STALE"}], "fail"),
         ([{"state": "ERROR"}], "fail"),
         ([{"state": "FAILURE"}, {"state": "PENDING"}], "fail"),
     ],
@@ -522,6 +524,16 @@ def test_local_walk_up_stops_at_a_fork(sb: Sandbox) -> None:
     assert warning(out, "branched_stack")["branches"] == ["left", "right"]
 
 
+def test_local_fork_below_the_anchor_is_reported_from_a_child_of_the_fork(sb: Sandbox) -> None:
+    sb.branch("part-a", "main", push=False)
+    sb.branch("left", "part-a", push=False)
+    sb.git("checkout", "-q", "part-a")
+    sb.branch("right", "part-a", push=False)
+    out = sb.detect("--branch", "left", forge="none")
+    assert column(out, "branch") == ["part-a", "left"]
+    assert warning(out, "branched_stack")["branches"] == ["left", "right"]
+
+
 def test_local_mode_skips_branches_already_merged_into_trunk(sb: Sandbox) -> None:
     sb.branch("old-work", "main", push=False)
     sb.git("checkout", "-q", "main")
@@ -537,17 +549,33 @@ def test_local_mode_skips_branches_already_merged_into_trunk(sb: Sandbox) -> Non
 
 def test_native_mode_when_the_pulls_response_has_a_stack_object(sb: Sandbox) -> None:
     sb.chain(["auth-schema", "auth-api"])
+    stack = {"stdout": '{"number": 9, "prs": [41, 42]}\n'}
     fixture = gh_fixture(
         [gh_pr(41, "auth-schema", "main"), gh_pr(42, "auth-api", "auth-schema")],
-        api={41: {"stdout": '{"number": 9, "prs": [41, 42]}\n'}},
+        api={41: stack, 42: stack},
     )
     out = sb.detect(fixture=fixture)
     assert out["mode"] == "native"
     assert out["stack_number"] == 9
     assert ["gh", "api", "repos/{owner}/{repo}/pulls/41", "--jq", ".stack // empty"] in sb.forge_calls()
+    assert ["gh", "api", "repos/{owner}/{repo}/pulls/42", "--jq", ".stack // empty"] in sb.forge_calls()
 
 
-def test_native_check_targets_the_bottom_layer_only(sb: Sandbox) -> None:
+@pytest.mark.parametrize("top", ["", '{"number": 10}\n'])
+def test_native_needs_every_layer_in_the_same_stack(sb: Sandbox, top: str) -> None:
+    # a PR based on a native layer but never registered (or in another stack) keeps the chain classic
+    sb.chain(["auth-schema", "auth-api", "auth-ui"])
+    stack = {"stdout": '{"number": 9}\n'}
+    fixture = gh_fixture(
+        [gh_pr(41, "auth-schema", "main"), gh_pr(42, "auth-api", "auth-schema"), gh_pr(43, "auth-ui", "auth-api")],
+        api={41: stack, 42: stack, 43: {"stdout": top}},
+    )
+    out = sb.detect(fixture=fixture)
+    assert out["mode"] == "classic"
+    assert out["stack_number"] is None
+
+
+def test_native_check_stops_at_the_first_layer_outside_a_stack(sb: Sandbox) -> None:
     sb.chain(["auth-schema", "auth-api", "auth-ui"])
     sb.detect(fixture=classic_stack())
     api_calls = [c for c in sb.forge_calls() if c[:2] == ["gh", "api"]]
@@ -630,6 +658,53 @@ def test_sc4_base_that_is_a_merged_head_is_a_broken_chain(sb: Sandbox) -> None:
         "merge_sha": f"{1041:040x}",
         "child": "auth-api",
     }]
+
+
+def test_a_merged_pr_whose_head_is_trunk_is_never_a_merged_parent(sb: Sandbox) -> None:
+    # a main -> release promotion PR lists main as a merged head
+    sb.chain(["auth-schema", "auth-api"])
+    fixture = gh_fixture(
+        [gh_pr(41, "auth-schema", "main"), gh_pr(42, "auth-api", "auth-schema")],
+        merged=[gh_merged(30, "main", base="release")],
+    )
+    out = sb.detect(fixture=fixture)
+    assert out["merged_parents"] == []
+    assert "broken_chain" not in codes(out)
+
+
+def test_same_repo_pr_wins_over_a_fork_pr_with_the_same_head_name(sb: Sandbox) -> None:
+    sb.chain(["auth-schema", "auth-api"])
+    fixture = gh_fixture([
+        gh_pr(7, "auth-api", "main", cross=True),
+        gh_pr(41, "auth-schema", "main"),
+        gh_pr(42, "auth-api", "auth-schema"),
+    ])
+    out = sb.detect(fixture=fixture)
+    assert column(out, "number") == [41, 42]
+    assert out["in_stack"] is True
+
+
+def test_behind_parent_counts_from_the_published_head_not_unpushed_local_commits(sb: Sandbox) -> None:
+    sb.chain(["auth-schema", "auth-api"])
+    published = sb.git("rev-parse", "auth-schema")
+    sb.git("checkout", "-q", "main")
+    sb.commit("trunk.txt", "moved\n", "trunk moved")
+    sb.git("push", "-q", "origin", "main")
+    sb.git("checkout", "-q", "auth-schema")
+    sb.git("merge", "-q", "--no-edit", "main")
+    schema = gh_pr(41, "auth-schema", "main")
+    schema["headRefOid"] = published
+    out = sb.detect(fixture=gh_fixture([schema, gh_pr(42, "auth-api", "auth-schema")]))
+    assert out["layers"][0]["behind_parent"] == 1
+
+
+def test_a_tag_named_like_a_branch_does_not_hide_it(sb: Sandbox) -> None:
+    sb.chain(["bottom", "top"], push=False)
+    sb.git("tag", "bottom", "bottom")
+    sb.git("tag", "top", "top")
+    out = sb.detect(forge="none")
+    assert out["current_branch"] == "top"
+    assert column(out, "branch") == ["bottom", "top"]
 
 
 def test_base_that_exists_nowhere_is_a_broken_chain(sb: Sandbox) -> None:
@@ -1024,9 +1099,11 @@ def test_sc10_no_warning_for_native_none_gitlab_or_no_workflows(tmp_path: Path) 
     native.chain(["auth-schema", "auth-api"])
     fixture = gh_fixture(
         [gh_pr(41, "auth-schema", "main"), gh_pr(42, "auth-api", "auth-schema")],
-        api={41: {"stdout": '{"number": 3}'}},
+        api={41: {"stdout": '{"number": 3}'}, 42: {"stdout": '{"number": 3}'}},
     )
-    assert "ci_filter" not in codes(native.detect(fixture=fixture))
+    out = native.detect(fixture=fixture)
+    assert out["mode"] == "native"
+    assert "ci_filter" not in codes(out)
 
     none = Sandbox(tmp_path / "none")
     _write_workflow(none, FLOW)
@@ -1050,6 +1127,18 @@ def test_sc10_check_ci_reports_skipped_planned_bases(sb: Sandbox) -> None:
         ],
     }
     assert sb.forge_calls() == []
+
+
+def test_sc10_an_unreadable_workflow_is_skipped_not_fatal(sb: Sandbox) -> None:
+    _write_workflow(sb, FLOW)
+    _write_workflow(sb, FLOW, "locked.yml")
+    locked = sb.repo / ".github" / "workflows" / "locked.yml"
+    locked.chmod(0)
+    try:
+        out = sb.detect("--check-ci", "auth-api", forge=None)
+    finally:
+        locked.chmod(0o644)
+    assert out == {"schema": 1, "skipped": [{"base": "auth-api", "files": [WORKFLOW]}]}
 
 
 def test_sc10_check_ci_with_no_workflows_or_no_skips_is_empty(sb: Sandbox) -> None:
@@ -1096,15 +1185,46 @@ def test_sc12_the_current_worktree_is_not_reported(sb: Sandbox, tmp_path: Path) 
 
 def test_failing_list_call_degrades_to_local_with_a_warning(sb: Sandbox) -> None:
     sb.chain(["auth-schema", "auth-api"])
-    fixture = {"gh": [{"argv": ["pr", "list"], "exit": 4, "stderr": "gh auth login"}]}
+    fixture = {"gh": [{"argv": ["pr", "list"], "exit": 4, "stderr": "To get started with GitHub CLI, please run:  gh auth login\n"}]}
     result = sb.run(fixture=fixture)
     assert result.returncode == 0
     out = json.loads(result.stdout)
     assert out["mode"] == "local"
     assert out["forge"] == "github"
     assert codes(out) == ["forge_unavailable"]
+    assert "gh auth login" in warning(out, "forge_unavailable")["message"]
     assert column(out, "branch") == ["auth-schema", "auth-api"]
     assert column(out, "ci") == ["unknown", "unknown"]
+
+
+def test_a_listing_at_its_cap_keeps_the_chain_and_warns(sb: Sandbox) -> None:
+    sb.chain(["auth-schema", "auth-api"])
+    filler = [gh_pr(1000 + n, f"other-{n}", "main") for n in range(198)]
+    fixture = gh_fixture([gh_pr(41, "auth-schema", "main"), gh_pr(42, "auth-api", "auth-schema"), *filler])
+    out = sb.detect(fixture=fixture)
+    assert out["mode"] == "classic"
+    assert column(out, "number") == [41, 42]
+    assert "200-item cap" in warning(out, "forge_unavailable")["message"]
+
+
+def test_gitlab_reads_are_bound_to_the_remote_project(sb: Sandbox) -> None:
+    sb.chain(["auth-schema", "auth-api"])
+    url = "git@gitlab.example.com:acme/team/app.git"
+    sb.git("remote", "set-url", "origin", url)
+    mrs = [gl_mr(5, "auth-schema", "main"), gl_mr(6, "auth-api", "auth-schema")]
+    fixture = gl_fixture(mrs)
+    for iid in (5, 6):
+        fixture["glab"].append({
+            "argv": ["api", "--hostname", "gitlab.example.com", f"projects/acme%2Fteam%2Fapp/merge_requests/{iid}/approvals"],
+            "stdout": json.dumps({"approved": True}),
+        })
+    out = sb.detect(forge="gitlab", fixture=fixture)
+    assert column(out, "number") == [5, 6]
+    assert column(out, "review") == ["approved", "approved"]
+    assert "forge_unavailable" not in codes(out)
+    calls = sb.forge_calls()
+    assert all(c[-2:] == ["-R", url] for c in calls if c[1] == "mr")
+    assert not any(":id" in arg for c in calls for arg in c)
 
 
 def test_unparseable_list_output_degrades_to_local(sb: Sandbox) -> None:

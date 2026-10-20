@@ -247,12 +247,18 @@ def test_onto_ref_falls_back_to_local_branch_without_remote_tracking_ref(tmp_pat
 def test_explicit_onto_ref_is_used(tmp_path):
     sb = Sandbox(tmp_path)
     parent_tip, _ = squash_scenario(sb)
+    # an unpushed local commit makes refs/heads/main differ from the default origin/main
+    sb.commit("local-parent.txt", "local parent\n", "local parent change")
+    onto_tip = sb.rev("main")
+    assert onto_tip != sb.rev("origin/main")
     result = sb.run(
         "--branch", "auth-api", "--onto", "main", "--onto-ref", "refs/heads/main",
         "--old-tip", parent_tip, "--no-push",
     )
     assert result.returncode == 0, result.stderr
     assert load(result)["onto_ref"] == "refs/heads/main"
+    assert sb.rev("auth-api~2") == onto_tip
+    assert sb.own_commits("main", "auth-api") == ["auth-api commit 0", "auth-api commit 1"]
 
 
 def test_backup_branch_name_format_and_contents(tmp_path):
@@ -326,7 +332,9 @@ def test_branch_checked_out_in_this_worktree_is_allowed(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_lease_rejection_after_remote_moved_exits_4_keeping_rebase_and_backup(tmp_path):
+# background_fetch: a fetch after the teammate's push refreshes the lease, so only --force-if-includes rejects
+@pytest.mark.parametrize("background_fetch", [False, True])
+def test_lease_rejection_after_remote_moved_exits_4_keeping_rebase_and_backup(tmp_path, background_fetch):
     sb = Sandbox(tmp_path)
     parent_tip, child_tip = squash_scenario(sb)
     second = tmp_path / "second"
@@ -338,6 +346,8 @@ def test_lease_rejection_after_remote_moved_exits_4_keeping_rebase_and_backup(tm
     sb.commit("teammate.txt", "hi\n", "teammate commit", cwd=second)
     sb.git("push", "-q", "origin", "auth-api", cwd=second)
     teammate = sb.rev("auth-api", cwd=second)
+    if background_fetch:
+        sb.git("fetch", "-q", "origin")
 
     result = sb.run("--branch", "auth-api", "--onto", "main", "--old-tip", parent_tip, "--pr", "42",
                     "--forge", "github", fixture=gh_fixture(42, "auth-schema"))
@@ -579,3 +589,19 @@ def test_missing_branch_unresolvable_onto_ref_and_missing_args_exit_1(tmp_path):
         assert result.returncode == 1, (args, result.stderr)
         assert load(result)["success"] is False
         assert "Error:" in result.stderr
+
+
+def test_gitlab_retarget_is_bound_to_the_remote_project(tmp_path):
+    sb = Sandbox(tmp_path)
+    parent_tip, _ = squash_scenario(sb)
+    url = "https://gitlab.example.com/acme/app.git"
+    sb.git("remote", "set-url", "origin", url)
+    fixture = {"glab": [
+        {"argv": ["mr", "view", "5", "-F", "json"], "stdout": json.dumps({"target_branch": "auth-schema"})},
+        {"argv": ["mr", "update", "5"], "stdout": ""},
+    ]}
+    result = sb.run("--branch", "auth-api", "--onto", "main", "--old-tip", parent_tip, "--pr", "5",
+                    "--forge", "gitlab", "--no-push", fixture=fixture)
+    assert result.returncode == 0, result.stderr
+    calls = [c for c in sb.forge_calls() if c[0] == "glab"]
+    assert calls and all(c[-2:] == ["-R", url] for c in calls)
