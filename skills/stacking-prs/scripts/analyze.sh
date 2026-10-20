@@ -17,13 +17,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Split goals, review weights and file patterns resolve per key, highest first: env var, project
-# config (<repo>/.quirk/split-branch.json), user config (~/.quirk/split-branch.json), built-in
+# config (<repo>/.quirk/stacking-prs.json), user config (~/.quirk/stacking-prs.json), built-in
 # default. A changed line costs its file's weight, capped by every line discount that applies to
 # it; weigh.awk documents the rule.
 GOAL_VARS="TARGET_LINES_PER_SPLIT HARD_CAP SKIP_THRESHOLD"
 WEIGHT_VARS="TEST_WEIGHT FIXTURE_WEIGHT RISKY_WEIGHT PROSE_WEIGHT COMMENT_WEIGHT IMPORT_WEIGHT MOVED_WEIGHT DELETION_WEIGHT"
 
-USER_CFG="$HOME/.quirk/split-branch.json"
+USER_CFG="$HOME/.quirk/stacking-prs.json"
 PROJECT_CFG=""
 CONFIG_KEYS='["target_lines_per_split","hard_cap","skip_threshold","weights","patterns"]'
 WEIGHT_KEYS='["test","fixture","risky","prose","comment","import","moved","deletion"]'
@@ -50,7 +50,7 @@ die() {
 load_config() {
     local root file unknown
     root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-    PROJECT_CFG="$root/.quirk/split-branch.json"
+    PROJECT_CFG="$root/.quirk/stacking-prs.json"
     for file in "$USER_CFG" "$PROJECT_CFG"; do
         [[ -f "$file" ]] || continue
         jq -e 'type == "object"' "$file" >/dev/null 2>&1 || die "$file is not a valid JSON object"

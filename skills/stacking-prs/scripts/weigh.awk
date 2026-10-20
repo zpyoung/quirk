@@ -1,5 +1,5 @@
-# split-branch/weigh.awk
-# Weighs a `git diff -U0` stream line by line for split-branch's review budget and prints one JSON
+# stacking-prs/weigh.awk
+# Weighs a `git diff -U0` stream line by line for stacking-prs's review budget and prints one JSON
 # object: totals, directory groups, per-file rows. POSIX/BSD awk only (macOS ships no gawk).
 #
 # A changed line costs its file's weight, capped by every discount that applies to the line.

@@ -1,4 +1,4 @@
-"""split-branch analyze.sh: per-line review weighting of a branch diff."""
+"""stacking-prs analyze.sh: per-line review weighting of a branch diff."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Dict, Optional, Union
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ANALYZE = REPO_ROOT / "skills" / "split-branch" / "scripts" / "analyze.sh"
+ANALYZE = REPO_ROOT / "skills" / "stacking-prs" / "scripts" / "analyze.sh"
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -42,7 +42,7 @@ def _run(
     home = tmp_path / "home"
     home.mkdir()
     if user_config is not None:
-        _write_config(home / ".quirk" / "split-branch.json", user_config)
+        _write_config(home / ".quirk" / "stacking-prs.json", user_config)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
@@ -57,7 +57,7 @@ def _run(
     _git(repo, "commit", "-q", "-m", "feature")
     # written untracked after the commits so the config itself isn't part of the diff
     if project_config is not None:
-        _write_config(repo / ".quirk" / "split-branch.json", project_config)
+        _write_config(repo / ".quirk" / "stacking-prs.json", project_config)
     return subprocess.run(
         [str(ANALYZE), "main"],
         cwd=repo,
@@ -356,7 +356,7 @@ def test_split_goals_come_from_config_layers(tmp_path):
         ({"weigths": {"comment": 1}}, "weigths"),
         ({"weights": {"comments": 1}}, "weights.comments"),
         ({"patterns": {"riskyy": "x"}}, "patterns.riskyy"),
-        ("{not json", "split-branch.json"),
+        ("{not json", "stacking-prs.json"),
         ({"weights": {"comment": "abc"}}, "project config"),
         ({"hard_cap": "big"}, "HARD_CAP"),
         ({"skip_threshold": 500}, "skip_threshold"),
