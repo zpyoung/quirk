@@ -1,6 +1,6 @@
 # Logic spec: `stacking-prs`, a full-lifecycle stacked-PR skill
 
-**Status**: Draft
+**Status**: Approved
 
 `quirk:split-branch` is good at cutting one big branch into a stack of PRs. After it creates the PRs it
 stops. The research in
@@ -439,6 +439,6 @@ shaped this design:
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved
 
 **Amendments:** none yet.
