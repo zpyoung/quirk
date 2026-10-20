@@ -135,6 +135,32 @@ def test_land_covers_a_merged_anchor_with_several_children() -> None:
     assert "stack.sh --branch <child>" in text
 
 
+def test_land_fork_flow_always_passes_branch_to_stack_sh() -> None:
+    text = LAND_PATH.read_text()
+    start = text.index("### Merged anchor with several open children")
+    section = text[start : text.index("\n### ", start + 1)]
+    runs = re.findall(r"`stack\.sh[^`]*`", section)
+    assert runs
+    assert all("--branch" in run for run in runs), runs
+    assert "from its step 2" in section
+
+
+def test_manage_fixup_commit_waits_for_plan_approval() -> None:
+    text = MANAGE_PATH.read_text()
+    start = text.index("### 2. ")
+    section = text[start : text.index("\n### 3. ", start)]
+    assert section.index("Get approval") < section.index("git commit --fixup")
+    assert "git switch" not in section[: section.index("Get approval")]
+    for var in ("LAYERS=(", "TS=$(", "MOVED=("):
+        assert var in text, var
+    assert text.index("LAYERS=(") < text.index("TS=$(") < text.index("MOVED=(")
+
+
+def test_split_returns_a_retargeted_ready_pr_to_draft() -> None:
+    text = SPLIT_PATH.read_text()
+    assert re.search(r"gh pr ready \S+ --undo", text)
+
+
 def test_manage_rebases_never_move_a_backup_branch() -> None:
     text = MANAGE_PATH.read_text()
     assert "GIT_SEQUENCE_EDITOR=:" not in text

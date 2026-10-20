@@ -24,9 +24,21 @@ Make the fix as a fixup commit, fold it into the commit it amends, and let `--up
 
   `--onto` is the parent as it is now, and `--old-tip` is the parent's head before the rebase, read from the parent's backup. Then push that layer with lease from any worktree, as in step 4. The layer being amended can't be the one checked out elsewhere. It has to be free.
 
-### 2. Commit the fix as a fixup
+### 2. Show the plan, get approval, then commit the fix as a fixup
 
-Pick the commit the fix belongs to. `git log --oneline <parent>..<layer>` lists the layer's own commits. Switch to the top layer (the highest free one), make the change, and commit it against that commit:
+The fixup commit is a git write, so nothing below runs until the user approves. Set up the names the plan uses, then show the plan.
+
+`LAYERS` is every layer's branch, bottom to top, from the stack JSON. `TOP` is the highest layer that is free in this worktree, which is the last entry unless step 1 left a layer behind:
+
+```bash
+LAYERS=()
+while IFS= read -r b; do LAYERS+=("$b"); done < <("${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/stack.sh" | jq -r '.layers[].branch')
+TOP=${LAYERS[${#LAYERS[@]}-1]}   # or the highest free layer
+```
+
+Pick the commit the fix belongs to. `git log --oneline <parent>..<layer>` lists the layer's own commits. The plan names that commit, the layers that will move, the backup branches step 3 creates, and the pushes step 4 makes. Get approval before the first git write.
+
+After approval, switch to `TOP`, make the change, and commit it against that commit:
 
 ```bash
 git switch "$TOP"
@@ -34,9 +46,9 @@ git add <files>
 git commit --fixup=<sha of the commit being amended>
 ```
 
-Show the user which commit the fix lands in and which branches will move, and get approval before step 3.
-
 ### 3. Back up every layer, then fold the fixup in
+
+`TS` is the timestamp in the backup names. Capture it once here and reuse it in steps 3 and 5. A new shell loses it, so re-derive it from the newest backup name for the bottom layer: `TS=$(git for-each-ref --sort=-refname --count=1 --format='%(refname:strip=2)' "refs/heads/backup/${LAYERS[0]}_*")` then `TS=${TS#backup/${LAYERS[0]}_}`.
 
 ```bash
 TS=$(date +%Y%m%d_%H%M%S)
@@ -53,8 +65,14 @@ On a conflict, run `git rebase --abort`, report the files, point to the backups,
 
 ### 4. Push every branch that moved, with lease
 
+`MOVED` is the layers whose head now differs from their backup, still bottom to top:
+
 ```bash
-for b in "${MOVED[@]}"; do   # bottom to top; a layer moved if its head differs from its backup
+MOVED=()
+for b in "${LAYERS[@]}"; do
+  if [ "$(git rev-parse "$b")" != "$(git rev-parse "backup/${b}_${TS}")" ]; then MOVED+=("$b"); fi
+done
+for b in "${MOVED[@]}"; do
   git push --force-with-lease --force-if-includes <remote> "$b"
 done
 ```
