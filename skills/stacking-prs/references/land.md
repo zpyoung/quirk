@@ -59,6 +59,15 @@ Run this when the user says the bottom merged, or when `stack.sh` reports `broke
 6. **Delete the merged local branch** with `git branch -D <merged branch>`. Keep the `backup/*` branches. `git branch -d` would refuse after a squash merge, so `-D` is expected here.
 7. Offer to run Land again on the new bottom.
 
+### Merged anchor with several open children
+
+After step 1's re-read, check for this shape before planning anything: forge mode, `layers: []`, `in_stack: false`, one `merged_parents[]` entry per child, and a `branched_stack` warning whose `branches` names the children. It means the merged branch you passed as `--branch` had more than one open PR targeting it, so there is no single chain to restack.
+
+1. **Show the fork.** List each child from `branched_stack` with its PR number and the `head_sha` from its `merged_parents[]` entry. Ask which children to sync now. Don't pick for the user.
+2. **Sync one confirmed child at a time.** Re-run `stack.sh --branch <child>` so the JSON holds that child's chain, then run the classic post-merge sync above on it. Step 3's first row uses that child's own `merged_parents[].head_sha` as `--old-tip`, with `--onto` set to trunk. The layers above it follow the usual `old_head` rule.
+3. **Get restack plan approval for each child's chain** before its first `restack.sh` run, as step 2 requires. Approval for one child doesn't cover another.
+4. Children the user didn't confirm stay untouched. Tell the user they are still based on the merged branch, and offer to run Land again for them.
+
 ### Native stack (GitHub)
 
 GitHub rebases the rest of the stack itself, so don't use `restack.sh`.

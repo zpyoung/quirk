@@ -128,6 +128,13 @@ def test_land_states_the_never_merge_rule() -> None:
     assert lines
 
 
+def test_land_covers_a_merged_anchor_with_several_children() -> None:
+    text = LAND_PATH.read_text()
+    assert "merged_parents" in text
+    assert "branched_stack" in text
+    assert "stack.sh --branch <child>" in text
+
+
 def test_manage_rebases_never_move_a_backup_branch() -> None:
     text = MANAGE_PATH.read_text()
     assert "GIT_SEQUENCE_EDITOR=:" not in text
