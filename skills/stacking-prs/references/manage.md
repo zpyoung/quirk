@@ -43,11 +43,11 @@ TS=$(date +%Y%m%d_%H%M%S)
 for b in "${LAYERS[@]}"; do git branch "backup/${b}_${TS}" "$b"; done
 
 BASE=$(git merge-base "<remote>/<trunk>" "$TOP")
-GIT_SEQUENCE_EDITOR="sed -i.bak -e '/^update-ref refs\/heads\/backup\//d'" \
+GIT_SEQUENCE_EDITOR="sed -i.bak -E -e '/^(update-ref|u) refs\/heads\/backup\//d'" \
   git rebase -i --autosquash --update-refs "$BASE"
 ```
 
-The sequence editor runs the rebase without opening an editor, and it deletes every `update-ref refs/heads/backup/` line from the todo list. Without that, `--update-refs` moves the backups along with their layers, which loses the recovery points and makes the step 4 and step 5 comparisons against the backups meaningless. The `sed -i.bak` form works on both GNU and BSD sed. The backup names match `extract.sh`. Backups stay local and are never pushed.
+The sequence editor runs the rebase without opening an editor, and it deletes every `update-ref refs/heads/backup/` line from the todo list, including the `u refs/heads/backup/` form git writes when `rebase.abbreviateCommands` is set. Without that, `--update-refs` moves the backups along with their layers, which loses the recovery points and makes the step 4 and step 5 comparisons against the backups meaningless. The `sed -i.bak -E` form works on both GNU and BSD sed. The backup names match `extract.sh`. Backups stay local and are never pushed.
 
 On a conflict, run `git rebase --abort`, report the files, point to the backups, and don't auto-resolve.
 
@@ -80,7 +80,7 @@ When the bottom's `behind_parent` is above 0, or the user asks to update the sta
 4. Rebase once from the top, with the same backup-skipping sequence editor as step 3, because a plain `--update-refs` rebase also moves the backups:
 
    ```bash
-   GIT_SEQUENCE_EDITOR="sed -i.bak -e '/^update-ref refs\/heads\/backup\//d'" \
+   GIT_SEQUENCE_EDITOR="sed -i.bak -E -e '/^(update-ref|u) refs\/heads\/backup\//d'" \
      git rebase -i --update-refs <remote>/<trunk> "$TOP"
    ```
 5. Push every layer with lease, bottom to top, as in step 4.

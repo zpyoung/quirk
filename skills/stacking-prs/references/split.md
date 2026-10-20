@@ -199,7 +199,7 @@ SPLIT_BASE="<new_branch_name>"
 "${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/extract.sh" \
   "$SPLIT_BASE" "$ORIG_BASE" <file1> <file2> ...
 
-git rebase --onto "$SPLIT_BASE" "$ORIG_BASE_SHA" "$CURRENT"
+git rebase --no-update-refs --onto "$SPLIT_BASE" "$ORIG_BASE_SHA" "$CURRENT"
 git log --oneline "$SPLIT_BASE..$CURRENT"   # verify only non-extracted commits remain
 ```
 
