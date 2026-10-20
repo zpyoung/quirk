@@ -101,7 +101,10 @@ Chain building (forge modes):
 - When `--branch` has no open PR, two cases still read the forge chain before local fallback applies:
   - **Merged anchor.** `--branch` is the head of a merged PR and open PRs target it. The chain is
     the open PRs walked up from that base. `merged_parents[]` names `--branch`, and no layer is
-    `is_current`. This is the Land phase's normal post-merge position.
+    `is_current`. This is the Land phase's normal post-merge position. If more than one open PR
+    targets `--branch`, the forge mode is kept with `layers: []` and `in_stack: false`.
+    `merged_parents[]` gets one entry per child, and `branched_stack` names the children so the caller
+    can re-run with `--branch <child>`.
   - **Unpublished bottom.** `--branch` has no PR, but open PRs target it. Layer 1 is `--branch`
     itself, with `state: "local"`, `number: null`, and `base` from local ancestry (the local-mode
     parent rule), followed by the open PRs walked up from it.
@@ -161,7 +164,7 @@ in either flow (`[a, b]`) or block (`- a`) style. A base is skipped when a `bran
 none of its entries, or when a `branches-ignore` entry matches it. Patterns match as bash globs,
 with `**` treated as `*`. This is a line-oriented awk heuristic, not a YAML parser. It reads only
 keys nested under a top-level `on:` key. A trigger written in a shape it can't read, including quoted
-entries it can't split safely, produces no warning. Never guess a positive. `--check-ci <base>...` runs only
+entries it can't split or decode safely in flow or block lists, produces no warning. Never guess a positive. `--check-ci <base>...` runs only
 this scan for the given planned bases. The Split phase calls it before push, because no PRs exist yet
 then.
 
@@ -244,7 +247,8 @@ Back-links: [Conceptual model](logic.md#conceptual-model), [Decisions Locked](lo
 - `references/manage.md`:
   - the fixup → backups → `git rebase -i --autosquash --update-refs` → per-branch lease push → verify
     sequence (SC-11). The sequence editor runs non-interactively and deletes every
-    `update-ref refs/heads/backup/` line from the todo list, so `--update-refs` never moves a backup.
+    `update-ref refs/heads/backup/` line from the todo list, in both its long form and its `u`
+    abbreviation, so `--update-refs` never moves a backup under any `rebase.abbreviateCommands` setting.
     Verify means each layer's own diff changed only where the fix landed, shown to the user with
     `git range-diff <backup-parent>..<backup> <parent>..<branch>` per moved branch
   - the worktree stop (SC-12). The "rebase that layer separately afterward" option runs
@@ -345,7 +349,9 @@ Back-link: [Scope and non-goals](logic.md#scope-and-non-goals).
 - **The split-flow guidance in `references/split.md`: weights tables, Strategies 0-4, Steps 1-8,
   Quick Reference, and Common Mistakes.** Move it verbatim except for the evidence edits, the path
   edits, the additions listed under Skill documents, and adding `--force-if-includes` to every
-  `--force-with-lease` push (the router's force-push rule overrides the fence there). It's approved, tested behavior, and the logic
+  `--force-with-lease` push (the router's force-push rule overrides the fence there), and adding
+  `--no-update-refs` to Step 4's `git rebase --onto` so a user's `rebase.updateRefs` can't move the
+  extract backup. It's approved, tested behavior, and the logic
   spec changes only what it lists.
 - **`README.md:9` skill count.** A rename keeps it at 27. Bumping it breaks
   `tests/test_adhd_skill.py:157-164` and `tests/test_simplifying_safely_skill.py:86-95`.
