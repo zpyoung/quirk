@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -130,7 +131,7 @@ def test_land_states_the_never_merge_rule() -> None:
 def test_manage_rebases_never_move_a_backup_branch() -> None:
     text = MANAGE_PATH.read_text()
     assert "GIT_SEQUENCE_EDITOR=:" not in text
-    assert "update-ref refs\\/heads\\/backup\\/" in text
+    assert "(update-ref|u) refs\\/heads\\/backup\\/" in text
     rebases = [
         line.strip()
         for line in text.splitlines()
@@ -138,6 +139,36 @@ def test_manage_rebases_never_move_a_backup_branch() -> None:
     ]
     assert len(rebases) >= 2
     assert all(line.startswith("git rebase -i ") for line in rebases), rebases
+
+
+def test_manage_backup_filter_deletes_long_and_abbreviated_update_refs() -> None:
+    text = MANAGE_PATH.read_text()
+    exprs = set(re.findall(r"sed -i\.bak (-E -e '[^']+')", text))
+    assert len(exprs) == 1, exprs
+    expr = re.fullmatch(r"-E -e '([^']+)'", exprs.pop()).group(1)
+    todo = (
+        "pick abc123 first\n"
+        "update-ref refs/heads/backup/auth-api_20261020_141500\n"
+        "u refs/heads/backup/auth-api_20261020_141500\n"
+        "update-ref refs/heads/auth-api\n"
+        "u refs/heads/auth-ui\n"
+    )
+    out = subprocess.run(
+        ["sed", "-E", "-e", expr], input=todo, text=True, capture_output=True, check=True
+    ).stdout
+    assert out == (
+        "pick abc123 first\nupdate-ref refs/heads/auth-api\nu refs/heads/auth-ui\n"
+    )
+
+
+def test_split_step_4_rebase_ignores_rebase_update_refs() -> None:
+    rebases = [
+        line
+        for line in SPLIT_PATH.read_text().splitlines()
+        if line.startswith("git rebase --onto") or line.startswith("git rebase --no-update-refs --onto")
+    ]
+    assert len(rebases) == 1, rebases
+    assert "--no-update-refs" in rebases[0]
 
 
 def test_every_force_push_in_split_uses_force_if_includes() -> None:
