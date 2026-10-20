@@ -673,6 +673,95 @@ def test_branched_stack_stops_at_the_fork(sb: Sandbox) -> None:
     assert warning(out, "branched_stack")["branches"] == ["auth-api", "auth-docs"]
 
 
+def test_merged_anchor_reads_the_forge_chain_above_the_merged_head(sb: Sandbox) -> None:
+    sb.chain(["auth-schema", "auth-api", "auth-ui"])
+    fixture = gh_fixture(
+        [gh_pr(42, "auth-api", "auth-schema"), gh_pr(43, "auth-ui", "auth-api")],
+        merged=[gh_merged(41, "auth-schema")],
+    )
+    out = sb.detect("--branch", "auth-schema", fixture=fixture)
+    assert out["mode"] == "classic"
+    assert column(out, "branch") == ["auth-api", "auth-ui"]
+    assert column(out, "is_current") == [False, False]
+    assert out["in_stack"] is True
+    assert out["merged_parents"] == [{
+        "branch": "auth-schema",
+        "number": 41,
+        "head_sha": f"{41:040x}",
+        "merge_sha": f"{1041:040x}",
+        "child": "auth-api",
+    }]
+
+
+def test_merged_anchor_with_two_open_children_falls_back_to_local(sb: Sandbox) -> None:
+    sb.branch("auth-schema", "main")
+    sb.branch("auth-api", "auth-schema")
+    sb.branch("auth-docs", "auth-schema")
+    fixture = gh_fixture(
+        [gh_pr(42, "auth-api", "auth-schema"), gh_pr(43, "auth-docs", "auth-schema")],
+        merged=[gh_merged(41, "auth-schema")],
+    )
+    out = sb.detect("--branch", "auth-schema", fixture=fixture)
+    assert out["mode"] == "local"
+    assert out["merged_parents"] == []
+
+
+def test_unpublished_bottom_is_layer_one_above_the_open_prs(sb: Sandbox) -> None:
+    sb.branch("auth-schema", "main", push=False)
+    sb.branch("auth-api", "auth-schema")
+    sb.branch("auth-ui", "auth-api")
+    fixture = gh_fixture([gh_pr(42, "auth-api", "auth-schema"), gh_pr(43, "auth-ui", "auth-api")])
+    out = sb.detect("--branch", "auth-schema", fixture=fixture)
+    assert out["mode"] == "classic"
+    assert out["in_stack"] is True
+    assert column(out, "branch") == ["auth-schema", "auth-api", "auth-ui"]
+    assert column(out, "state") == ["local", "open", "open"]
+    assert column(out, "number") == [None, 42, 43]
+    assert column(out, "base") == ["main", "auth-schema", "auth-api"]
+    assert column(out, "is_current") == [True, False, False]
+    assert out["merged_parents"] == []
+    assert "broken_chain" not in codes(out)
+    assert not any("null" in arg for call in sb.forge_calls() for arg in call)
+
+
+def test_unpublished_bottom_takes_its_base_from_local_ancestry(sb: Sandbox) -> None:
+    sb.branch("develop", "main", push=False)
+    sb.branch("auth-schema", "develop", push=False)
+    sb.branch("auth-api", "auth-schema")
+    out = sb.detect("--branch", "auth-schema", fixture=gh_fixture([gh_pr(42, "auth-api", "auth-schema")]))
+    assert column(out, "branch") == ["auth-schema", "auth-api"]
+    assert out["layers"][0]["base"] == "develop"
+
+
+def test_trunk_is_never_an_unpublished_bottom(sb: Sandbox) -> None:
+    sb.branch("auth-schema", "main")
+    out = sb.detect("--branch", "main", fixture=gh_fixture([gh_pr(41, "auth-schema", "main")]))
+    assert out["layers"] == []
+
+
+def test_unpublished_bottom_on_gitlab_skips_glab_calls_for_the_local_layer(sb: Sandbox) -> None:
+    sb.branch("auth-schema", "main", push=False)
+    sb.branch("auth-api", "auth-schema")
+    fixture = gl_fixture([gl_mr(42, "auth-api", "auth-schema")])
+    out = sb.detect("--branch", "auth-schema", fixture=fixture, forge="gitlab")
+    assert column(out, "state") == ["local", "open"]
+    assert not any("null" in arg for call in sb.forge_calls() for arg in call)
+
+
+def test_fork_below_the_anchor_is_reported_from_a_child_of_the_fork(sb: Sandbox) -> None:
+    sb.branch("auth-schema", "main")
+    sb.branch("auth-api", "auth-schema")
+    sb.branch("auth-docs", "auth-schema")
+    fixture = gh_fixture([
+        gh_pr(41, "auth-schema", "main"),
+        gh_pr(42, "auth-api", "auth-schema"),
+        gh_pr(43, "auth-docs", "auth-schema"),
+    ])
+    out = sb.detect("--branch", "auth-api", fixture=fixture)
+    assert column(out, "branch") == ["auth-schema", "auth-api"]
+    assert warning(out, "branched_stack")["branches"] == ["auth-api", "auth-docs"]
+
+
 def _numbered_chain(sb: Sandbox, count: int) -> dict:
     names = [f"layer-{i}" for i in range(1, count + 1)]
     sb.chain(names)
@@ -839,6 +928,52 @@ def test_sc10_a_matching_glob_means_no_warning(sb: Sandbox) -> None:
 def test_sc10_a_shape_the_scan_cannot_read_gives_no_warning(sb: Sandbox, shape: str) -> None:
     _write_workflow(sb, UNREADABLE_SHAPES[shape])
     assert "ci_filter" not in codes(_filtered_detect(sb))
+
+
+def test_sc10_quoted_flow_entry_with_a_comma_is_one_pattern(sb: Sandbox) -> None:
+    _write_workflow(sb, "on:\n  pull_request:\n    branches: ['feature,a']\n")
+    assert sb.detect("--check-ci", "feature,a", forge=None)["skipped"] == []
+    assert sb.detect("--check-ci", "feature", forge=None)["skipped"] == [
+        {"base": "feature", "files": [WORKFLOW]}
+    ]
+
+
+@pytest.mark.parametrize("entries", ["'a\\'b", "\"a\\\"b\"", "'a' b", "'a''b'", "a'b"])
+def test_sc10_a_quoted_entry_it_cannot_split_safely_gives_no_warning(sb: Sandbox, entries: str) -> None:
+    _write_workflow(sb, f"on:\n  pull_request:\n    branches: [{entries}, main]\n")
+    assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == []
+
+
+HEREDOC = (
+    "name: Push only\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - run: |\n          cat <<'EOF'\n          pull_request:\n            branches: [main]\n"
+    "          EOF\n"
+)
+
+
+@pytest.mark.parametrize("workflow", [
+    HEREDOC,
+    "on:\n  push:\n    branches: [main]\njobs:\n  build:\n    steps:\n      - run: |\n"
+    "          pull_request:\n            branches: [main]\n",
+    "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n    inputs:\n      note:\n"
+    "        description: |\n          pull_request:\n            branches: [main]\n",
+    "pull_request:\n  branches: [main]\n",
+    "on: pull_request\n",
+    "on: [pull_request, push]\n",
+    "on:\n  - pull_request\n  - push\n",
+])
+def test_sc10_pull_request_text_outside_the_on_block_is_never_a_trigger(sb: Sandbox, workflow: str) -> None:
+    _write_workflow(sb, workflow)
+    assert "ci_filter" not in codes(_filtered_detect(sb))
+    assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == []
+
+
+def test_sc10_a_real_trigger_still_warns_next_to_a_heredoc_decoy(sb: Sandbox) -> None:
+    _write_workflow(sb, FLOW + "jobs:\n  build:\n    steps:\n      - run: echo hi\n")
+    assert warning(_filtered_detect(sb), "ci_filter")["branches"] == ["auth-api", "auth-ui"]
+    assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == [
+        {"base": "auth-schema", "files": [WORKFLOW]}
+    ]
 
 
 def test_sc10_files_lists_every_skipping_workflow_sorted(sb: Sandbox) -> None:
