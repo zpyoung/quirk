@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import pytest
+
 from .stacking_prs_stubs import read_forge_log, write_forge_stubs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -381,6 +383,66 @@ def test_retarget_skipped_when_pr_already_targets_onto(tmp_path):
     assert out["retargeted"] is False
     assert out["pushed"] is True
     assert not any(call[1:3] == ["pr", "edit"] for call in sb.forge_calls())
+
+
+def test_update_refs_config_cannot_move_other_branches_or_the_backup(tmp_path):
+    sb = Sandbox(tmp_path)
+    parent_tip, child_tip = squash_scenario(sb)
+    sb.git("config", "rebase.updateRefs", "true")
+    mid = sb.rev("auth-api~1")
+    sb.git("branch", "mid-marker", mid)
+
+    result = sb.run("--branch", "auth-api", "--onto", "main", "--old-tip", parent_tip, "--no-push")
+
+    assert result.returncode == 0, result.stderr
+    out = load(result)
+    assert out["new_head"] != child_tip
+    assert sb.rev("mid-marker") == mid
+    assert sb.rev(out["backup_branch"]) == child_tip
+
+
+@pytest.mark.parametrize("operation", ["rebase", "merge", "cherry-pick", "revert", "bisect"])
+def test_operation_in_progress_exits_1_and_leaves_it_alone(tmp_path, operation):
+    sb = Sandbox(tmp_path)
+    parent_tip, child_tip = squash_scenario(sb)
+    marker = {
+        "rebase": "rebase-merge",
+        "merge": "MERGE_HEAD",
+        "cherry-pick": "CHERRY_PICK_HEAD",
+        "revert": "REVERT_HEAD",
+        "bisect": "BISECT_LOG",
+    }[operation]
+    sb.git("checkout", "-q", "-b", "other", "main")
+    sb.commit("other.txt", "one\n", "other one")
+    sb.commit("other.txt", "two\n", "other two")
+    if operation == "rebase":
+        edit_env = {**sb.env(), "GIT_SEQUENCE_EDITOR": "sed -i.bak 's/^pick/edit/'"}
+        subprocess.run(
+            ["git", "rebase", "-i", "main"], cwd=sb.repo, check=True, capture_output=True, env=edit_env,
+        )
+    elif operation == "merge":
+        sb.git("merge", "-q", "--no-commit", "--no-ff", "auth-api")
+    elif operation == "cherry-pick":
+        (sb.repo / ".git" / "CHERRY_PICK_HEAD").write_text(sb.rev("other") + "\n")
+    elif operation == "revert":
+        (sb.repo / ".git" / "REVERT_HEAD").write_text(sb.rev("other") + "\n")
+    else:
+        sb.git("bisect", "start")
+    marker_path = sb.repo / sb.git("rev-parse", "--git-path", marker)
+    assert marker_path.exists()
+    branches_before = sb.branches()
+    head_before = sb.rev("HEAD")
+
+    result = sb.run("--branch", "auth-api", "--onto", "main", "--old-tip", parent_tip)
+
+    assert result.returncode == 1, result.stderr
+    out = load(result)
+    assert out["success"] is False
+    assert operation in out["message"]
+    assert sb.branches() == branches_before
+    assert sb.rev("auth-api") == child_tip
+    assert sb.rev("HEAD") == head_before
+    assert marker_path.exists()
 
 
 def test_dirty_tree_exits_1_before_any_change(tmp_path):
