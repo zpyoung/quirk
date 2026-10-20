@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "click",
+    "{\"pid\":82986,\"window_id\":84869,\"element_token\":\"s00000011:99\",\"session\":\"golden\"}"
+  ],
+  "returncode": 1,
+  "stdout": "{\n  \"code\": \"element_outside_target_window\",\n  \"effect\": \"refused\",\n  \"escalation\": {\n    \"reason\": \"the addressed element could not be proven to belong to window 84869; take a fresh get_window_state snapshot and re-address it\",\n    \"recommended\": \"get_window_state\"\n  },\n  \"pid\": 82986,\n  \"reason\": \"the addressed element could not be proven to belong to window 84869; take a fresh get_window_state snapshot and re-address it\",\n  \"window_id\": 84869\n}\n",
+  "stderr": "",
+  "files": {}
+}

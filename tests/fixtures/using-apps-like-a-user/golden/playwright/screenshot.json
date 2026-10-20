@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "screenshot",
+    "--filename=shot.png"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\n- [Screenshot of viewport](./shot.png)\n### Ran Playwright code\n```js\n// Screenshot viewport and save it as ./shot.png\nawait page.screenshot({\n  path: './shot.png',\n  scale: 'css',\n  type: 'png'\n});\n```\n",
+  "stderr": "",
+  "files": {
+    "shot.png": null
+  }
+}

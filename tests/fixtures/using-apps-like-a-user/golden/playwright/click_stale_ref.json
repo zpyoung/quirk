@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "click",
+    "e999"
+  ],
+  "returncode": 1,
+  "stdout": "### Error\nError: Ref e999 not found in the current page snapshot. Try capturing new snapshot.\n",
+  "stderr": "",
+  "files": {}
+}

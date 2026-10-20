@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "get_accessibility_tree",
+    "{\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"apps\": [\n    {\n      \"bundle_id\": \"dev.quirk.uala.fixture\",\n      \"name\": \"UALA Fixture\",\n      \"pid\": 82986\n    },\n    {\n      \"bundle_id\": \"com.trycua.driver\",\n      \"name\": \"Cua Driver\",\n      \"pid\": 4242\n    }\n  ],\n  \"windows\": [\n    {\n      \"app_name\": \"Cua Driver\",\n      \"pid\": 4242,\n      \"title\": \"\",\n      \"window_id\": 84860\n    },\n    {\n      \"app_name\": \"UALA Fixture\",\n      \"pid\": 82986,\n      \"title\": \"\",\n      \"window_id\": 84886\n    },\n    {\n      \"app_name\": \"UALA Fixture\",\n      \"pid\": 82986,\n      \"title\": \"Save file\",\n      \"window_id\": 84879\n    },\n    {\n      \"app_name\": \"UALA Fixture\",\n      \"pid\": 82986,\n      \"title\": \"UALA Fixture\",\n      \"window_id\": 84869\n    }\n  ]\n}\n",
+  "stderr": "",
+  "files": {}
+}

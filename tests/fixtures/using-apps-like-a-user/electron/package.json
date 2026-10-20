@@ -1,0 +1,10 @@
+{
+  "name": "likeuser-electron-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Electron app with planted UI bugs for testing the using-apps-like-a-user guard script",
+  "main": "main.js",
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

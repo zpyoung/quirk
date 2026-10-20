@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "permissions",
+    "status",
+    "--json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"accessibility\": true,\n  \"direct_capture_error\": null,\n  \"direct_capture_status\": \"not_checked\",\n  \"direct_capture_verification\": {\n    \"bundle_id\": \"com.trycua.driver\",\n    \"source\": \"permissions_grant\",\n    \"verified_at\": \"2026-10-12T10:23:54Z\"\n  },\n  \"screen_recording\": true,\n  \"screen_recording_capturable\": null,\n  \"source\": {\n    \"attribution\": \"driver-daemon\",\n    \"bundle_id\": \"com.trycua.driver\",\n    \"disclaim_env\": false,\n    \"executable\": \"/Applications/CuaDriver.app/Contents/MacOS/cua-driver\",\n    \"note\": \"These booleans reflect the CuaDriver daemon's own TCC identity (com.trycua.driver) because this process is its own responsible process.\",\n    \"pid\": 83983,\n    \"responsible_ppid\": 1\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}
