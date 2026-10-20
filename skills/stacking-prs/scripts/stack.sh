@@ -90,7 +90,7 @@ note() { printf '%s\n' "$*" >>"$TMP/notes"; }
 
 ref_exists() { git show-ref --verify --quiet "$1"; }
 
-# Same fallback order as split-branch's analyze.sh detect_target_branch, with a configurable remote.
+# Same fallback order as analyze.sh's detect_target_branch, with a configurable remote.
 detect_trunk() {
     local target="$1"
     if [[ -n "$target" ]]; then
