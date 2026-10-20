@@ -48,7 +48,15 @@ git commit --fixup=<sha of the commit being amended>
 
 ### 3. Back up every layer, then fold the fixup in
 
-`TS` is the timestamp in the backup names. Capture it once here and reuse it in steps 3 and 5. A new shell loses it, so re-derive it from the newest backup name for the bottom layer: `TS=$(git for-each-ref --sort=-refname --count=1 --format='%(refname:strip=2)' "refs/heads/backup/${LAYERS[0]}_*")` then `TS=${TS#backup/${LAYERS[0]}_}`.
+`TS` is the timestamp in the backup names. Capture it once here and reuse it in steps 3 and 5. A new shell loses it, so re-derive it from the newest backup of the bottom layer. An empty `TS` means no backup exists, so stop and don't guess:
+
+```bash
+TS=
+while read -r ref; do
+  t=${ref#"backup/${LAYERS[0]}_"}
+  case $t in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]) TS=$t; break ;; esac
+done < <(git for-each-ref --sort=-refname --format='%(refname:strip=2)' "refs/heads/backup/${LAYERS[0]}_*")
+```
 
 ```bash
 TS=$(date +%Y%m%d_%H%M%S)
