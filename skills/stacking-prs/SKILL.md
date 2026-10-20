@@ -36,7 +36,7 @@ When `in_stack` is true, print the stack map before asking anything. List layers
 | What Step 0 shows | Do |
 |---|---|
 | `in_stack` is false: one PR to trunk, or no PR, and no stacked branches | Say "not in a stack" and start [split](references/split.md) without asking |
-| `in_stack` is true, `mode` is `native` or `classic` | Ask with AskUserQuestion: Manage, Land, or Split this layer further. Nothing changes until the user picks |
+| `in_stack` is true, `mode` is `native` or `classic` | Ask with AskUserQuestion: Manage, Land, or Split this layer further. For a layer with others above it, [split](references/split.md#split-this-layer-further-restack-the-layers-above-it) restacks them afterward. Nothing changes until the user picks |
 | `mode` is `local` | Offer Manage or Split. Don't offer Land, because nothing is pushed and nothing can merge |
 | `broken_chain` is present | Flag the broken link and offer Land's post-merge sync to repair it |
 

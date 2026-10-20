@@ -14,6 +14,8 @@ SKILL_PATH = SKILL_DIR / "SKILL.md"
 EVALS_PATH = SKILL_DIR / "evals" / "trigger-evals.json"
 ANALYZE_TEST = REPO_ROOT / "tests" / "test_stacking_prs_analyze.py"
 LAND_PATH = SKILL_DIR / "references" / "land.md"
+MANAGE_PATH = SKILL_DIR / "references" / "manage.md"
+SPLIT_PATH = SKILL_DIR / "references" / "split.md"
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 PLUGIN_PATH = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/(skills/[A-Za-z0-9_./-]+)")
@@ -123,6 +125,37 @@ def test_land_states_the_never_merge_rule() -> None:
         if "never" in line.lower() and any(cmd in line for cmd in MERGE_COMMANDS)
     ]
     assert lines
+
+
+def test_manage_rebases_never_move_a_backup_branch() -> None:
+    text = MANAGE_PATH.read_text()
+    assert "GIT_SEQUENCE_EDITOR=:" not in text
+    assert "update-ref refs\\/heads\\/backup\\/" in text
+    rebases = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("git rebase") and "--update-refs" in line
+    ]
+    assert len(rebases) >= 2
+    assert all(line.startswith("git rebase -i ") for line in rebases), rebases
+
+
+def test_every_force_push_in_split_uses_force_if_includes() -> None:
+    pushes = [
+        line
+        for line in SPLIT_PATH.read_text().splitlines()
+        if "git push" in line and "--force-with-lease" in line
+    ]
+    assert pushes
+    assert all("--force-if-includes" in line for line in pushes), pushes
+
+
+def test_split_this_layer_section_restacks_the_layers_above() -> None:
+    text = SPLIT_PATH.read_text()
+    start = text.index("### Split this layer further")
+    section = text[start : text.index("\n### ", start + 1)]
+    assert "scripts/restack.sh" in section
+    assert "--old-tip" in section
 
 
 def test_trigger_evals_are_balanced() -> None:
