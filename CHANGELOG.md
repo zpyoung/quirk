@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.21
+
+### ⚠️ BREAKING
+- `split-branch` is renamed to `stacking-prs` and now covers splitting, managing, and landing stacked PRs. Invoke `quirk:stacking-prs` instead of `quirk:split-branch`. Size weighting can be tuned in `.quirk/stacking-prs.json` (per repo) or `~/.quirk/stacking-prs.json`.
+
 ## 2026.10.19.2
 
 ### Changes
