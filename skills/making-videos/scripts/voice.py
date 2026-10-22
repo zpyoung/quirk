@@ -6,14 +6,18 @@ Exit codes: 0 ok; 1 the operation failed (the JSON has an ``error`` key); 2 usag
 3 a required tool or venv is missing (the JSON has ``fix``, the command to run).
 ``say`` and ``align`` are launchers: the models and their Python dependencies live in the cache
 venv, so the work runs in ``voice_worker.py`` under that interpreter. ``captions`` is stdlib only.
+``say`` leaves each clip ready to mix: compressed and normalized to -16 LUFS, with the untouched
+synthesis kept as ``<id>.raw.wav``.
 """
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import math
 import os
 import re
+import struct
 import sys
 from pathlib import Path
 from typing import NamedTuple, NoReturn, Optional
@@ -97,6 +101,8 @@ def _load_lines(path: str, need_text: bool) -> "list[dict]":
         clip = line.get("id")
         if not isinstance(clip, str) or not CLIP_ID_RE.match(clip):
             _fail(f"lines[{i}] has an invalid id {clip!r}: use letters, digits, '.', '_' or '-'")
+        if clip.endswith(".raw"):
+            _fail(f"lines[{i}] has the id {clip!r}: ids ending in '.raw' collide with the untouched clip files")
         if clip in seen:
             _fail(f"duplicate clip id {clip!r}")
         seen.add(clip)
@@ -241,6 +247,8 @@ def _cmd_say(args: argparse.Namespace) -> None:
             str(out_dir),
             "--model-dir",
             str(cache_root() / "models" / "kokoro"),
+            "--ffmpeg",
+            _ffmpeg_binary(),
             "--pronunciations",
             json.dumps(pronunciations, ensure_ascii=False),
         ]
@@ -251,7 +259,7 @@ def _cmd_say(args: argparse.Namespace) -> None:
 def _cmd_align(args: argparse.Namespace) -> None:
     _require_venv()
     project = _require_project(args.project)
-    wavs = sorted((project / "assets" / "voice").glob("*.wav"))
+    wavs = sorted(w for w in (project / "assets" / "voice").glob("*.wav") if not w.name.endswith(".raw.wav"))
     if not wavs:
         _fail(f"no clips under {project / 'assets' / 'voice'}; run voice.py say first")
     result = _run_worker(
@@ -270,6 +278,73 @@ class Cue(NamedTuple):
     start: float
     end: float
     lines: "list[str]"
+
+
+def _key(token: str) -> str:
+    return re.sub(r"[\W_]+", "", token.lower())
+
+
+def _script_tokens(text: str) -> "list[str]":
+    """Whitespace-separated words of ``text``; a token with no letters or digits joins the word before it."""
+    tokens: "list[str]" = []
+    for token in text.split():
+        if tokens and not _key(token):
+            tokens[-1] += token
+        else:
+            tokens.append(token)
+    return tokens
+
+
+def _spread(texts: "list[str]", start: float, end: float) -> "list[dict]":
+    """``texts`` as words sharing ``start`` to ``end`` in proportion to their lengths."""
+    total = sum(len(t) for t in texts) or 1
+    words, cursor = [], start
+    for n, text in enumerate(texts):
+        stop = end if n == len(texts) - 1 else cursor + (end - start) * len(text) / total
+        words.append({"text": text, "start": cursor, "end": stop})
+        cursor = stop
+    return words
+
+
+def script_words(text: str, heard: "list[dict]") -> "tuple[list[dict], list[dict]]":
+    """The script's own words timed by the Whisper words ``heard``, and where the two disagree.
+
+    Matching ignores case and punctuation. Equal counts pair word for word, so "3." heard for the
+    scripted "Three:" still shows "Three:". Unequal counts are aligned with a sequence match;
+    spans that cannot be paired fall back to the heard text and come back as
+    ``{script, heard, at_s}`` entries, where ``at_s`` is the clip time of the span.
+    """
+    script = _script_tokens(text)
+    if len(script) == len(heard):
+        return [{**h, "text": t} for t, h in zip(script, heard)], []
+    words: "list[dict]" = []
+    mismatches: "list[dict]" = []
+    matcher = difflib.SequenceMatcher(None, [_key(t) for t in script], [_key(str(h["text"])) for h in heard], autojunk=False)
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        mine, theirs = script[a0:a1], heard[b0:b1]
+        if tag == "equal" or (tag == "replace" and len(mine) == len(theirs)):
+            words.extend({**h, "text": t} for t, h in zip(mine, theirs))
+        elif tag == "replace" and "".join(map(_key, mine)) == "".join(_key(str(h["text"])) for h in theirs):
+            if len(mine) == 1:
+                words.append({"text": mine[0], "start": theirs[0]["start"], "end": theirs[-1]["end"]})
+            elif len(theirs) == 1:
+                words.extend(_spread(mine, theirs[0]["start"], theirs[0]["end"]))
+            else:
+                words.extend(theirs)
+                mismatches.append(
+                    {"script": " ".join(mine), "heard": " ".join(str(h["text"]) for h in theirs), "at_s": theirs[0]["start"]}
+                )
+        elif tag == "delete":
+            before = words[-1]["end"] if words else (heard[b0]["start"] if b0 < len(heard) else 0.0)
+            after = heard[b0]["start"] if b0 < len(heard) else before
+            words.extend(_spread(mine, before, max(before, after)))
+            mismatches.append({"script": " ".join(mine), "heard": "", "at_s": before})
+        else:
+            words.extend(theirs)
+            mismatches.append(
+                {"script": " ".join(mine), "heard": " ".join(str(h["text"]) for h in theirs), "at_s": theirs[0]["start"]}
+            )
+    return words, mismatches
 
 
 def _wrap(words: "list[Word]") -> Optional["list[str]"]:
@@ -507,7 +582,99 @@ def aspect_of(width: int, height: int) -> str:
     return min(ASPECTS, key=lambda a: abs(ratio - math.log(CAPTION_LAYOUTS[a].width / CAPTION_LAYOUTS[a].height)))
 
 
-def caption_style(aspect: str, width: int, height: int) -> str:
+class CaptionFont(NamedTuple):
+    """A brand font for burned captions: libass looks ``name`` up among the fonts in ``directory``."""
+
+    name: str
+    directory: Path
+
+
+def font_full_name(path: Path) -> Optional[str]:
+    """The full font name (OpenType name ID 4) of a TTF or OTF file, or None when it cannot be read.
+
+    libass matches a weight-named static file such as Outfit-SemiBold.ttf by this name, not by
+    the family: ``FontName=Outfit`` falls back to Helvetica while ``Outfit SemiBold`` finds the file.
+    """
+    try:
+        data = path.read_bytes()
+        count = int.from_bytes(data[4:6], "big")
+        for i in range(count):
+            tag, _, offset, _ = struct.unpack(">4sIII", data[12 + 16 * i : 28 + 16 * i])
+            if tag != b"name":
+                continue
+            _, n, strings = struct.unpack(">HHH", data[offset : offset + 6])
+            found = None
+            for j in range(n):
+                platform, _, _, name_id, length, start = struct.unpack(
+                    ">HHHHHH", data[offset + 6 + 12 * j : offset + 18 + 12 * j]
+                )
+                if name_id != 4:
+                    continue
+                raw = data[offset + strings + start : offset + strings + start + length]
+                if platform in (0, 3):
+                    return raw.decode("utf-16-be") or None
+                if found is None:
+                    found = raw.decode("mac_roman")
+            return found or None
+    except (OSError, struct.error, UnicodeError):
+        return None
+    return None
+
+
+CAPTION_FONT_ROLES = ("text", "body", "display")
+
+
+def caption_font(project: Path) -> Optional[CaptionFont]:
+    """The brand font to burn captions in, or None (with a note on stderr) when none can be used.
+
+    Roles are tried in the order text, body, display, then any other role, with mono last: a
+    monospace face is about 1.5 times as wide as a proportional one, so 42-character lines overflow
+    the 9:16 caption box. The first listed file that exists on disk wins, and libass is given that
+    file's own full name, or the brand family when the name table is unreadable.
+    """
+    try:
+        product = load_brief(project).get("product")
+        brand = _read_brand_quietly(product)
+    except (OSError, ValueError, AttributeError):
+        brand = None
+    fonts = brand.get("fonts") if isinstance(brand, dict) else None
+    if not isinstance(fonts, dict) or not fonts:
+        print("burned captions use the libass default font: the project's brand lists no fonts", file=sys.stderr)
+        return None
+    roles = [r for r in CAPTION_FONT_ROLES if r in fonts]
+    roles += [r for r in sorted(fonts) if r not in roles and r != "mono"]
+    roles += ["mono"] if "mono" in fonts else []
+    brand_dir = studio_root() / "brands" / str(product)
+    for role in roles:
+        entry = fonts[role]
+        if not isinstance(entry, dict) or not isinstance(entry.get("files"), list):
+            continue
+        for name in entry["files"]:
+            path = brand_dir / str(name)
+            if not path.is_file():
+                continue
+            font_name = font_full_name(path) or entry.get("family")
+            if isinstance(font_name, str) and font_name and not re.search(r"[,':\\]", font_name):
+                return CaptionFont(font_name, path.parent)
+    print(
+        "burned captions use the libass default font: no brand font file exists on disk "
+        f"(looked under {brand_dir})",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _read_brand_quietly(product: object) -> Optional[dict]:
+    if not isinstance(product, str) or not product:
+        return None
+    path = studio_root() / "brands" / product / "brand.json"
+    if not path.is_file():
+        return None
+    brand = json.loads(path.read_text(encoding="utf-8"))
+    return brand if isinstance(brand, dict) else None
+
+
+def caption_style(aspect: str, width: int, height: int, font_name: Optional[str] = None) -> str:
     """The libass ``force_style`` string that places captions for ``aspect`` on a ``width`` x ``height`` frame.
 
     ffmpeg turns an SRT into an ASS script with PlayRes 384x288, and libass reads ``FontSize``,
@@ -523,6 +690,7 @@ def caption_style(aspect: str, width: int, height: int) -> str:
     down_y = ASS_PLAYRES_Y / height
     down_x = ASS_PLAYRES_X / width
     fields = [
+        *([("FontName", font_name)] if font_name else []),
         ("FontSize", round(layout.font * sy * down_y, 2)),
         ("Outline", round(layout.outline * sy * down_y, 2)),
         ("Shadow", 0),
@@ -589,7 +757,9 @@ def _resolve_layout(video: Path, srt: Path, aspect: Optional[str]) -> "tuple[str
     return aspect, size[0], size[1]
 
 
-def _burn(srt: Path, video: Path, out: Path, aspect: Optional[str] = None) -> None:
+def _burn(
+    srt: Path, video: Path, out: Path, aspect: Optional[str] = None, font: Optional[CaptionFont] = None
+) -> None:
     ffmpeg = _ffmpeg_binary()
     missing = {"missing": "ffmpeg subtitles filter", "fix": FFMPEG_FIX}
     try:
@@ -608,11 +778,12 @@ def _burn(srt: Path, video: Path, out: Path, aspect: Optional[str] = None) -> No
     if not video.is_file():
         _fail(f"video to burn into not found: {video}", srt=str(srt))
     aspect, width, height = _resolve_layout(video, srt, aspect)
-    style = caption_style(aspect, width, height)
+    style = caption_style(aspect, width, height, font.name if font else None)
+    fontsdir = f":fontsdir={_filter_path(str(font.directory))}" if font else ""
     out.parent.mkdir(parents=True, exist_ok=True)
     argv = [
         ffmpeg, "-y", "-v", "error", "-i", str(video),
-        "-vf", f"subtitles={_filter_path(str(srt))}:force_style='{style}'",
+        "-vf", f"subtitles={_filter_path(str(srt))}{fontsdir}:force_style='{style}'",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
         "-c:a", "copy", "-movflags", "+faststart",
         str(out),
@@ -631,6 +802,7 @@ def _cmd_captions(args: argparse.Namespace) -> None:
     project = _require_project(args.project)
     lines = _load_lines(args.lines, need_text=False)
     clips = []
+    mismatches: "list[dict]" = []
     for line in lines:
         path = project / "assets" / "voice" / f"{line['id']}.words.json"
         if not path.is_file():
@@ -641,6 +813,10 @@ def _cmd_captions(args: argparse.Namespace) -> None:
             for w in words
         ):
             _fail(f"{path} must be a list of {{text, start, end}}")
+        text = line.get("text")
+        if isinstance(text, str) and text.strip():
+            words, differences = script_words(text, words)
+            mismatches.extend({"clip": line["id"], **d, "at_s": round(d["at_s"], 3)} for d in differences)
         clips.append((float(line["start_s"]), words))
     cues = build_cues(clips)
     if not cues:
@@ -655,12 +831,15 @@ def _cmd_captions(args: argparse.Namespace) -> None:
             "narration is that fast; slow the narration or shorten the line, then rerun"
         )
         print(message, file=sys.stderr)
-        emit({"ok": False, "error": message, "srt": str(out), "cps_violations": slow}, EXIT_FAILED)
+        emit(
+            {"ok": False, "error": message, "srt": str(out), "cps_violations": slow, "text_mismatches": mismatches},
+            EXIT_FAILED,
+        )
     burned = None
     if args.burn:
-        _burn(out, Path(args.burn), Path(args.burned), args.aspect)
+        _burn(out, Path(args.burn), Path(args.burned), args.aspect, caption_font(project))
         burned = str(Path(args.burned))
-    emit({"srt": str(out), "burned": burned})
+    emit({"srt": str(out), "burned": burned, "text_mismatches": mismatches})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -680,7 +859,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     caps = sub.add_parser("captions", help="build an SRT from word timings, optionally burn it in")
     caps.add_argument("--project", required=True, help="project directory")
-    caps.add_argument("--lines", required=True, help="lines JSON: [{id, start_s}]")
+    caps.add_argument("--lines", required=True, help="lines JSON: [{id, text, start_s}]; text supplies the caption words")
     caps.add_argument("--out", required=True, help="SRT file to write")
     caps.add_argument("--burn", help="video to burn the captions into")
     caps.add_argument("--burned", help="where to write the captioned video")

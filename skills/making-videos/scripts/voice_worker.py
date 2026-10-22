@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +20,17 @@ from typing import Iterable
 MODEL_FILE = "kokoro-v1.0.onnx"
 VOICES_FILE = "voices-v1.0.bin"
 LANGUAGE = "en-us"
+
+TARGET_LUFS = -16.0
+TRUE_PEAK_CEILING_DBTP = -1.5
+LOUDNORM_PEAK_DBTP = -2.0
+LOUDNORM_LRA = 11
+# the limiter keeps peak-to-loudness under the 14.5 LU that a linear gain to -16 LUFS at -1.5 dBTP allows
+LEVELING_CHAIN = (
+    "acompressor=threshold=-24dB:ratio=3:attack=5:release=100:makeup=4,"
+    "alimiter=limit=-14dB:attack=2:release=40:level=0"
+)
+FFMPEG_TIMEOUT_S = 600
 
 
 def apply_patches(phonemes: str, pronunciations: dict) -> str:
@@ -59,6 +72,54 @@ def load_16k(path: str, ffmpeg: str = "ffmpeg"):
     return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
 
 
+def parse_loudnorm(stderr: str) -> dict:
+    """The JSON block that ``loudnorm=print_format=json`` prints at the end of ffmpeg's stderr."""
+    blocks = re.findall(r"\{[^{}]*\}", stderr)
+    if not blocks:
+        raise RuntimeError(f"ffmpeg printed no loudnorm measurement: {stderr.strip()[-400:]}")
+    return json.loads(blocks[-1])
+
+
+def _loudnorm(ffmpeg: str, src: Path, prefilter: str, measured: "dict | None", dst: "Path | None", rate: int) -> dict:
+    """One ffmpeg pass: measure ``src`` through ``prefilter`` + loudnorm, writing ``dst`` when given."""
+    options = f"I={TARGET_LUFS}:TP={LOUDNORM_PEAK_DBTP}:LRA={LOUDNORM_LRA}"
+    if measured:
+        options += (
+            f":measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
+            f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+            f":offset={measured['target_offset']}:linear=true"
+        )
+    argv = [ffmpeg, "-hide_banner", "-nostats", "-y", "-i", str(src), "-af", f"{prefilter}loudnorm={options}:print_format=json"]
+    argv += ["-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(dst)] if dst else ["-f", "null", "-"]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed on {src.name} (exit {proc.returncode}): {proc.stderr.strip()[-400:]}")
+    return parse_loudnorm(proc.stderr)
+
+
+def normalize_clip(ffmpeg: str, raw: Path, out: Path, rate: int) -> dict:
+    """Write ``out`` as ``raw`` compressed and loudness-normalized to -16 LUFS, and measure the result.
+
+    Two loudnorm passes (measure, then apply the measurement as a linear gain) so the clip keeps its
+    dynamics; ffmpeg falls back to dynamic mode on its own when a linear gain would break the peak
+    ceiling, and ``normalization`` reports which one ran. Returns ``{lufs, true_peak_dbtp, normalization}``
+    measured on ``out``.
+    """
+    first = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", None, None, rate)
+    tmp = out.with_name(out.stem + ".norm-tmp.wav")
+    try:
+        second = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", first, tmp, rate)
+        final = _loudnorm(ffmpeg, tmp, "", None, None, rate)
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {
+        "lufs": round(float(final["input_i"]), 1),
+        "true_peak_dbtp": round(float(final["input_tp"]), 1),
+        "normalization": second.get("normalization_type", "unknown"),
+    }
+
+
 def _cmd_say(args: argparse.Namespace) -> dict:
     import soundfile as sf
     from kokoro_onnx import Kokoro
@@ -83,9 +144,22 @@ def _cmd_say(args: argparse.Namespace) -> dict:
         phonemes = apply_patches(tokenizer.phonemize(line["text"], LANGUAGE), pronunciations)
         samples, rate = model.create(phonemes, voice=args.voice, is_phonemes=True)
         wav = out_dir / f"{line['id']}.wav"
-        sf.write(str(wav), samples, rate)
-        clips.append({"id": line["id"], "wav": str(wav), "duration_s": round(len(samples) / rate, 3)})
-        print(f"{line['id']}: {clips[-1]['duration_s']}s", file=sys.stderr)
+        raw = out_dir / f"{line['id']}.raw.wav"
+        sf.write(str(raw), samples, rate)
+        levels = normalize_clip(args.ffmpeg, raw, wav, rate)
+        clips.append(
+            {
+                "id": line["id"],
+                "wav": str(wav),
+                "raw": str(raw),
+                "duration_s": round(len(samples) / rate, 3),
+                **levels,
+            }
+        )
+        print(
+            f"{line['id']}: {clips[-1]['duration_s']}s {levels['lufs']} LUFS {levels['true_peak_dbtp']} dBTP",
+            file=sys.stderr,
+        )
     return {"clips": clips}
 
 
@@ -115,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     say.add_argument("--voice", required=True)
     say.add_argument("--out-dir", required=True)
     say.add_argument("--model-dir", required=True)
+    say.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg used to level and normalize each clip")
     say.add_argument("--pronunciations", default="{}", help="JSON {word: {from, to}} phoneme patches")
     say.set_defaults(func=_cmd_say)
 

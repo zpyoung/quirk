@@ -17,7 +17,7 @@ Contents: [Build order](#build-order) · [Lines and voice](#lines-and-voice) · 
 3. Run `voice.py captions` straight away, before any visual work. A `cps_violations` failure means the
    narration must change, and changing it later moves every word start you timed the visuals to.
 4. Write `beats.json` from the word starts, then build each scene so its beat lands on its word.
-5. Place the clips, set levels, render, and let `verify.py` measure loudness and sync on the MP4.
+5. Place the clips at `data-volume="1"`, render, and let `verify.py` measure loudness and sync on the MP4.
 
 Timing the voice to finished visuals has no anchor. Timing visuals to measured word starts held sync
 within -27 to +7 ms in the t2 trial.
@@ -48,16 +48,23 @@ python3 "$SKILL_DIR/scripts/voice.py" say   --project "$PROJECT" --lines "$PROJE
 python3 "$SKILL_DIR/scripts/voice.py" align --project "$PROJECT"
 ```
 
-- `say` writes `assets/voice/<id>.wav` (24 kHz mono) and prints `{"clips": [{"id", "wav", "duration_s"}]}`.
-  The render resamples to 48 kHz.
+- `say` writes `assets/voice/<id>.wav` (24 kHz mono) ready to mix: a gentle compressor and peak limiter,
+  then a two-pass `loudnorm` to -16 LUFS with true peak at or below -1.5 dBTP (linear gain when the
+  clip allows it). The untouched synthesis stays beside it as `<id>.raw.wav`; `align` and the project
+  copy skip the `.raw.wav` files. It prints
+  `{"clips": [{"id", "wav", "raw", "duration_s", "lufs", "true_peak_dbtp", "normalization"}]}` with the
+  levels measured on the written clip; `normalization` is `linear` or `dynamic`. The render resamples
+  to 48 kHz. Ids ending in `.raw` are refused.
 - `align` runs faster-whisper (`small.en`, CPU) on every wav in `assets/voice` and writes
   `assets/voice/<id>.words.json`: `[{"text", "start", "end"}]`, seconds from the start of that clip. The
   film time of a word is the clip's `start_s` plus its `start`.
 - Exit 3 means the venv is missing; the JSON carries the doctor command.
 - Read every `words.json` against the script. Whisper can mishear a clean TTS word (the t2 trial got
   "Claude Code" back as "cloud code"), invent a word over trailing silence, and mistime fricative onsets
-  by about 40 ms. Captions use the `text` fields, so fix a wrong `text` in place and keep `start` and
-  `end`. Edit only after the last `align`, which overwrites the file.
+  by about 40 ms. Captions take their words from the script in the lines file and only their timing
+  from `words.json`, so a misheard `text` does not reach the captions (see [Captions](#captions)).
+  Fix a wrong `text` in place, keeping `start` and `end`, only when something else reads it, such as
+  `beats.json` words, and only after the last `align`, which overwrites the file.
 
 ## Pronunciation
 
@@ -86,26 +93,18 @@ Patches apply to Kokoro only. For a cloud voice, respell the word in the line in
 ## Placing clips in HyperFrames
 
 Give each clip its own `<audio>` element so one line can move without touching the others. The clips
-must sit inside the HyperFrames project for `src` to resolve; copy `assets/voice/*.wav` into the scenes
-project after each `say` (layout and cwd rules are in [hyperframes.md](hyperframes.md)).
+must sit inside the HyperFrames project for `src` to resolve; copy `assets/voice/<id>.wav` (not the
+`.raw.wav` files) into the scenes project after each `say` (layout and cwd rules are in
+[hyperframes.md](hyperframes.md)).
 
 ```html
 <audio id="vo-a" class="clip" src="assets/voice/a.wav" data-start="0.3" data-track-index="3"
-  data-volume="1.88"
-  data-fx-chain="{&quot;version&quot;:1,&quot;nodes&quot;:[{&quot;type&quot;:&quot;limiter&quot;,&quot;id&quot;:&quot;lim&quot;,&quot;params&quot;:{&quot;limit&quot;:-1.5}}]}"></audio>
+  data-volume="1"></audio>
 ```
 
-- `data-volume` is linear gain (1 = 0 dB, at most 3.98 = +12 dB). Write the fx-chain JSON with `&quot;` for quotes.
-- The `limiter` goes last in the chain and guards peaks. Do not also tween `volume` in GSAP on the same
-  clip; lint flags it.
-- Measure each clip with
-  `python3 "$SKILL_DIR/scripts/hf.py" --project "$PROJECT" -- audio "$PROJECT/assets/voice/a.wav" --only loudness --json`
-  (one file per call). Gain = 10^((target − measured) / 20), with a first target of -16 LUFS.
-- `python3 "$SKILL_DIR/scripts/hf.py" -- normalize-audio . --target vo-a --lufs=-16 --write --json` (run
-  from the scenes folder, and write `--lufs=-16` with the equals sign) does this, but it caps gain at the
-  peak limit. In the t2 trial
-  it left one line at -19.2 LUFS while the others reached about -16. Read the result and set equal-loudness
-  gains by hand when a line is short.
+- `data-volume` is linear gain (1 = 0 dB, at most 3.98 = +12 dB). Leave it at 1 and add no `data-fx-chain`:
+  `say` already leveled the clip, and a `limiter` in the chain had no measurable effect in the real run.
+- Do not tween `volume` in GSAP on the same clip; lint flags it.
 
 ## Loudness
 
@@ -120,10 +119,19 @@ publish a LUFS target, so treat -14 as a convention and -16 as the conservative 
 (-23 LUFS) is out of scope.
 
 - Measure: `ffmpeg -hide_banner -nostats -i "$MP4" -af ebur128=peak=true:framelog=quiet -f null - 2>&1 | grep -E ' I:|Peak:'`.
-- Per-clip gains of -16 LUFS do not make the mix -16: the t2 mix measured -14.5 LUFS integrated. Render,
-  read the number, then shift every `data-volume` by the difference and render again.
-- The renderer can still lower the track to hold -1 dBTP (the t2 log said "Audio lowered by 1.1 dB to stay
-  under -1 dBTP"). That is harmless; the limiter alone does not catch every inter-sample peak.
+- `say` normalizes each clip, so no per-clip gain math is needed. A 90 s placement of twelve clips with
+  gaps, at `data-volume="1"` and no fx chain, mixed to -15.9 LUFS (sample peak -3.8 dBFS) with ffmpeg,
+  inside the -17 to -15 window.
+- Raw Kokoro clips sit near -22 LUFS with peaks at -1.5 dBFS, so any gain on a raw clip raises the peak
+  and the renderer answers by lowering the whole track ("Audio lowered by 6.4 dB to stay under -1 dBTP"),
+  which ends quieter than before. Do not place `<id>.raw.wav`.
+- Order: place at `data-volume="1"`, render, then read the `loudness` check in `verify.py`. If the mix is
+  off, change one gain on every clip by the measured difference (`data-volume` times 10^(difference / 20))
+  and render again.
+- `hf.py normalize-audio` caps its gain at the peak limit, so it cannot lift a quiet mix. Do not use it
+  for this.
+- The renderer can still lower the track a little to hold -1 dBTP (the t2 log said "Audio lowered by 1.1 dB
+  to stay under -1 dBTP"). A small lowering is harmless; several dB means the clips are too hot for the ceiling.
 
 ## Music
 
@@ -155,7 +163,14 @@ python3 "$SKILL_DIR/scripts/voice.py" captions --project "$PROJECT" --lines "$PR
   --out "$PROJECT/v1/<slug>-9x16.srt" --burn "$PROJECT/v1/raw/<slug>-9x16.mp4" --burned "$PROJECT/v1/<slug>-9x16.mp4"
 ```
 
-`captions` is stdlib-only and needs `align` first (it reads each `words.json`). Cues follow
+`captions` is stdlib-only and needs `align` first (it reads each `words.json`). The caption words are
+the `text` of each line in the lines file; `words.json` only supplies their timing. Words are matched in
+order ignoring case and punctuation, so "Three:" heard as "3." and "HyperFrames" heard as "Hyperframes"
+still show as scripted. When the word counts differ, the two are aligned with a sequence match, and a
+span that cannot be paired (a word Whisper dropped, invented or split differently) falls back to the heard
+text. Those spans come back as `text_mismatches`, `[{clip, script, heard, at_s}]`; read them, because a
+real mismatch means the narration says something other than the script. A line without `text` uses the
+heard words. Cues follow
 [Netflix's English style guide](https://partnerhelp.netflixstudios.com/hc/en-us/articles/217350977-English-USA-Timed-Text-Style-Guide):
 
 | Rule | Value |
@@ -169,6 +184,13 @@ python3 "$SKILL_DIR/scripts/voice.py" captions --project "$PROJECT" --lines "$PR
 - `--burn` and `--burned` go together. Burning needs an ffmpeg with the `subtitles` filter, which the
   default Homebrew `ffmpeg` lacks. Without it `captions` exits 3 and names `brew install ffmpeg-full`;
   `doctor.py check` reports it as `ffmpeg_subtitles`.
+- `--burn` sets the captions in the brand's own font: the first font file that exists on disk, trying the
+  `text` and `body` roles, then `display`, then any other role, and `mono` last, because a monospace face
+  is about 1.5 times as wide and 42-character lines overflow the 9:16 box. `captions` passes
+  `fontsdir=<that file's folder>` and the file's full font name (what libass matches; the brand family
+  fails for a weight-named file such as `Outfit-SemiBold.ttf`). With no usable font file it prints a note
+  on stderr and burns in the libass default face, so list a static TTF or OTF in the brand
+  ([brand.md](brand.md)).
 - `--aspect 16:9|9:16|1:1` picks where the burned captions land. Leave it off and `captions` reads the
   video's size with ffprobe; if ffprobe cannot read it and no `--aspect` is given, it exits 2. A flag
   that contradicts the probed size also exits 2.
@@ -219,3 +241,8 @@ Verify passes when the first changed frame lands within one frame of the word's 
 end within 50 ms of `expected_s`, else a spectral onset within 80 ms, else `expected_s` itself, flagged
 as unmeasured. Start each beat's tween on the frame before its word, because a tween shows nothing on
 its start frame. Picture slightly ahead of sound reads fine; sound ahead of picture does not.
+
+Ease choice moves the measured onset. The detector sees the first changed pixels, and a slow-start ease
+such as `power2.inOut` shows almost nothing for its first frames, so it reads 1 to 4 frames late in the
+real run. Use a fast-start ease for a tween timed to a word (`power2.out`, `expo.out`), or keep the ease
+and shift the tween earlier by the per-beat offset `verify.py` prints.

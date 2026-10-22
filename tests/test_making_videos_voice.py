@@ -5,7 +5,9 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import stat
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -117,8 +119,9 @@ def fake_ffprobe(tmp_path: Path, width: int = 1080, height: int = 1920, extra: s
 
 
 def burn_vf(tmp_path: Path) -> str:
-    argv = (tmp_path / "ffmpeg.argv").read_text().split()
-    return argv[argv.index("-vf") + 1]
+    match = re.search(r"-vf (.*?) -c:v ", (tmp_path / "ffmpeg.argv").read_text())
+    assert match
+    return match.group(1)
 
 
 def style_of(vf: str) -> dict:
@@ -175,13 +178,14 @@ def test_say_runs_worker_with_brand_voice_and_env(env, tmp_path):
     lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
     reply = json.dumps({"clips": [{"id": "a", "wav": "x.wav", "duration_s": 1.2}]})
     fake_venv_python(tmp_path, reply)
-    env = dict(env, GEMINI_API_KEY="leak", GOOGLE_API_KEY="leak", ELEVENLABS_API_KEY="leak")
+    env = dict(env, GEMINI_API_KEY="leak", GOOGLE_API_KEY="leak", ELEVENLABS_API_KEY="leak", QUIRK_FFMPEG="/x/ffmpeg")
     code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
     assert code == 0
     assert out == json.loads(reply)
     argv = (tmp_path / "worker.log.argv").read_text().split()
     assert argv[0] == str(WORKER_PY)
     assert argv[1] == "say"
+    assert argv[argv.index("--ffmpeg") + 1] == "/x/ffmpeg"
     assert argv[argv.index("--voice") + 1] == "af_heart"
     assert argv[argv.index("--out-dir") + 1] == str(project / "assets" / "voice")
     assert argv[argv.index("--model-dir") + 1] == str(tmp_path / "cache" / "models" / "kokoro")
@@ -257,6 +261,15 @@ def test_say_worker_failure_exits_1_with_stderr_tail(env, tmp_path):
     assert "kokoro model missing" in out["error"]
 
 
+def test_say_rejects_ids_that_collide_with_raw_clips(env, tmp_path):
+    project = make_project(tmp_path)
+    lines = write_json(tmp_path / "lines.json", [{"id": "a.raw", "text": "Hi.", "start_s": 0}])
+    fake_venv_python(tmp_path, json.dumps({"clips": []}))
+    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
+    assert code == 1
+    assert ".raw" in out["error"]
+
+
 def test_say_missing_project_exits_1(env, tmp_path):
     lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
     fake_venv_python(tmp_path, json.dumps({"clips": []}))
@@ -281,6 +294,19 @@ def test_align_runs_worker_over_project_wavs(env, tmp_path):
     assert argv[argv.index("--model") + 1] == "small.en"
     wavs = argv[argv.index("--wavs") + 1 :]
     assert wavs == [str(voice_dir / "a.wav"), str(voice_dir / "b.wav")]
+
+
+def test_align_skips_the_untouched_raw_clips(env, tmp_path):
+    project = make_project(tmp_path)
+    voice_dir = project / "assets" / "voice"
+    voice_dir.mkdir(parents=True)
+    for name in ("a.wav", "a.raw.wav"):
+        (voice_dir / name).write_bytes(b"")
+    fake_venv_python(tmp_path, json.dumps({"words": []}))
+    code, _, _ = run_voice("align", "--project", project, env=env)
+    assert code == 0
+    argv = (tmp_path / "worker.log.argv").read_text().split()
+    assert argv[argv.index("--wavs") + 1 :] == [str(voice_dir / "a.wav")]
 
 
 def test_align_with_no_clips_exits_1(env, tmp_path):
@@ -313,13 +339,13 @@ def test_captions_exact_small_case(env, tmp_path):
         project,
         tmp_path,
         [
-            {"id": "a", "text": "x", "start_s": 0},
-            {"id": "b", "text": "x", "start_s": 3.0},
-            {"id": "c", "text": "x", "start_s": 6.0},
+            {"id": "a", "start_s": 0},
+            {"id": "b", "start_s": 3.0},
+            {"id": "c", "start_s": 6.0},
         ],
     )
     assert code == 0
-    assert payload == {"srt": str(out), "burned": None}
+    assert payload == {"srt": str(out), "burned": None, "text_mismatches": []}
     assert out.read_text() == (
         "1\n00:00:00,000 --> 00:00:01,600\nHello there, friend.\n\n"
         "2\n00:00:03,000 --> 00:00:04,000\nSecond clip.\n\n"
@@ -330,7 +356,7 @@ def test_captions_exact_small_case(env, tmp_path):
 def test_captions_extends_short_cue_only_up_to_next_cue(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", [("Wow.", 0.0, 0.3), ("Next", 0.8, 1.4), ("one.", 1.5, 2.2)])
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 10.0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 10.0}])
     assert code == 0
     cues = parse_srt(out.read_text())
     assert [(c["start"], c["end"]) for c in cues] == [(10.0, 10.8), (10.8, 12.2)]
@@ -339,7 +365,7 @@ def test_captions_extends_short_cue_only_up_to_next_cue(env, tmp_path):
 def test_captions_timestamps_use_hours_and_milliseconds(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", [("Late.", 0.25, 1.5)])
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 3723.0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 3723.0}])
     assert code == 0
     assert "01:02:03,250 --> 01:02:04,500" in out.read_text()
 
@@ -362,7 +388,7 @@ def test_captions_long_case_respects_limits(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", long_clip())
     write_words(project, "b", long_clip()[:30])
-    lines = [{"id": "a", "text": "x", "start_s": 0.0}, {"id": "b", "text": "x", "start_s": 200.0}]
+    lines = [{"id": "a", "start_s": 0.0}, {"id": "b", "start_s": 200.0}]
     code, _, out = captions(env, project, tmp_path, lines)
     assert code == 0
     cues = parse_srt(out.read_text())
@@ -382,7 +408,7 @@ def test_captions_long_case_respects_limits(env, tmp_path):
 def test_captions_merges_fast_neighbours_to_meet_speed_limit(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", [("Extraordinary.", 0.0, 0.3), ("Next.", 0.4, 0.7)])
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
     assert code == 0
     cues = parse_srt(out.read_text())
     assert [c["lines"] for c in cues] == [["Extraordinary. Next."]]
@@ -401,7 +427,7 @@ def test_captions_resplits_words_when_merged_cue_would_not_fit(env, tmp_path):
         words.append((word, t, t + 0.3))
         t += 0.35
     write_words(project, "a", words)
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
     assert code == 0
     cues = parse_srt(out.read_text())
     assert " ".join(" ".join(c["lines"]) for c in cues) == " ".join(w[0] for w in words)
@@ -419,7 +445,7 @@ def test_captions_fast_speech_fails_loud_but_writes_srt(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}, {"id": "b", "text": "x", "start_s": 0.5}],
+        [{"id": "a", "start_s": 0}, {"id": "b", "start_s": 0.5}],
     )
     assert code == 1
     assert payload["ok"] is False
@@ -445,7 +471,7 @@ def test_captions_fast_speech_does_not_burn(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}, {"id": "b", "text": "x", "start_s": 0.5}],
+        [{"id": "a", "start_s": 0}, {"id": "b", "start_s": 0.5}],
         "--burn",
         video,
         "--burned",
@@ -459,7 +485,7 @@ def test_captions_fast_speech_does_not_burn(env, tmp_path):
 def test_captions_breaks_word_longer_than_line_limit(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", [("x" * 50, 0.0, 3.0)])
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
     assert code == 0
     (cue,) = parse_srt(out.read_text())
     assert cue["lines"] == ["x" * 41 + "-", "x" * 9]
@@ -469,7 +495,7 @@ def test_captions_breaks_very_long_word_across_cues(env, tmp_path):
     project = make_project(tmp_path)
     token = "y" * 130
     write_words(project, "a", [(token, 0.0, 12.0)])
-    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
     assert code == 0
     cues = parse_srt(out.read_text())
     lines = [line for cue in cues for line in cue["lines"]]
@@ -480,7 +506,7 @@ def test_captions_breaks_very_long_word_across_cues(env, tmp_path):
 
 def test_captions_missing_words_json_exits_1(env, tmp_path):
     project = make_project(tmp_path)
-    code, out, _ = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    code, out, _ = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
     assert code == 1
     assert "align" in out["error"]
 
@@ -489,7 +515,7 @@ def test_captions_burn_requires_burned(env, tmp_path):
     project = make_project(tmp_path)
     write_words(project, "a", [("Hi.", 0.0, 0.3)])
     code, out, _ = captions(
-        env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}], "--burn", tmp_path / "in.mp4"
+        env, project, tmp_path, [{"id": "a", "start_s": 0}], "--burn", tmp_path / "in.mp4"
     )
     assert code == 2
     assert "--burned" in out["error"]
@@ -507,7 +533,7 @@ def test_captions_burn_argv(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}],
+        [{"id": "a", "start_s": 0}],
         "--burn",
         video,
         "--burned",
@@ -516,7 +542,7 @@ def test_captions_burn_argv(env, tmp_path):
         "16:9",
     )
     assert code == 0
-    assert payload == {"srt": str(srt), "burned": str(burned)}
+    assert payload == {"srt": str(srt), "burned": str(burned), "text_mismatches": []}
     assert burned.exists()
     argv = (tmp_path / "ffmpeg.argv").read_text().split()
     assert argv[argv.index("-i") + 1] == str(video)
@@ -541,7 +567,7 @@ def _burn_style(env, tmp_path, aspect=None, probed=None):
         fake_ffprobe(tmp_path, *probed)
     args, _ = burn_args(tmp_path, *(["--aspect", aspect] if aspect else []))
     code, payload, _ = captions(
-        dict(env, QUIRK_FFMPEG=str(stub)), project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}], *args
+        dict(env, QUIRK_FFMPEG=str(stub)), project, tmp_path, [{"id": "a", "start_s": 0}], *args
     )
     return code, payload
 
@@ -660,7 +686,7 @@ def test_captions_burn_children_do_not_inherit_secrets(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}],
+        [{"id": "a", "start_s": 0}],
         "--burn",
         video,
         "--burned",
@@ -686,7 +712,7 @@ def test_captions_burn_without_subtitles_filter_exits_3(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}],
+        [{"id": "a", "start_s": 0}],
         "--burn",
         video,
         "--burned",
@@ -712,7 +738,7 @@ def test_captions_burn_finds_ffmpeg_full_through_brew_prefix(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}],
+        [{"id": "a", "start_s": 0}],
         "--burn",
         video,
         "--burned",
@@ -735,7 +761,7 @@ def test_captions_burn_encoder_failure_exits_1(env, tmp_path):
         env,
         project,
         tmp_path,
-        [{"id": "a", "text": "x", "start_s": 0}],
+        [{"id": "a", "start_s": 0}],
         "--burn",
         video,
         "--burned",
@@ -745,6 +771,185 @@ def test_captions_burn_encoder_failure_exits_1(env, tmp_path):
     )
     assert code == 1
     assert "encoder exploded" in payload["error"]
+
+
+# ---------------------------------------------------------------- caption words from the script
+
+
+def script_captions(env, tmp_path: Path, text: str, heard: "list[tuple[str, float, float]]", start: float = 0.0):
+    project = make_project(tmp_path)
+    write_words(project, "a", heard)
+    code, payload, out = captions(env, project, tmp_path, [{"id": "a", "text": text, "start_s": start}])
+    assert code == 0, payload
+    return payload, out.read_text()
+
+
+def test_captions_use_script_words_when_counts_match(env, tmp_path):
+    payload, srt = script_captions(
+        env,
+        tmp_path,
+        "Three: HyperFrames checks the file.",
+        [("3.", 0.0, 0.4), ("Hyperframes", 0.5, 1.2), ("checks", 1.3, 1.6), ("the", 1.6, 1.7), ("file.", 1.7, 2.2)],
+    )
+    assert "Three: HyperFrames checks the file." in srt
+    assert "3." not in srt and "Hyperframes" not in srt
+    assert payload["text_mismatches"] == []
+
+
+def test_captions_keep_whisper_timing_for_script_words(env, tmp_path):
+    _, srt = script_captions(
+        env, tmp_path, "Hello again.", [("Hello", 1.0, 1.4), ("again.", 1.5, 2.5)], start=2.0
+    )
+    (cue,) = parse_srt(srt)
+    assert cue["start"] == pytest.approx(3.0) and cue["end"] == pytest.approx(4.5)
+    assert cue["lines"] == ["Hello again."]
+
+
+def test_captions_align_unequal_counts_and_report_unmatched_spans(env, tmp_path):
+    payload, srt = script_captions(
+        env,
+        tmp_path,
+        "Quirk makes plans. Then tests run quickly.",
+        [
+            ("Quirk", 0.0, 0.4),
+            ("makes", 0.5, 0.8),
+            ("plans.", 0.9, 1.4),
+            ("Then", 2.0, 2.3),
+            ("the", 2.3, 2.4),
+            ("tests", 2.4, 2.8),
+            ("run", 2.9, 3.1),
+            ("quickly.", 3.2, 3.8),
+        ],
+    )
+    assert "Then tests run quickly." not in srt
+    assert [c["lines"] for c in parse_srt(srt)] == [["Quirk makes plans."], ["Then the tests run quickly."]]
+    (miss,) = payload["text_mismatches"]
+    assert miss == {"clip": "a", "script": "", "heard": "the", "at_s": 2.3}
+
+
+def test_captions_fall_back_to_whisper_text_for_a_differing_span(env, tmp_path):
+    payload, srt = script_captions(
+        env,
+        tmp_path,
+        "Ship it tonight please",
+        [("Ship", 0.0, 0.3), ("it", 0.3, 0.5), ("to", 0.5, 0.6), ("day", 0.6, 0.9), ("please", 1.0, 1.4)],
+    )
+    assert parse_srt(srt)[0]["lines"] == ["Ship it to day please"]
+    (miss,) = payload["text_mismatches"]
+    assert miss["script"] == "tonight" and miss["heard"] == "to day"
+
+
+def test_captions_time_script_words_whisper_never_heard(env, tmp_path):
+    payload, srt = script_captions(
+        env,
+        tmp_path,
+        "One small step forward",
+        [("One", 0.0, 0.4), ("step", 1.0, 1.4), ("forward", 1.5, 2.0)],
+    )
+    assert parse_srt(srt)[0]["lines"] == ["One small step forward"]
+    (miss,) = payload["text_mismatches"]
+    assert miss["script"] == "small" and miss["heard"] == ""
+    assert 0.4 <= miss["at_s"] <= 1.0
+
+
+def test_captions_merge_words_whisper_split_but_script_joined(env, tmp_path):
+    payload, srt = script_captions(
+        env,
+        tmp_path,
+        "Use the making-videos skill now",
+        [("Use", 0.0, 0.2), ("the", 0.2, 0.3), ("making", 0.3, 0.6), ("videos", 0.6, 0.9), ("skill", 1.0, 1.3), ("now", 1.3, 1.6)],
+    )
+    assert parse_srt(srt)[0]["lines"] == ["Use the making-videos skill now"]
+    assert payload["text_mismatches"] == []
+
+
+def test_captions_without_script_text_use_the_heard_words(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Hello", 0.0, 0.4), ("3.", 0.5, 0.9)])
+    code, payload, out = captions(env, project, tmp_path, [{"id": "a", "start_s": 0}])
+    assert code == 0
+    assert parse_srt(out.read_text())[0]["lines"] == ["Hello 3."]
+    assert payload["text_mismatches"] == []
+
+
+# ---------------------------------------------------------------- burned caption font
+
+
+def make_ttf(path: Path, full_name: str) -> Path:
+    """A minimal sfnt file whose only table is a name table holding ``full_name`` as name ID 4."""
+    raw = full_name.encode("utf-16-be")
+    table = struct.pack(">HHH", 0, 1, 18) + struct.pack(">HHHHHH", 3, 1, 0x409, 4, len(raw), 0) + raw
+    header = struct.pack(">IHHHH", 0x00010000, 1, 16, 0, 0) + struct.pack(">4sIII", b"name", 0, 28, len(table))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header + table)
+    return path
+
+
+def burn_with_brand(env, tmp_path, fonts: object, make_files=()):
+    brand = {"product": "acme", "voice": {"engine": "kokoro", "id": "af_heart"}, "fonts": fonts}
+    project = make_project(tmp_path, brand=brand)
+    brand_dir = tmp_path / "studio" / "brands" / "acme"
+    for name, full_name in make_files:
+        make_ttf(brand_dir / name, full_name)
+    write_words(project, "a", [("Hi.", 0.0, 0.3)])
+    stub = fake_ffmpeg(tmp_path)
+    args, _ = burn_args(tmp_path, "--aspect", "9:16")
+    code, payload, err = run_voice_captions(dict(env, QUIRK_FFMPEG=str(stub)), project, tmp_path, args)
+    assert code == 0, payload
+    return burn_vf(tmp_path), err, brand_dir
+
+
+def run_voice_captions(env, project, tmp_path, extra):
+    lines = write_json(tmp_path / "caption-lines.json", [{"id": "a", "start_s": 0}])
+    return run_voice(
+        "captions", "--project", project, "--lines", lines, "--out", tmp_path / "out" / "demo.srt", *extra, env=env
+    )
+
+
+def test_burn_uses_the_brand_font_file_and_its_full_name(env, tmp_path):
+    fonts = {"display": {"family": "Outfit", "files": ["fonts/Outfit-SemiBold.ttf"]}}
+    vf, _, brand_dir = burn_with_brand(env, tmp_path, fonts, [("fonts/Outfit-SemiBold.ttf", "Outfit SemiBold")])
+    assert f":fontsdir={brand_dir / 'fonts'}:" in vf.replace("\\", "")
+    assert style_of(vf)["FontName"] == "Outfit SemiBold"
+
+
+def test_burn_prefers_a_text_font_over_mono_and_mono_last(env, tmp_path):
+    fonts = {
+        "mono": {"family": "Plex Mono", "files": ["fonts/Mono.ttf"]},
+        "display": {"family": "Outfit", "files": ["fonts/Display.ttf"]},
+        "text": {"family": "Inter", "files": ["fonts/Text.ttf"]},
+    }
+    files = [("fonts/Mono.ttf", "Plex Mono"), ("fonts/Display.ttf", "Outfit"), ("fonts/Text.ttf", "Inter")]
+    vf, _, _ = burn_with_brand(env, tmp_path, fonts, files)
+    assert style_of(vf)["FontName"] == "Inter"
+
+
+def test_burn_falls_to_mono_when_it_is_the_only_font(env, tmp_path):
+    fonts = {"mono": {"family": "Plex Mono", "files": ["fonts/Mono.ttf"]}}
+    vf, _, _ = burn_with_brand(env, tmp_path, fonts, [("fonts/Mono.ttf", "Plex Mono")])
+    assert style_of(vf)["FontName"] == "Plex Mono"
+
+
+def test_burn_uses_the_brand_family_when_the_file_has_no_readable_name(env, tmp_path):
+    fonts = {"display": {"family": "Outfit", "files": ["fonts/Broken.ttf"]}}
+    brand_dir = tmp_path / "studio" / "brands" / "acme" / "fonts"
+    brand_dir.mkdir(parents=True)
+    (brand_dir / "Broken.ttf").write_bytes(b"not a font")
+    vf, _, _ = burn_with_brand(env, tmp_path, fonts)
+    assert style_of(vf)["FontName"] == "Outfit"
+
+
+def test_burn_without_a_font_file_keeps_the_default_and_says_so(env, tmp_path):
+    fonts = {"display": {"family": "Outfit", "files": ["fonts/Missing.ttf"]}}
+    vf, err, _ = burn_with_brand(env, tmp_path, fonts)
+    assert "fontsdir" not in vf and "FontName" not in vf
+    assert "default font" in err
+
+
+def test_burn_with_an_empty_files_list_keeps_the_default_and_says_so(env, tmp_path):
+    vf, err, _ = burn_with_brand(env, tmp_path, {"display": {"family": "Outfit", "files": []}})
+    assert "fontsdir" not in vf
+    assert "default font" in err
 
 
 # ---------------------------------------------------------------- worker logic
@@ -788,3 +993,105 @@ def test_worker_words_from_segments_rounds_and_strips(worker):
 
 def test_worker_words_json_path_replaces_wav_suffix(worker):
     assert worker.words_path("/a/b/intro.wav") == Path("/a/b/intro.words.json")
+
+
+# ---------------------------------------------------------------- clip loudness
+
+
+@pytest.fixture()
+def stdlib_worker():
+    spec = importlib.util.spec_from_file_location("mv_voice_worker_stdlib_under_test", WORKER_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_normalize_clip_measures_then_applies_a_linear_gain(stdlib_worker, tmp_path):
+    log = tmp_path / "ffmpeg.log"
+    body = (
+        f'echo "$@" >> "{log}"\n'
+        "cat >&2 <<'EOF'\n"
+        '{"input_i": "-27.50", "input_tp": "-9.00", "input_lra": "1.00", "input_thresh": "-38.00",'
+        ' "target_offset": "0.20", "normalization_type": "linear"}\n'
+        "EOF\n"
+        'for last; do :; done\n'
+        '[ "$last" = "-" ] || touch "$last"\n'
+    )
+    stub = make_stub(tmp_path / "bin" / "ffmpeg", body)
+    raw = tmp_path / "a.raw.wav"
+    raw.write_bytes(b"")
+    out = tmp_path / "a.wav"
+    levels = stdlib_worker.normalize_clip(str(stub), raw, out, 24000)
+    assert levels == {"lufs": -27.5, "true_peak_dbtp": -9.0, "normalization": "linear"}
+    assert out.exists() and not list(tmp_path.glob("*.norm-tmp.wav"))
+    measure, apply, check = [line.split() for line in log.read_text().splitlines()]
+    assert "measured_I" not in " ".join(measure)
+    filt = apply[apply.index("-af") + 1]
+    assert filt.startswith("acompressor=") and "alimiter=" in filt
+    assert "I=-16.0" in filt and "linear=true" in filt
+    assert "measured_I=-27.50" in filt and "measured_TP=-9.00" in filt and "offset=0.20" in filt
+    assert "acompressor" not in check[check.index("-af") + 1]
+
+
+def test_normalize_clip_reports_an_ffmpeg_failure(stdlib_worker, tmp_path):
+    stub = make_stub(tmp_path / "bin" / "ffmpeg", "echo 'no such filter' >&2\nexit 1\n")
+    raw = tmp_path / "a.raw.wav"
+    raw.write_bytes(b"")
+    with pytest.raises(RuntimeError, match="no such filter"):
+        stdlib_worker.normalize_clip(str(stub), raw, tmp_path / "a.wav", 24000)
+    assert not (tmp_path / "a.wav").exists()
+
+
+def _real_ffmpeg() -> "str | None":
+    path = shutil.which("ffmpeg")
+    if not path:
+        return None
+    filters = subprocess.run([path, "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    return path if all(name in filters for name in ("loudnorm", "alimiter", "acompressor")) else None
+
+
+def _speechlike(ffmpeg: str, out: Path, seconds: float, seed: int) -> None:
+    """Pink noise gated into syllable bursts with a few loud transients, as peaky as Kokoro output."""
+    chain = (
+        f"anoisesrc=d={seconds}:c=pink:r=24000:seed={seed},volume=0.05,"
+        "tremolo=f=4:d=0.95,volume='1+8*lt(mod(t,1.7),0.01)':eval=frame"
+    )
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", chain, "-c:a", "pcm_s16le", str(out)], check=True)
+
+
+def _ebur128(ffmpeg: str, path: Path) -> "tuple[float, float]":
+    err = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostats", "-i", str(path), "-af", "ebur128=peak=true", "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+    ).stderr
+    summary = err[err.rindex("Summary") :]
+    return float(re.search(r"I:\s+(-?[\d.]+) LUFS", summary).group(1)), float(
+        re.search(r"Peak:\s+(-?[\d.]+) dBFS", summary).group(1)
+    )
+
+
+@pytest.mark.skipif(_real_ffmpeg() is None, reason="needs an ffmpeg with loudnorm, alimiter and acompressor")
+def test_normalized_clips_mix_to_minus_16_lufs_at_unity_gain(stdlib_worker, tmp_path):
+    ffmpeg = _real_ffmpeg()
+    starts = [0.3, 4.2, 8.9]
+    clips = []
+    for i, _ in enumerate(starts):
+        raw = tmp_path / f"c{i}.raw.wav"
+        _speechlike(ffmpeg, raw, 3.2 + i * 0.4, seed=i + 1)
+        wav = tmp_path / f"c{i}.wav"
+        levels = stdlib_worker.normalize_clip(ffmpeg, raw, wav, 24000)
+        assert levels["lufs"] == pytest.approx(-16, abs=0.5), levels
+        assert levels["true_peak_dbtp"] <= -1.5, levels
+        measured, _ = _ebur128(ffmpeg, wav)
+        assert measured == pytest.approx(levels["lufs"], abs=0.3)
+        clips.append(wav)
+    argv = [ffmpeg, "-y", "-v", "error"]
+    for wav in clips:
+        argv += ["-i", str(wav)]
+    graph = ";".join(f"[{i}:a]aresample=48000,adelay={int(s * 1000)}[a{i}]" for i, s in enumerate(starts))
+    graph += ";" + "".join(f"[a{i}]" for i in range(len(clips))) + f"amix=inputs={len(clips)}:normalize=0[m]"
+    mix = tmp_path / "mix.wav"
+    subprocess.run(argv + ["-filter_complex", graph, "-map", "[m]", str(mix)], check=True)
+    loudness, _ = _ebur128(ffmpeg, mix)
+    assert loudness == pytest.approx(-16, abs=1.0)
