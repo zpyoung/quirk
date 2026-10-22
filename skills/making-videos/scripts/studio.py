@@ -32,6 +32,7 @@ DEFAULT_LENGTH_S = 30
 SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 PRODUCT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 VERSION_RE = re.compile(r"^v(\d+)$")
+PROJECT_SUBDIRS = ("assets", "kit")
 BRAND_REQUIRED = ("product", "colors", "fonts", "voice")
 
 
@@ -115,9 +116,12 @@ def _cmd_project_new(args: argparse.Namespace) -> int:
     if project.exists():
         _fail(f"project folder already exists: {project}")
     project.mkdir(parents=True)
+    subdirs = [project / name for name in PROJECT_SUBDIRS]
+    for subdir in subdirs:
+        subdir.mkdir()
     brief_path = project / "brief.json"
     brief_path.write_text(json.dumps(brief, indent=2) + "\n", encoding="utf-8")
-    emit({"project": str(project), "brief": str(brief_path)})
+    emit({"project": str(project), "brief": str(brief_path), "created": [str(d) for d in subdirs]})
 
 
 def _cmd_version_new(args: argparse.Namespace) -> int:
@@ -161,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     project = sub.add_parser("project", help="project folders")
     project_sub = project.add_subparsers(dest="action", required=True, parser_class=_Parser)
-    new = project_sub.add_parser("new", help="create <YYYY-MM-DD>-<slug> with a brief.json")
+    new = project_sub.add_parser("new", help="create <YYYY-MM-DD>-<slug> with a brief.json and assets/ and kit/")
     new.add_argument("--slug", required=True)
     new.add_argument("--product", required=True)
     new.add_argument("--brief-json", help="JSON file whose fields override the brief defaults")
