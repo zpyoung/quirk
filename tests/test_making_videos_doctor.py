@@ -138,7 +138,8 @@ def test_check_all_good_reports_ok(env):
     assert code == 0
     assert out["ok"] is True
     names = [t["name"] for t in out["tools"]]
-    assert {"node", "pnpm", "ffmpeg", "ffprobe", "ffmpeg_subtitles"} <= set(names)
+    assert {"node", "pnpm", "ffmpeg", "ffprobe"} <= set(names)
+    assert "ffmpeg_subtitles" not in names
     assert "platform" not in names
     for t in out["tools"]:
         assert set(t) >= {"name", "ok", "version", "fix"}
@@ -163,9 +164,21 @@ def test_check_missing_pnpm_has_a_fix(env):
     assert "brew install" in tool(out, "pnpm")["fix"]
 
 
-def test_check_ffmpeg_without_subtitles_filter_points_at_ffmpeg_full(env):
+def test_check_without_subtitles_filter_is_ok_when_captions_not_needed(env):
     write_stub(bin_dir(env) / "ffmpeg", ffmpeg_body(FILTERS_WITHOUT))
     code, out = run_doctor("check", env=env)
+    assert code == 0 and out["ok"] is True
+
+
+def test_captions_need_reports_ffmpeg_subtitles(env):
+    code, out = run_doctor("check", "--need", "captions", env=env)
+    assert code == 0 and out["ok"] is True
+    assert tool(out, "ffmpeg_subtitles")["ok"] is True
+
+
+def test_check_ffmpeg_without_subtitles_filter_points_at_ffmpeg_full(env):
+    write_stub(bin_dir(env) / "ffmpeg", ffmpeg_body(FILTERS_WITHOUT))
+    code, out = run_doctor("check", "--need", "captions", env=env)
     assert code == 0 and out["ok"] is False
     sub = tool(out, "ffmpeg_subtitles")
     assert sub["ok"] is False
@@ -287,7 +300,7 @@ def test_record_need_checks_the_pinned_playwright_version(env, tmp_path):
 def test_needs_not_requested_are_not_checked(env):
     _, out = run_doctor("check", env=env)
     names = {t["name"] for t in out["tools"]}
-    assert not names & {"narration_venv", "kokoro_models", "blender", "playwright"}
+    assert not names & {"narration_venv", "kokoro_models", "blender", "playwright", "ffmpeg_subtitles"}
 
 
 def test_install_refuses_without_yes(env, model_server, tmp_path):

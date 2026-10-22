@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Toolchain check and opt-in installer for the making-videos skill.
 
-``check [--need narration,3d,record]`` reports one entry per tool as
+``check [--need narration,3d,record,captions]`` reports one entry per tool as
 ``{"ok", "tools": [{"name", "ok", "version", "fix"}]}``; it exits 0 even when a tool is missing
 because the JSON carries the verdict. ``install --what tts|playwright --yes`` builds the skill's
 private Kokoro venv (and downloads the two model files) or its Playwright install under the cache;
@@ -13,7 +13,7 @@ Exit codes: 0 ok; 1 an install step failed; 2 usage error (unknown need, install
 ``--yes``); 3 a tool needed to install is missing (``uv`` or ``pnpm``).
 Overrides, all for tests and unusual installs: ``QUIRK_VIDEO_CACHE`` (cache root),
 ``QUIRK_PLATFORM`` (replaces ``sys.platform``), ``QUIRK_FFMPEG`` (the only ffmpeg checked for the
-``subtitles`` filter), ``QUIRK_BLENDER`` (the only Blender checked), ``QUIRK_KOKORO_BASE_URL``
+``subtitles`` filter, needed only by ``captions``), ``QUIRK_BLENDER`` (the only Blender checked), ``QUIRK_KOKORO_BASE_URL``
 (where the Kokoro model files are downloaded from).
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ from _mv_common import (  # noqa: E402
     venv_python,
 )
 
-NEEDS = ("narration", "3d", "record")
+NEEDS = ("narration", "3d", "record", "captions")
 MIN_NODE_MAJOR = 22
 MIN_BLENDER = (4, 2)
 NARRATION_PYTHONS = ("3.11", "3.12")
@@ -247,8 +247,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         check_pnpm(),
         check_ffmpeg_tool("ffmpeg"),
         check_ffmpeg_tool("ffprobe"),
-        check_ffmpeg_subtitles(),
     ]
+    if "captions" in needs:
+        tools.append(check_ffmpeg_subtitles())
     if "narration" in needs:
         tools += check_narration()
     if "3d" in needs:

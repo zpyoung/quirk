@@ -83,6 +83,14 @@ def test_project_new_creates_dated_folder_and_default_brief(env, tmp_path):
     assert isinstance(brief["narration"], bool)
 
 
+def test_project_new_creates_assets_and_kit_only(env, tmp_path):
+    code, out = new_project(env, tmp_path)
+    assert code == 0
+    project = Path(out["project"])
+    assert out["created"] == [str(project / "assets"), str(project / "kit")]
+    assert sorted(p.name for p in project.iterdir()) == ["assets", "brief.json", "kit"]
+
+
 @pytest.mark.parametrize("length_s, narration", [(15, False), (20, False), (21, True), (90, True)])
 def test_narration_default_follows_length(env, tmp_path, length_s, narration):
     code, out = new_project(env, tmp_path, brief={"title": "T", "length_s": length_s})
