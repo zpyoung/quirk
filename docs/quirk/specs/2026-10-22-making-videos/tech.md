@@ -248,28 +248,31 @@ Converts to MP4 with ffmpeg. Exit 3 when Playwright isn't installed.
 
 `CONTRACT:`
 ```
-verify.py --project DIR --version vN [--beats BEATS.json] [--check-json CHECK.json] [--render-log LOG]
-  -> {"version", "attempt": int, "passed": bool, "checks": [CHECK...], "frames": {"sheet": str, "stills": [str]}}
-  writes <project>/<vN>/verify.json; exit 1 when any check fails
+verify.py --project DIR --version vN [--mp4 FILE] [--beats BEATS.json] [--check-json [BAND=]CHECK.json] [--render-log LOG]
+  -> {"version", "mp4": str, "attempt": int, "passed": bool, "stop": bool, "checks": [CHECK...], "frames": {"sheet": str, "stills": [str]}}
+  writes <project>/<vN>/verify.json (one run per MP4); exit 1 when this run has a failing check
 ```
 Check sources (logic amendment 2026-10-22):
 
 | Check | Source | Pass rule |
 |---|---|---|
-| `fonts` | static scan of the project's HTML: every `var(--font-*)` resolves in an inline `<style>`/`style=`, no stylesheet `<link>` defines `--font-*`; render log line `Injected deterministic @font-face rules for N requested font families` lists every brand family | both hold |
+| `fonts` | static scan of the HTML in every `scenes*/` folder (`scenes/` for 16:9, `scenes-9x16/`, `scenes-1x1/` for the other layout passes): every `var(--font-*)` resolves in an inline `<style>`/`style=`, no stylesheet `<link>` defines `--font-*`; render log line `Injected deterministic @font-face rules for N requested font families` lists every brand family; a `*-9x16.mp4` / `*-1x1.mp4` also needs its matching folder to exist | all hold |
 | `contrast` | `check --json` → `contrast.findings` | no `contrast_aa_failure`; `measured` = failing-finding count plus the worst ratio parsed from finding messages when present |
-| `title_safe` | `check --json` run with `--caption-zone` error bands covering the outer 5% on each edge (four bands; one `check` run per band if the flag takes one band) | no text finding in any band |
+| `title_safe` | `check --json` run with `--caption-zone` error bands covering the outer 5% on each edge (the flag takes one band, so four `check` runs). Each band carries `;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1`, because the flag samples only `seek=1` (the last instant) by default | no text finding in any band |
 | `loudness` | `ffmpeg -af ebur128=peak=true` on the MP4 | narrated: −17 ≤ I ≤ −15 LUFS and true peak ≤ −1.0 dBTP; silent: skipped |
-| `sync` | `media_worker.py` over beats.json + `hyperframes audio --json` run once per clip (it takes one file per call) | every beat's first changed frame within ±1 frame of its word onset; skipped without beats or without the venv (status `skip`, detail says why) |
+| `sync` | `media_worker.py` over beats.json + `hyperframes audio --json` run once per clip (it takes one file per call) | every beat's first changed frame within ±1 frame of its word onset. Silent video: `skip` without beats or without the venv (detail says why). Narrated video: `fail` without beats ("narrated videos need beats.json (see audio.md)") and `fail` without the venv (detail names the doctor fix) |
 | `blender` | each `guard.json` under the project | no default scene, no mirrored frames; skipped without 3D |
 | `outside_calls` | `calls.jsonl` vs brief `cloud_allow` | every logged provider is allowed |
 
-`CHECK` schema below. `verify.json` keeps an `attempts` list (`[{"n", "ts", "passed"}]`) that each
-run reads and appends to; `attempt` is that list's length. At `attempt >= 3` with a failure, the JSON
-sets `"stop": true` and the skill goes to the review page instead of rebuilding. Errors: missing
-project or version → exit 2; missing MP4 → exit 1 with a `missing_render` error; missing ffmpeg →
-exit 3. Frames: a
-contact sheet and stills decoded from the MP4 at scene midpoints, for the agent's own visual review.
+`CHECK` schema below. `verify.json` is per MP4:
+`{"version", "passed", "runs": {"<mp4 filename>": {"attempts": [{"n", "ts", "passed"}], "attempt", "passed", "stop", "checks": [CHECK...], "frames": {...}}}}`.
+A run reads and appends to its own `attempts` list, so a 16:9 and a 9:16 MP4 in one version count separately;
+`attempt` is that list's length, and top-level `passed` is true only when every run passed. At
+`attempt >= 3` with a failure, that run sets `"stop": true` and the skill goes to the review page instead
+of rebuilding. A flat `verify.json` without `runs` is read as the run for the single MP4 present.
+Errors: missing project or version → exit 2; missing MP4 → exit 1 with a `missing_render` error;
+missing ffmpeg → exit 3. Frames: a contact sheet and stills decoded from the MP4 at scene midpoints into
+`<vN>/frames/<mp4 stem>/`, for the agent's own visual review.
 
 ### `review_page.py`
 
@@ -278,9 +281,10 @@ contact sheet and stills decoded from the MP4 at scene midpoints, for the agent'
 review_page.py --project DIR -> {"page": str}   # <project>/review.html
 ```
 Self-contained HTML (inline CSS, no CDN, works from `file://`), light and dark. Shows: player per
-version (relative paths), storyboard, contact sheet and stills, each verify check with measured value,
+version (relative paths), storyboard, each MP4's contact sheet and stills, each MP4's verify checks with measured value,
 outside calls, version list newest first with side-by-side compare of any two. A version without
 an MP4, `verify.json` or frames still gets a row saying what's missing; a missing project exits 2.
+An older flat `verify.json` and flat `frames/` still render.
 
 ## Content contracts: SKILL.md and references
 
@@ -343,8 +347,9 @@ Project layout:
 `SCHEMA:`
 ```
 <studio>/videos/<YYYY-MM-DD>-<slug>/
-  brief.json  storyboard.md  kit/  assets/  scenes/ (HyperFrames project)  calls.jsonl  review.html
-  v1/ <slug>-16x9.mp4 [<slug>-9x16.mp4] [*.srt] frames/ verify.json render.log
+  brief.json  storyboard.md  kit/  assets/  calls.jsonl  review.html
+  scenes/ (HyperFrames project, 16:9)  [scenes-9x16/  scenes-1x1/]   # one folder per aspect layout pass
+  v1/ <slug>-16x9.mp4 [<slug>-9x16.mp4] [*.srt] frames/<mp4 stem>/ verify.json (runs per MP4) render.log
 ```
 
 ## DO-NOT-CHANGE fences

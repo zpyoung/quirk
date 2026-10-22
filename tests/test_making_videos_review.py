@@ -286,3 +286,81 @@ def test_missing_optional_files_still_builds(tmp_path: Path, env: dict) -> None:
     assert proc.returncode == 0
     html = (proj / "review.html").read_text(encoding="utf-8")
     assert "brief.json" in html and "storyboard.md" in html
+
+
+def _check(name: str, status: str, measured: object, detail: str = "ok") -> dict:
+    return {"name": name, "status": status, "measured": measured, "threshold": None, "detail": detail}
+
+
+def _runs_project(tmp_path: Path, runs: dict) -> Path:
+    proj = tmp_path / "studio" / "videos" / "2026-10-22-runs"
+    v1 = proj / "v1"
+    v1.mkdir(parents=True)
+    (proj / "brief.json").write_text(json.dumps({"title": "Runs", "aspects": ["16:9", "9:16"]}))
+    for name in ("demo-16x9.mp4", "demo-9x16.mp4"):
+        (v1 / name).write_bytes(b"\x00mp4")
+        stem = name[:-4]
+        (v1 / "frames" / stem).mkdir(parents=True)
+        (v1 / "frames" / stem / "sheet.png").write_bytes(b"png")
+        (v1 / "frames" / stem / ("still-01-%s.png" % stem)).write_bytes(b"png")
+    (v1 / "verify.json").write_text(json.dumps({
+        "version": "v1", "passed": all(r["passed"] for r in runs.values()), "runs": runs,
+    }))
+    return proj
+
+
+def _run(passed: bool, attempt: int, checks: list) -> dict:
+    return {"attempts": [], "attempt": attempt, "passed": passed, "stop": False, "checks": checks, "frames": {}}
+
+
+def test_each_mp4_run_shows_its_checks_and_frames(tmp_path: Path, env: dict) -> None:
+    proj = _runs_project(tmp_path, {
+        "demo-16x9.mp4": _run(True, 1, [_check("fonts", "pass", 2)]),
+        "demo-9x16.mp4": _run(False, 3, [_check("title_safe", "fail", {"collisions": 1}, "text near the edge")]),
+    })
+    proc = build(proj, env)
+    assert proc.returncode == 0, proc.stderr
+    page = (proj / "review.html").read_text(encoding="utf-8")
+    wide = page[page.index('id="run-demo-16x9.mp4"'): page.index('id="run-demo-9x16.mp4"')]
+    tall = page[page.index('id="run-demo-9x16.mp4"'):]
+    assert re.search(r"<td[^>]*>fonts</td>\s*<td[^>]*>pass</td>", wide)
+    assert "title_safe" not in wide
+    assert re.search(r"<td[^>]*>title_safe</td>\s*<td[^>]*>fail</td>", tall)
+    assert "attempt 3" in tall and "attempt 1" in wide
+    frames = page[page.index("<h3>Frames</h3>"):]
+    wide_frames = frames[frames.index("<h4>demo-16x9.mp4</h4>"): frames.index("<h4>demo-9x16.mp4</h4>")]
+    tall_frames = frames[frames.index("<h4>demo-9x16.mp4</h4>"):]
+    assert 'src="v1/frames/demo-16x9/sheet.png"' in wide_frames
+    assert 'src="v1/frames/demo-9x16/sheet.png"' not in wide_frames
+    assert 'src="v1/frames/demo-9x16/sheet.png"' in tall_frames
+    assert 'src="v1/frames/demo-9x16/still-01-demo-9x16.png"' in tall_frames
+    assert "Missing" not in page
+    assert re.search(r'class="verdict fail"[^>]*>\s*<strong>Verify failed', page)
+
+
+def test_all_runs_passing_reads_as_a_pass(tmp_path: Path, env: dict) -> None:
+    proj = _runs_project(tmp_path, {
+        "demo-16x9.mp4": _run(True, 1, [_check("fonts", "pass", 2)]),
+        "demo-9x16.mp4": _run(True, 2, [_check("fonts", "pass", 2)]),
+    })
+    assert build(proj, env).returncode == 0
+    page = (proj / "review.html").read_text(encoding="utf-8")
+    assert "Verify failed" not in page
+    assert page.count("Verify passed") >= 1
+
+
+def test_an_mp4_without_a_verify_run_is_named_missing(tmp_path: Path, env: dict) -> None:
+    proj = _runs_project(tmp_path, {"demo-16x9.mp4": _run(True, 1, [_check("fonts", "pass", 2)])})
+    assert build(proj, env).returncode == 0
+    page = (proj / "review.html").read_text(encoding="utf-8")
+    assert "no verify run for demo-9x16.mp4" in page
+
+
+def test_run_names_and_check_text_are_escaped(tmp_path: Path, env: dict) -> None:
+    proj = _runs_project(tmp_path, {
+        "demo-16x9.mp4": _run(False, 1, [_check("fonts", "fail", 1, INJECTION)]),
+        INJECTION: _run(True, 1, []),
+    })
+    assert build(proj, env).returncode == 0
+    page = (proj / "review.html").read_text(encoding="utf-8")
+    assert INJECTION not in page and "<script>alert" not in page

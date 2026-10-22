@@ -39,6 +39,7 @@ echo '{"streams": [{"avg_frame_rate": "30/1", "r_frame_rate": "30/1", "width": 1
 """
 
 BANDS = ("top", "bottom", "left", "right")
+SEEK = "seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"
 
 
 def _load_worker():
@@ -58,7 +59,7 @@ def write_json(path: Path, payload: object) -> Path:
 class Studio:
     """A hermetic studio with one project, one version and a dummy MP4."""
 
-    def __init__(self, tmp_path: Path, *, fake_tools: bool = True, narration: bool = True,
+    def __init__(self, tmp_path: Path, *, fake_tools: bool = True, narration: bool = False,
                  cloud_allow=(), scenes: str = "scenes_inline", render_log: str = "render_ok.log",
                  clean_checks: bool = True):
         self.tmp = tmp_path
@@ -125,6 +126,26 @@ def studio(tmp_path: Path) -> Studio:
     return Studio(tmp_path)
 
 
+@pytest.fixture()
+def narrated(tmp_path: Path) -> Studio:
+    return Studio(tmp_path, narration=True)
+
+
+def add_aspect(s: Studio, aspect: str, scenes: str = "scenes_inline", render: bool = True) -> Path:
+    """A second MP4 in the version plus its own layout-pass folder."""
+    mp4 = s.vdir / ("demo-%s.mp4" % aspect)
+    mp4.write_bytes(b"not a real mp4")
+    shutil.copytree(FIX / scenes, s.project / ("scenes-%s" % aspect))
+    return mp4
+
+
+def fake_venv(s: Studio, rows) -> None:
+    shim = s.cache / "venv" / "bin" / "python"
+    shim.parent.mkdir(parents=True)
+    shim.write_text("#!/bin/sh\ncat >/dev/null\necho '%s'\n" % json.dumps({"beats": rows}))
+    shim.chmod(0o755)
+
+
 def check_of(result: dict, name: str) -> dict:
     found = [c for c in result["checks"] if c["name"] == name]
     assert len(found) == 1, "check %s in %s" % (name, [c["name"] for c in result["checks"]])
@@ -136,33 +157,49 @@ def test_everything_passes_and_verify_json_is_written(studio):
     assert code == 0, out
     assert out["passed"] is True
     assert out["version"] == "v1"
+    assert out["mp4"] == "demo-16x9.mp4"
     assert out["attempt"] == 1
     assert out["stop"] is False
     statuses = {c["name"]: c["status"] for c in out["checks"]}
     assert statuses == {
-        "fonts": "pass", "contrast": "pass", "title_safe": "pass", "loudness": "pass",
+        "fonts": "pass", "contrast": "pass", "title_safe": "pass", "loudness": "skip",
         "sync": "skip", "blender": "skip", "outside_calls": "pass",
     }
     for check in out["checks"]:
         assert set(check) == {"name", "status", "measured", "threshold", "detail"}
     saved = json.loads((studio.vdir / "verify.json").read_text())
-    assert saved["passed"] is True
-    assert len(saved["attempts"]) == 1
-    assert set(saved["attempts"][0]) == {"n", "ts", "passed"}
+    assert saved["version"] == "v1" and saved["passed"] is True
+    assert set(saved["runs"]) == {"demo-16x9.mp4"}
+    run = saved["runs"]["demo-16x9.mp4"]
+    assert set(run) == {"attempts", "attempt", "passed", "stop", "checks", "frames"}
+    assert run["passed"] is True and run["attempt"] == 1 and run["stop"] is False
+    assert len(run["attempts"]) == 1
+    assert set(run["attempts"][0]) == {"n", "ts", "passed"}
+
+
+def test_a_narrated_video_passes_with_beats_and_sync_run(narrated):
+    beats_file(narrated.project / "beats.json")
+    fake_venv(narrated, [{"id": "label", "via": "silence", "offset_s": 0.0, "offset_frames": 0.0}])
+    write_json(narrated.project / "assets" / "vo.audio.json", audio_doc())
+    code, out = narrated.run("--audio-json", "assets/vo.wav=%s" % (narrated.project / "assets" / "vo.audio.json"))
+    assert code == 0, out
+    statuses = {c["name"]: c["status"] for c in out["checks"]}
+    assert statuses["loudness"] == "pass" and statuses["sync"] == "pass"
 
 
 def test_frames_contact_sheet_and_default_stills(studio):
     code, out = studio.run()
     assert code == 0
+    frames = studio.vdir / "frames" / "demo-16x9"
     sheet = Path(out["frames"]["sheet"])
-    assert sheet == studio.vdir / "frames" / "sheet.png"
+    assert sheet == frames / "sheet.png"
     assert sheet.is_file()
     assert len(out["frames"]["stills"]) == 6
     for still in out["frames"]["stills"]:
-        assert Path(still).parent == studio.vdir / "frames"
+        assert Path(still).parent == frames
         assert Path(still).suffix == ".png" and Path(still).is_file()
-    assert sorted(p.name for p in (studio.vdir / "frames").iterdir() if p.is_file()).count("sheet.png") == 1
-    assert not [p for p in (studio.vdir / "frames").iterdir() if p.name.startswith(".")]
+    assert sorted(p.name for p in frames.iterdir() if p.is_file()).count("sheet.png") == 1
+    assert not [p for p in frames.iterdir() if p.name.startswith(".")]
 
 
 def test_stills_at_given_times(studio):
@@ -231,6 +268,44 @@ def test_render_log_flag_overrides_the_default_location(tmp_path):
     assert check_of(out, "fonts")["status"] == "pass"
 
 
+def test_fonts_scan_every_scenes_folder(tmp_path):
+    s = Studio(tmp_path)
+    shutil.copytree(FIX / "scenes_undefined", s.project / "scenes-9x16")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "fail"
+    assert "scenes-9x16" in fonts["detail"] and "--font-mono" in fonts["detail"]
+
+
+@pytest.mark.parametrize("aspect", ["9x16", "1x1"])
+def test_an_aspect_mp4_requires_its_scenes_folder(tmp_path, aspect):
+    s = Studio(tmp_path)
+    mp4 = s.vdir / ("demo-%s.mp4" % aspect)
+    mp4.write_bytes(b"x")
+    code, out = s.run("--mp4", mp4)
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail"
+    assert "scenes-%s" % aspect in fonts["detail"]
+
+
+@pytest.mark.parametrize("aspect", ["9x16", "1x1"])
+def test_an_aspect_mp4_passes_with_clean_matching_fonts(tmp_path, aspect):
+    s = Studio(tmp_path)
+    mp4 = add_aspect(s, aspect)
+    code, out = s.run("--mp4", mp4)
+    assert code == 0, out
+    assert check_of(out, "fonts")["status"] == "pass"
+
+
+def test_an_aspect_mp4_fails_on_its_own_folders_fonts(tmp_path):
+    s = Studio(tmp_path)
+    mp4 = s.vdir / "demo-9x16.mp4"
+    mp4.write_bytes(b"x")
+    shutil.copytree(FIX / "scenes_linked", s.project / "scenes-9x16")
+    code, out = s.run("--mp4", mp4)
+    assert code == 1 and "scenes-9x16" in check_of(out, "fonts")["detail"]
+
+
 # contrast and title_safe ------------------------------------------------------------------------
 
 def test_contrast_and_title_safe_fail_with_commands_when_no_check_json(studio):
@@ -242,6 +317,7 @@ def test_contrast_and_title_safe_fail_with_commands_when_no_check_json(studio):
     for needle in ("x0=0;y0=0;x1=1;y1=.05", "x0=0;y0=.95;x1=1;y1=1", "x0=0;y0=0;x1=.05;y1=1",
                    "x0=.95;y0=0;x1=1;y1=1", "severity=error", "--caption-zone"):
         assert needle in safe["detail"], needle
+    assert safe["detail"].count(";" + SEEK) == 4
 
 
 def test_contrast_fails_with_count_and_worst_ratio(studio):
@@ -363,7 +439,8 @@ def test_an_invalid_band_document_does_not_count_as_covered(studio, tmp_path):
     [("-16.0", "-1.5", "pass"), ("-15.0", "-1.0", "pass"), ("-17.0", "-3.0", "pass"),
      ("-20.0", "-1.5", "fail"), ("-14.0", "-1.5", "fail"), ("-16.0", "-0.5", "fail")],
 )
-def test_loudness_thresholds(studio, lufs, peak, status):
+def test_loudness_thresholds(narrated, lufs, peak, status):
+    studio = narrated
     code, out = studio.run(env=studio.env(FAKE_LUFS=lufs, FAKE_TP=peak))
     loud = check_of(out, "loudness")
     assert loud["status"] == status
@@ -435,16 +512,77 @@ def test_attempts_accumulate_and_stop_at_three_failures(tmp_path):
         assert out["attempt"] == expected
         seen.append(out["stop"])
     assert seen == [False, False, True]
-    assert [a["n"] for a in json.loads((s.vdir / "verify.json").read_text())["attempts"]] == [1, 2, 3]
+    saved = json.loads((s.vdir / "verify.json").read_text())
+    assert [a["n"] for a in saved["runs"]["demo-16x9.mp4"]["attempts"]] == [1, 2, 3]
 
 
 def test_a_passing_attempt_never_stops(tmp_path):
     s = Studio(tmp_path)
-    write_json(s.vdir / "verify.json", {"attempts": [
-        {"n": 1, "ts": "t", "passed": False}, {"n": 2, "ts": "t", "passed": False},
-        {"n": 3, "ts": "t", "passed": False}]})
+    failed = [{"n": n, "ts": "t", "passed": False} for n in (1, 2, 3)]
+    write_json(s.vdir / "verify.json", {"version": "v1", "passed": False, "runs": {
+        "demo-16x9.mp4": {"attempts": failed, "attempt": 3, "passed": False, "stop": True, "checks": [], "frames": {}}}})
     code, out = s.run()
     assert code == 0 and out["attempt"] == 4 and out["stop"] is False
+
+
+def test_a_flat_verify_json_becomes_the_run_for_the_single_mp4(tmp_path):
+    s = Studio(tmp_path)
+    write_json(s.vdir / "verify.json", {
+        "version": "v1", "attempt": 2, "passed": False, "stop": False, "checks": [], "frames": {},
+        "attempts": [{"n": 1, "ts": "t", "passed": False}, {"n": 2, "ts": "t", "passed": False}]})
+    code, out = s.run()
+    assert out["attempt"] == 3
+    saved = json.loads((s.vdir / "verify.json").read_text())
+    assert set(saved) == {"version", "passed", "runs"}
+    assert list(saved["runs"]) == ["demo-16x9.mp4"]
+    assert [a["n"] for a in saved["runs"]["demo-16x9.mp4"]["attempts"]] == [1, 2, 3]
+
+
+def test_two_mp4s_keep_separate_runs_in_one_verify_json(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    code, first = s.run("--mp4", s.vdir / "demo-16x9.mp4")
+    assert code == 0 and first["attempt"] == 1
+    code, second = s.run("--mp4", nine)
+    assert code == 0 and second["attempt"] == 1 and second["mp4"] == "demo-9x16.mp4"
+    saved = json.loads((s.vdir / "verify.json").read_text())
+    assert saved["passed"] is True
+    assert sorted(saved["runs"]) == ["demo-16x9.mp4", "demo-9x16.mp4"]
+    for name, stem in (("demo-16x9.mp4", "demo-16x9"), ("demo-9x16.mp4", "demo-9x16")):
+        run = saved["runs"][name]
+        assert run["attempt"] == 1 and len(run["attempts"]) == 1 and run["passed"] is True
+        assert Path(run["frames"]["sheet"]) == s.vdir / "frames" / stem / "sheet.png"
+        assert (s.vdir / "frames" / stem / "sheet.png").is_file()
+
+
+def test_top_level_passed_needs_every_run_to_pass(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    s.run("--mp4", s.vdir / "demo-16x9.mp4")
+    code, out = s.run("--mp4", nine, check_args=[])
+    assert code == 1 and out["passed"] is False
+    saved = json.loads((s.vdir / "verify.json").read_text())
+    assert saved["passed"] is False
+    assert saved["runs"]["demo-16x9.mp4"]["passed"] is True
+    assert saved["runs"]["demo-9x16.mp4"]["passed"] is False
+
+
+def test_the_three_attempt_stop_counts_per_mp4(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    stops = []
+    for _ in range(3):
+        code, out = s.run("--mp4", nine, check_args=[])
+        assert code == 1
+        stops.append(out["stop"])
+        code, wide = s.run("--mp4", s.vdir / "demo-16x9.mp4")
+        assert code == 0 and wide["stop"] is False
+    assert stops == [False, False, True]
+    saved = json.loads((s.vdir / "verify.json").read_text())
+    assert saved["runs"]["demo-16x9.mp4"]["attempt"] == 3
+    assert saved["runs"]["demo-9x16.mp4"]["attempt"] == 3
+    assert saved["runs"]["demo-9x16.mp4"]["stop"] is True
+    assert saved["runs"]["demo-16x9.mp4"]["stop"] is False
 
 
 def test_corrupt_verify_json_restarts_the_attempt_count(studio):
@@ -476,7 +614,7 @@ def test_missing_mp4_is_exit_1_missing_render(studio):
 
 
 def test_several_mp4s_need_an_explicit_flag(studio):
-    (studio.vdir / "demo-9x16.mp4").write_bytes(b"x")
+    add_aspect(studio, "9x16")
     code, out = studio.run()
     assert code == 2 and "--mp4" in out["error"]
     code, out = studio.run("--mp4", studio.vdir / "demo-9x16.mp4")
@@ -505,6 +643,21 @@ def test_sync_skips_without_beats(studio):
     code, out = studio.run()
     sync = check_of(out, "sync")
     assert sync["status"] == "skip" and "beats" in sync["detail"]
+
+
+def test_sync_fails_a_narrated_video_without_beats(narrated):
+    code, out = narrated.run()
+    sync = check_of(out, "sync")
+    assert code == 1 and sync["status"] == "fail"
+    assert sync["detail"] == "narrated videos need beats.json (see audio.md)"
+
+
+def test_sync_fails_a_narrated_video_when_the_venv_is_missing(narrated):
+    beats = beats_file(narrated.tmp / "beats.json")
+    code, out = narrated.run("--beats", beats, "--audio-json", "assets/vo.wav=%s" % (FIX / "audio_vo.json"))
+    sync = check_of(out, "sync")
+    assert code == 1 and sync["status"] == "fail"
+    assert "venv" in sync["detail"] and "doctor.py check --need narration" in sync["detail"]
 
 
 def test_sync_skips_with_a_reason_when_the_venv_is_missing(studio):
@@ -562,7 +715,7 @@ def real_env(s: Studio, **extra: str) -> dict:
 @needs_ffmpeg
 @pytest.mark.parametrize("name,status", [("on_target", "pass"), ("too_loud", "fail"), ("too_quiet", "fail")])
 def test_loudness_on_a_generated_tone(tmp_path, tone_videos, name, status):
-    s = Studio(tmp_path, fake_tools=False)
+    s = Studio(tmp_path, fake_tools=False, narration=True)
     (s.vdir / "demo-16x9.mp4").unlink()
     code, out = s.run("--mp4", tone_videos[name], env=real_env(s))
     loud = check_of(out, "loudness")
@@ -577,7 +730,7 @@ def test_contact_sheet_and_stills_decode_from_the_real_mp4(tmp_path, tone_videos
     s = Studio(tmp_path, fake_tools=False)
     (s.vdir / "demo-16x9.mp4").unlink()
     code, out = s.run("--mp4", tone_videos["on_target"], "--at", "1,3,5", env=real_env(s))
-    assert out["frames"]["sheet"].endswith("frames/sheet.png")
+    assert out["frames"]["sheet"].endswith("frames/on_target/sheet.png")
     sheet = Path(out["frames"]["sheet"])
     probe = subprocess.run(
         [REAL_FFPROBE, "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(sheet)],

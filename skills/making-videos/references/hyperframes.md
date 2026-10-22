@@ -35,7 +35,7 @@ Create the HyperFrames project at `$P/scenes/`. Pass the absolute path, because 
 python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- init "$P/scenes" --non-interactive
 ```
 
-- Add `--resolution portrait` or `--resolution square` for 9:16 and 1:1; the default is 1920x1080. Each aspect is its own project folder and its own layout pass.
+- Add `--resolution portrait` or `--resolution square` for 9:16 and 1:1; the default is 1920x1080. Each aspect is its own project folder and its own layout pass. Name the folders `scenes/` (16:9), `scenes-9x16/` and `scenes-1x1/`, for example `init "$P/scenes-9x16" --resolution portrait`. Verify scans every `scenes*/` folder for fonts, and a `*-9x16.mp4` or `*-1x1.mp4` also needs its matching folder to pass. Everything below uses `scenes/`; for another aspect, swap in that folder and name the MP4 and check files to match.
 - The scaffold writes `index.html`, `hyperframes.json`, `meta.json`, `package.json`, `CLAUDE.md` and `AGENTS.md`. Ignore the last two; this reference and `SKILL.md` win.
 - `index.html` is the root. Scene files go in `compositions/*.html`; media and fonts go in `assets/`. Asset paths are root-relative (`assets/...`) even inside a scene.
 - The scaffold loads GSAP from jsdelivr, a network fetch at render time. Leave it in place unless the machine is offline.
@@ -98,11 +98,11 @@ Run in this order: lint, check, snapshot while building, then render, then verif
                "left|x0=0;y0=0;x1=.05;y1=1" "right|x0=.95;y0=0;x1=1;y1=1"; do
      band="${spec%%|*}"; zone="${spec#*|}"
      python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- check --json \
-       --caption-zone "${zone};severity=error;seek=.1,.3,.5,.7,.9,1" "$P/scenes" > "$V/check-${band}.json"
+       --caption-zone "${zone};severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1" "$P/scenes" > "$V/check-${band}.json"
    done
    ```
 
-   The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film, so the `seek=` fractions above sample across it.
+   The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film (text that sits in a band from 2 to 3 s of a 6 s film passes), so keep the `seek=` list: it samples eleven instants across the film as fractions of its duration.
    Move flagged text out of the band. Do not add `data-layout-allow-caption-zone` to silence verify; that attribute is for deliberate lower-thirds.
    The audit has a hard 120 s limit, so on a long film `check_runtime_failure` can be the limit and not a bug in your scenes.
 
