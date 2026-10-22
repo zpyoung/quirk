@@ -253,6 +253,32 @@ def test_preview_redacts_a_key_echoed_by_the_server(server, project, env):
     assert "[redacted]" in out["preview"]
 
 
+def test_preview_redacts_a_key_straddling_the_cutoff(server, project, env):
+    class Straddle(_Handler):
+        def _serve(self) -> None:
+            self._reply(200, b"x" * 1990 + KEY.encode() + b"y" * 50, "text/plain")
+
+        do_GET = do_POST = _serve
+
+    server.RequestHandlerClass = Straddle
+    proc, out = call(project, "pexels", base_url(server) + "/anything", env)
+    assert proc.returncode == 0
+    assert out["preview"].endswith("x" * 1990 + "[redacted]")
+    assert KEY[:6] not in proc.stdout
+    assert_key_absent(proc, project)
+
+
+def test_log_write_failure_exits_1_and_says_the_request_was_sent(server, project, env):
+    (project / "calls.jsonl").mkdir()
+    proc, out = call(project, "pexels", base_url(server) + "/anything", env)
+    assert proc.returncode == 1
+    assert out["request_sent"] is True
+    assert out["status"] == 200
+    assert "calls.jsonl" in out["error"]
+    assert len(server.seen) == 1
+    assert KEY not in proc.stdout and KEY not in proc.stderr
+
+
 def test_http_error_returns_status_exit_1_and_is_logged(server, project, env, tmp_path):
     dest = tmp_path / "never.bin"
     proc, out = call(project, "openai", base_url(server) + "/boom", env, "--out", dest)

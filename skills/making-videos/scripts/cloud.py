@@ -49,6 +49,7 @@ from _mv_common import (  # noqa: E402
 LOOPBACK_ENV = "QUIRK_CLOUD_LOOPBACK_OK"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 PREVIEW_CHARS = 2000
+MIN_KEY_FRAGMENT = 4
 CHUNK = 1 << 16
 TIMEOUT_S = 120
 USER_AGENT = "quirk-making-videos/1"
@@ -183,7 +184,14 @@ def _redact(text: str, key: str) -> str:
 
 
 def _preview(data: bytes, key: str) -> str:
-    return _redact(data.decode("utf-8", errors="replace")[:PREVIEW_CHARS], key)
+    """Capped text preview of a response with the API key removed, including a key cut by the cap."""
+    text = _redact(data.decode("utf-8", errors="replace"), key)
+    cut = text[:PREVIEW_CHARS]
+    if key and len(text) > PREVIEW_CHARS:
+        for size in range(min(len(key) - 1, len(cut)), MIN_KEY_FRAGMENT - 1, -1):
+            if cut.endswith(key[:size]):
+                return cut[:-size] + "[redacted]"
+    return cut
 
 
 def _fail(message: str, key: str = "", **extra: object) -> NoReturn:
@@ -247,7 +255,9 @@ def _cmd_call(args: argparse.Namespace) -> None:
         try:
             log_call(project, record)
         except OSError as exc:
-            print(f"could not write calls.jsonl: {exc}", file=sys.stderr)
+            message = _redact(f"provider request was sent but calls.jsonl could not be written: {exc}", key)
+            print(message, file=sys.stderr)
+            emit({"error": message, "request_sent": True, "status": status, "bytes": nbytes}, EXIT_FAILED)
 
     out_path: Optional[Path] = Path(args.out) if args.out else None
     try:
