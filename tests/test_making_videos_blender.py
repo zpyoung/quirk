@@ -38,6 +38,8 @@ from pathlib import Path
 argv = sys.argv[1:]
 with open(os.environ["FAKE_BLENDER_LOG"], "a") as fh:
     fh.write(json.dumps(argv) + "\\n")
+with open(os.environ["FAKE_BLENDER_LOG"] + ".env", "a") as fh:
+    fh.write(json.dumps(sorted(os.environ)) + "\\n")
 if os.environ.get("FAKE_BLENDER_EXIT"):
     sys.stderr.write("Traceback: boom from fake blender\\n")
     raise SystemExit(int(os.environ["FAKE_BLENDER_EXIT"]))
@@ -67,6 +69,8 @@ FAKE_FFMPEG = f'''#!{sys.executable}
 import json, os, sys
 with open(os.environ["FAKE_FFMPEG_LOG"], "a") as fh:
     fh.write(json.dumps(sys.argv[1:]) + "\\n")
+with open(os.environ["FAKE_FFMPEG_LOG"] + ".env", "a") as fh:
+    fh.write(json.dumps(sorted(os.environ)) + "\\n")
 if os.environ.get("FAKE_FFMPEG_EXIT"):
     sys.stderr.write("ffmpeg: encode exploded\\n")
     raise SystemExit(int(os.environ["FAKE_FFMPEG_EXIT"]))
@@ -103,7 +107,7 @@ def rig(tmp_path: Path) -> dict:
         "env": env,
         "blend": blend,
         "script": script,
-        "out": tmp_path / "out",
+        "out": tmp_path / "cache" / "out",
         "blender": blender,
         "bin": bin_dir,
         "blender_log": tmp_path / "blender.log",
@@ -421,3 +425,81 @@ def test_runner_finds_mac_app_fallback(tmp_path, monkeypatch):
     assert mod.find_blender({"PATH": str(tmp_path / "empty")}) is None
     assert mod.find_blender({"QUIRK_BLENDER": str(app), "PATH": ""}) == str(app)
     assert mod.find_blender({"QUIRK_BLENDER": str(tmp_path / "absent"), "PATH": ""}) is None
+
+
+def test_children_get_no_scrubbed_env(rig):
+    secrets = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
+               "PEXELS_API_KEY", "PIXABAY_API_KEY", "FREESOUND_API_KEY")
+    env = with_env(rig, **{k: "dummy" for k in secrets})
+    rc, data = run_render(rig, "--frames", "1-2", env=env)
+    assert rc == 0, data
+    for log in (rig["blender_log"], rig["ffmpeg_log"]):
+        (keys,) = log_lines(Path(str(log) + ".env"))
+        assert "PATH" in keys
+        assert not set(secrets) & set(keys)
+
+
+def test_out_outside_roots_is_refused_without_touching_disk(rig, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    victim = outside / "f_0001.png"
+    victim.write_bytes(b"keep")
+    rig["out"] = outside
+    rc, data = run_render(rig, "--frames", "1-2")
+    assert rc == 1
+    assert "--out" in data["error"]
+    assert victim.read_bytes() == b"keep"
+    assert log_lines(rig["blender_log"]) == []
+
+
+def test_out_symlink_escaping_roots_is_refused(rig, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "f_0001.png").write_bytes(b"keep")
+    (tmp_path / "cache").mkdir()
+    link = tmp_path / "cache" / "link"
+    link.symlink_to(outside)
+    rig["out"] = link
+    rc, data = run_render(rig, "--frames", "1-2")
+    assert rc == 1
+    assert (outside / "f_0001.png").read_bytes() == b"keep"
+    assert log_lines(rig["blender_log"]) == []
+
+
+def test_out_inside_studio_is_allowed_but_not_in_a_version_folder(rig, tmp_path):
+    project = tmp_path / "studio" / "videos" / "2026-10-22-demo"
+    rig["out"] = project / "renders" / "f1"
+    rc, data = run_render(rig, "--frames", "1-2")
+    assert rc == 0, data
+    for refused in (project / "v1", project / "v3" / "frames"):
+        refused.mkdir(parents=True, exist_ok=True)
+        (refused / "f_0001.png").write_bytes(b"keep")
+        rig["out"] = refused
+        rc, data = run_render(rig, "--frames", "1-2")
+        assert rc == 1, refused
+        assert "version folder" in data["error"]
+        assert (refused / "f_0001.png").read_bytes() == b"keep"
+
+
+def test_shorter_rerun_encodes_only_requested_frames(rig):
+    rc, _ = run_render(rig, "--frames", "1-6")
+    assert rc == 0
+    rig["ffmpeg_log"].unlink()
+    rc, data = run_render(rig, "--frames", "1-3")
+    assert rc == 0, data
+    (ffmpeg,) = log_lines(rig["ffmpeg_log"])
+    assert ffmpeg[ffmpeg.index("-frames:v") + 1] == "3"
+    assert (rig["out"] / "f_0006.png").is_file()
+    assert data["frames"] == 3
+
+
+def test_alpha_encodes_only_requested_frames(rig):
+    rc, _ = run_render(rig, "--frames", "1-6", "--alpha")
+    assert rc == 0
+    rig["ffmpeg_log"].unlink()
+    rc, data = run_render(rig, "--frames", "2-4", "--alpha")
+    assert rc == 0, data
+    (ffmpeg,) = log_lines(rig["ffmpeg_log"])
+    assert ffmpeg[ffmpeg.index("-frames:v") + 1] == "3"
+    assert ffmpeg[ffmpeg.index("-start_number") + 1] == "2"
+    assert data["frames"] == 3
