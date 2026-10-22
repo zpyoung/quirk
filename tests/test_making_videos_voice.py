@@ -354,6 +354,105 @@ def test_captions_long_case_respects_limits(env, tmp_path):
     assert any(len(cue["lines"]) == 2 for cue in cues)
 
 
+def test_captions_merges_fast_neighbours_to_meet_speed_limit(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Extraordinary.", 0.0, 0.3), ("Next.", 0.4, 0.7)])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    assert code == 0
+    cues = parse_srt(out.read_text())
+    assert [c["lines"] for c in cues] == [["Extraordinary. Next."]]
+    assert len(cues[0]["lines"][0]) / (cues[0]["end"] - cues[0]["start"]) <= 20.0 + 1e-9
+
+
+def test_captions_resplits_words_when_merged_cue_would_not_fit(env, tmp_path):
+    project = make_project(tmp_path)
+    tail = (
+        "one two three four five six seven eight nine ten eleven twelve "
+        "thirteen fourteen fifteen sixteen seventeen."
+    ).split()
+    words = [("Extraordinary.", 0.0, 0.2)]
+    t = 0.3
+    for word in tail:
+        words.append((word, t, t + 0.3))
+        t += 0.35
+    write_words(project, "a", words)
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    assert code == 0
+    cues = parse_srt(out.read_text())
+    assert " ".join(" ".join(c["lines"]) for c in cues) == " ".join(w[0] for w in words)
+    assert cues[0]["lines"][0].startswith("Extraordinary. one")
+    for cue in cues:
+        assert len(" ".join(cue["lines"])) / (cue["end"] - cue["start"]) <= 20.0 + 1e-9
+        assert len(cue["lines"]) <= 2 and all(len(line) <= 42 for line in cue["lines"])
+
+
+def test_captions_fast_speech_fails_loud_but_writes_srt(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Extraordinary", 0.0, 0.2), ("acceleration", 0.2, 0.4)])
+    write_words(project, "b", [("Next.", 0.0, 0.5)])
+    code, payload, out = captions(
+        env,
+        project,
+        tmp_path,
+        [{"id": "a", "text": "x", "start_s": 0}, {"id": "b", "text": "x", "start_s": 0.5}],
+    )
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["srt"] == str(out)
+    assert out.exists()
+    (violation,) = payload["cps_violations"]
+    assert violation["cue"] == 1
+    assert violation["start"] == 0.0 and violation["end"] == 0.5
+    assert violation["cps"] > 20
+    assert "error" in payload
+
+
+def test_captions_fast_speech_does_not_burn(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Extraordinary", 0.0, 0.2), ("acceleration", 0.2, 0.4)])
+    write_words(project, "b", [("Next.", 0.0, 0.5)])
+    stub = fake_ffmpeg(tmp_path)
+    video = tmp_path / "in.mp4"
+    video.write_bytes(b"")
+    burned = tmp_path / "burned.mp4"
+    env = dict(env, QUIRK_FFMPEG=str(stub))
+    code, payload, _ = captions(
+        env,
+        project,
+        tmp_path,
+        [{"id": "a", "text": "x", "start_s": 0}, {"id": "b", "text": "x", "start_s": 0.5}],
+        "--burn",
+        video,
+        "--burned",
+        burned,
+    )
+    assert code == 1
+    assert payload["ok"] is False
+    assert not burned.exists()
+
+
+def test_captions_breaks_word_longer_than_line_limit(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("x" * 50, 0.0, 3.0)])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    assert code == 0
+    (cue,) = parse_srt(out.read_text())
+    assert cue["lines"] == ["x" * 41 + "-", "x" * 9]
+
+
+def test_captions_breaks_very_long_word_across_cues(env, tmp_path):
+    project = make_project(tmp_path)
+    token = "y" * 130
+    write_words(project, "a", [(token, 0.0, 12.0)])
+    code, _, out = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
+    assert code == 0
+    cues = parse_srt(out.read_text())
+    lines = [line for cue in cues for line in cue["lines"]]
+    assert all(len(line) <= 42 for line in lines)
+    assert all(len(cue["lines"]) <= 2 for cue in cues)
+    assert "".join(line.rstrip("-") for line in lines) == token
+
+
 def test_captions_missing_words_json_exits_1(env, tmp_path):
     project = make_project(tmp_path)
     code, out, _ = captions(env, project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}])
@@ -405,6 +504,47 @@ def test_captions_burn_argv(env, tmp_path):
     ]:
         assert argv[argv.index(flag) + 1] == value
     assert argv[-1] == str(burned)
+
+
+def test_captions_burn_children_do_not_inherit_secrets(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Hi.", 0.0, 0.3)])
+    envlog = tmp_path / "ffmpeg.env"
+    body = (
+        f'env >> "{envlog}"\n'
+        'case "$*" in\n'
+        "  *-filters*)\n"
+        '    printf " T.. subtitles        V->V       Render.\\n"\n'
+        "    exit 0;;\n"
+        "esac\n"
+        'for last; do :; done\n'
+        'touch "$last"\n'
+    )
+    stub = make_stub(tmp_path / "bin" / "ffmpeg", body)
+    video = tmp_path / "in.mp4"
+    video.write_bytes(b"")
+    env = dict(
+        env,
+        QUIRK_FFMPEG=str(stub),
+        GEMINI_API_KEY="leak",
+        GOOGLE_API_KEY="leak",
+        ELEVENLABS_API_KEY="leak",
+    )
+    code, _, _ = captions(
+        env,
+        project,
+        tmp_path,
+        [{"id": "a", "text": "x", "start_s": 0}],
+        "--burn",
+        video,
+        "--burned",
+        tmp_path / "burned.mp4",
+    )
+    assert code == 0
+    logged = envlog.read_text()
+    assert logged.count("PATH=") == 2
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY"):
+        assert name not in logged
 
 
 def test_captions_burn_without_subtitles_filter_exits_3(env, tmp_path):
