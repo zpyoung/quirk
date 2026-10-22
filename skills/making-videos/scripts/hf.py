@@ -70,11 +70,13 @@ def subcommand_of(args: "list[str]") -> str:
 
 
 def apply_describe_policy(args: "list[str]") -> "list[str]":
-    """Return ``args`` with describing forced off for ``snapshot``; exits 2 on ``--describe true``."""
+    """Return ``args`` with describing forced off for ``snapshot``; exits 2 if any ``--describe`` value is not false."""
     if subcommand_of(args) != "snapshot":
         return args
+    seen = False
     for i, arg in enumerate(args):
         if arg == "--describe" or arg.startswith("--describe="):
+            seen = True
             if arg == "--describe":
                 value = args[i + 1] if i + 1 < len(args) else ""
             else:
@@ -87,7 +89,8 @@ def apply_describe_policy(args: "list[str]") -> "list[str]":
                     },
                     EXIT_USAGE,
                 )
-            return args
+    if seen:
+        return args
     return args + ["--describe", "false"]
 
 
