@@ -19,6 +19,7 @@ import json, os, sys
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps({{"tool": "node", "argv": sys.argv[1:], "cwd": os.getcwd(),
         "node_path": os.environ.get("NODE_PATH"),
+        "browsers_path": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
         "leaked": [k for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY") if k in os.environ]}}) + "\\n")
 if os.environ.get("FAKE_NODE_FAIL"):
     sys.stderr.write("browserType.launch: Executable doesn't exist\\n")
@@ -315,6 +316,14 @@ def test_child_environment_is_scrubbed_of_keys(project, env, tmp_path):
     record(project, write_steps(tmp_path), env)
     (node_call,) = fake_calls(env, "node")
     assert node_call["leaked"] == []
+
+
+def test_node_child_keeps_playwright_browsers_in_the_cache(project, env, tmp_path):
+    install_playwright(env)
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(tmp_path / "elsewhere")
+    record(project, write_steps(tmp_path), env)
+    (node_call,) = fake_calls(env, "node")
+    assert node_call["browsers_path"] == str(Path(env["QUIRK_VIDEO_CACHE"]) / "ms-playwright")
 
 
 def test_conversion_children_are_scrubbed_of_keys(project, env, tmp_path):

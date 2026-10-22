@@ -4,7 +4,7 @@
 ``check [--need narration,3d,record,captions]`` reports one entry per tool as
 ``{"ok", "tools": [{"name", "ok", "version", "fix"}]}``; it exits 0 even when a tool is missing
 because the JSON carries the verdict. ``install --what tts|playwright --yes`` builds the skill's
-private Kokoro venv (and downloads the two model files) or its Playwright install under the cache;
+private Kokoro venv (and downloads the two model files) or its Playwright install (package and Chromium, under ``<cache>/ms-playwright``) under the cache;
 it refuses without ``--yes`` because the SKILL.md flow asks the user first. Node, pnpm, ffmpeg,
 Blender and Chrome are never installed; each one's ``fix`` is the command or download to run.
 
@@ -83,10 +83,17 @@ class _Parser(argparse.ArgumentParser):
         emit({"error": message}, EXIT_USAGE)
 
 
-def _env() -> dict:
+def _env(extra: Optional[dict] = None) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV}
     env["ORT_DISABLE_TELEMETRY"] = "1"
+    if extra:
+        env.update(extra)
     return env
+
+
+def browsers_path() -> Path:
+    """Where Playwright's browsers live: inside the skill cache, never the user-global one."""
+    return cache_root() / "ms-playwright"
 
 
 def _entry(name: str, ok: bool, version: str = "", fix: str = "", **extra: object) -> dict:
@@ -226,14 +233,23 @@ def check_blender() -> dict:
     return _entry("blender", (major, minor) >= MIN_BLENDER, version, BLENDER_DOWNLOAD, path=binary)
 
 
-def check_playwright() -> dict:
+def check_playwright() -> "list[dict]":
     package = cache_root() / "node" / "node_modules" / "playwright" / "package.json"
     version = ""
     try:
         version = str(json.loads(package.read_text(encoding="utf-8")).get("version", ""))
     except (OSError, ValueError, AttributeError):
         pass
-    return _entry("playwright", version == PLAYWRIGHT_VERSION, version, INSTALL_PLAYWRIGHT_FIX)
+    package_entry = _entry("playwright", version == PLAYWRIGHT_VERSION, version, INSTALL_PLAYWRIGHT_FIX)
+    root = browsers_path()
+    builds = sorted(p.name for p in root.glob("chromium*-*") if p.is_dir()) if root.is_dir() else []
+    browser_entry = _entry(
+        "playwright_chromium",
+        bool(builds),
+        builds[0] if builds else f"no chromium under {root}",
+        INSTALL_PLAYWRIGHT_FIX,
+    )
+    return [package_entry, browser_entry]
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -256,7 +272,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if "3d" in needs:
         tools.append(check_blender())
     if "record" in needs:
-        tools.append(check_playwright())
+        tools += check_playwright()
     emit({"ok": all(t["ok"] for t in tools), "tools": tools})
 
 
@@ -270,9 +286,9 @@ def _command_failed(argv: "list[str]", detail: str, stderr: str = "") -> NoRetur
     emit(payload, EXIT_FAILED)
 
 
-def _run_step(argv: "list[str]") -> None:
+def _run_step(argv: "list[str]", extra_env: Optional[dict] = None) -> None:
     try:
-        proc = run(argv, env=_env(), timeout=INSTALL_TIMEOUT_S)
+        proc = run(argv, env=_env(extra_env), timeout=INSTALL_TIMEOUT_S)
     except FileNotFoundError:
         emit({"error": f"{argv[0]} is not installed", "tool": argv[0]}, EXIT_MISSING_TOOL)
     except subprocess.TimeoutExpired:
@@ -333,8 +349,15 @@ def install_playwright() -> dict:
     if not manifest.exists():
         manifest.write_text(json.dumps({"name": "quirk-video-node", "private": True}) + "\n")
     _run_step(["pnpm", "add", "--dir", str(node_dir), f"playwright@{PLAYWRIGHT_VERSION}"])
-    _run_step(["pnpm", "--dir", str(node_dir), "exec", "playwright", "install", "chromium"])
-    return {"installed": [f"playwright@{PLAYWRIGHT_VERSION}", "chromium"], "path": str(node_dir)}
+    _run_step(
+        ["pnpm", "--dir", str(node_dir), "exec", "playwright", "install", "chromium"],
+        {"PLAYWRIGHT_BROWSERS_PATH": str(browsers_path())},
+    )
+    return {
+        "installed": [f"playwright@{PLAYWRIGHT_VERSION}", "chromium"],
+        "path": str(node_dir),
+        "browsers": str(browsers_path()),
+    }
 
 
 def cmd_install(args: argparse.Namespace) -> int:

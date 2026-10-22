@@ -238,7 +238,12 @@ def _check_playwright() -> Path:
 
 def _child_env(pkg: Path) -> dict:
     existing = os.environ.get("NODE_PATH")
-    return scrubbed_env({"NODE_PATH": str(pkg.parent) + (os.pathsep + existing if existing else "")})
+    return scrubbed_env(
+        {
+            "NODE_PATH": str(pkg.parent) + (os.pathsep + existing if existing else ""),
+            "PLAYWRIGHT_BROWSERS_PATH": str(cache_root() / "ms-playwright"),
+        }
+    )
 
 
 def render_script(url: str, size: "tuple[int, int]", fps: int, steps: "list[dict]",
