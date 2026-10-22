@@ -169,12 +169,29 @@ python3 "$SKILL_DIR/scripts/voice.py" captions --project "$PROJECT" --lines "$PR
 - `--burn` and `--burned` go together. Burning needs an ffmpeg with the `subtitles` filter, which the
   default Homebrew `ffmpeg` lacks. Without it `captions` exits 3 and names `brew install ffmpeg-full`;
   `doctor.py check` reports it as `ffmpeg_subtitles`.
+- `--aspect 16:9|9:16|1:1` picks where the burned captions land. Leave it off and `captions` reads the
+  video's size with ffprobe; if ffprobe cannot read it and no `--aspect` is given, it exits 2. A flag
+  that contradicts the probed size also exits 2.
 - Render the 9:16 or 1:1 MP4 into `v1/raw/`, burn into the version folder, and verify the burned file
   with `verify.py --mp4`.
-- The burn uses libass defaults: bottom-centred white text with no style options. On 9:16, decode a frame
-  from the burned MP4 and check the captions clear the platform's bottom UI zone (layout numbers in
-  [storyboard.md](storyboard.md)). If they do not, draw the captions as composition text from
-  `words.json` instead and still ship the `.srt`.
+
+| Aspect | Bottom margin | Side margins | Text |
+|---|---|---|---|
+| 9:16 | 35% of the height (672 px on 1080x1920) | 11% left, 18% right (120 and 192 px) | white, 48 px at 1080 wide, 4 px black outline |
+| 1:1 | 10% of the height | 5% each side | white, 44 px at 1080 wide, 4 px black outline |
+| 16:9 | 5% of the height (title-safe) | 5% each side | white, 5% of the height, 3 px black outline |
+
+The 9:16 margins are the conservative envelope across TikTok, Reels and Shorts, which publish no
+official pixel numbers and disagree with each other. The 1:1 and 16:9 values are chosen defaults, not
+sourced zones. A cue can wrap to extra lines inside the narrower 9:16 box; it grows upward from the
+bottom margin.
+
+`captions` passes these as a libass `force_style` scaled to the frame, so they hold at 720x1280 or
+1440x2560 as well. Nothing in the tests renders a frame: the machine that wrote this had no ffmpeg with
+`subtitles`, so the placement is computed, not seen. After every burn, decode a frame where a cue is
+showing (`ffmpeg -ss <cue start + 0.5> -i "$BURNED" -frames:v 1 frame.png`), look at it, and check the
+text sits above the bottom zone and inside the side margins. If it does not, draw the captions as
+composition text from `words.json` instead and still ship the `.srt`.
 
 When `captions` exits 1 with `cps_violations` (`[{cue, start, end, cps}]`), the narration is faster than
 20 characters per second at those cues. The `.srt` is written but nothing is burned until it is fixed.
