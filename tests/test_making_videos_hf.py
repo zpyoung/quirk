@@ -101,7 +101,14 @@ def test_snapshot_gets_describe_false_injected(env):
     assert argv[2:] == ["snapshot", "--at", "1.5", "--describe", "false"]
 
 
-@pytest.mark.parametrize("given", [["--describe", "false"], ["--describe=false"]])
+@pytest.mark.parametrize(
+    "given",
+    [
+        ["--describe", "false"],
+        ["--describe=false"],
+        ["--describe", "false", "--describe=false"],
+    ],
+)
 def test_snapshot_describe_false_is_kept_as_given(env, given):
     proc = run_hf("--", "snapshot", *given, env=env)
     assert proc.returncode == 0
@@ -111,7 +118,19 @@ def test_snapshot_describe_false_is_kept_as_given(env, given):
 
 @pytest.mark.parametrize(
     "given",
-    [["--describe", "true"], ["--describe=true"], ["--describe", "TRUE"], ["--describe"]],
+    [
+        ["--describe", "true"],
+        ["--describe=true"],
+        ["--describe", "TRUE"],
+        ["--describe"],
+        ["--describe", "false", "--describe", "true"],
+        ["--describe", "true", "--describe", "false"],
+        ["--describe=false", "--describe=true"],
+        ["--describe=true", "--describe=false"],
+        ["--describe", "false", "--describe=true"],
+        ["--describe=false", "--describe", "true"],
+        ["--describe", "false", "--describe"],
+    ],
 )
 def test_snapshot_describe_true_is_refused_without_running_child(env, tmp_path, given):
     proc = run_hf("--", "snapshot", *given, env=env)
