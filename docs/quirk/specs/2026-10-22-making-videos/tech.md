@@ -192,17 +192,35 @@ for 16:9. Pronunciation patches come from the brand
 
 `CONTRACT:`
 ```
-blender_render.py --blend FILE --script PY --out DIR --frames A-B [--chunk N] [--alpha]
-  argv built as: blender -b FILE --python-exit-code 1 --python PY -- <script args>
-  -> {"frames": int, "out": str, "clip": str, "guard": {"default_scene": bool, "mirrored_frames": [int]}}
+blender_render.py --blend FILE --script PY --out DIR --frames A-B [--chunk N] [--alpha] [--fps N]
+  argv built as:
+    blender -b FILE --python-exit-code 1 --python PY --python <skill>/scripts/bl_guard.py -- --out DIR --frames A-B [--alpha]
+  -> {"frames": int, "out": str, "clip": str, "guard": <guard.json>, "warnings": [str]}
+bl_guard.py (runs inside Blender, after PY)  -> DIR/f_####.png and DIR/guard.json
+  guard.json: {"default_scene": bool, "view_transform": str, "text_objects": [str],
+               "mirrored_frames": [int], "edge_on_frames": [int], "frames_rendered": int}
 ```
+The author's script only builds the scene; it does not import the guard. `bl_guard.py` then inspects the
+scene, sets the output path in Python (the runner never passes `-o` or `-a`, whose order silently
+redirects output), and renders the range. It skips the render when a check below fails.
+The Blender binary is `$QUIRK_BLENDER`, else `blender` on PATH, else
+`/Applications/Blender.app/Contents/MacOS/Blender`; none found exits 3 with the blender.org install
+pointer. A missing ffmpeg also exits 3.
+
 Fails (exit 1) when: `--blend` is missing (never falls back to the default scene); Blender exits
-non-zero; `bl_guard` reports the default scene (single object named `Cube` with default camera and
-light); any text object faces away from the camera on a rendered frame (`mirrored_frames` non-empty).
-`--chunk` renders frame ranges in separate Blender processes. `--alpha` keeps a PNG sequence with
-alpha for compositing; otherwise frames are encoded to an H.264 MP4. `bl_guard.py` runs inside
-Blender (imported by the user script's preamble, documented in `references/3d.md`) and writes
-`<out>/guard.json`.
+non-zero (the JSON carries the stderr tail); `guard.json` or a rendered frame is missing; the scene is
+Blender's startup scene (`default_scene`: one mesh named `Cube` with the default `Camera` and `Light`,
+or nothing besides cameras and lights); any render-visible text object faces away from the camera on a
+rendered frame (`mirrored_frames` non-empty: the dot of the object's world +Z normal with the unit
+vector from object to camera is negative). Text within `|dot| < 0.2` of edge-on
+(`edge_on_frames`) and a `view_transform` other than `Standard` are `warnings`, not failures. The
+classification maths takes plain data, so tests run it without `bpy`.
+`--chunk N` renders frame ranges of N frames in separate Blender processes and merges their guard
+results. Without `--alpha`, the PNG sequence is encoded to `clip.mp4` (`libx264`, `yuv420p`, `-crf 14`,
+`+faststart`); with `--alpha` the frames are rendered RGBA with a transparent film, the PNG sequence is
+kept, and `clip.mov` is ProRes 4444 (`yuva444p10le`). The frame rate is `--fps`, else
+`$QUIRK_VIDEO_FPS`, else 30. The author script must tolerate the extra arguments after `--`
+(use `parse_known_args`); `references/3d.md` documents this.
 
 ### `cloud.py`
 
