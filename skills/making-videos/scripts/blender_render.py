@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,8 +29,10 @@ from _mv_common import (  # noqa: E402
     EXIT_MISSING_TOOL,
     EXIT_USAGE,
     SCRUB_ENV,
+    cache_root,
     emit,
     run,
+    studio_root,
 )
 
 MAC_APP_BLENDER = "/Applications/Blender.app/Contents/MacOS/Blender"
@@ -38,6 +41,7 @@ FFMPEG_INSTALL = "Install ffmpeg (macOS: brew install ffmpeg)"
 GUARD_PY = Path(__file__).resolve().parent / "bl_guard.py"
 DEFAULT_FPS = 30.0
 TAIL_CHARS = 2000
+VERSION_DIR = re.compile(r"v\d+")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -133,7 +137,30 @@ def _fail(message: str, **extra: object) -> NoReturn:
     emit({"error": message, **extra}, EXIT_FAILED)
 
 
-def _encode(out: Path, first: int, fps: float, alpha: bool, env: dict) -> Path:
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def out_dir_refusal(out: Path) -> Optional[str]:
+    """Why ``out`` (already resolved) may not receive frames, or None when it is allowed.
+
+    Frames go only under the studio or the tool cache, never into a version folder
+    (``<studio>/videos/<project>/v<N>``) because versions are never rewritten.
+    """
+    if not (_is_within(out, studio_root()) or _is_within(out, cache_root())):
+        return f"--out must be inside the studio ({studio_root()}) or the cache ({cache_root()}): {out}"
+    if _is_within(out, studio_root()):
+        parts = out.relative_to(studio_root().resolve()).parts
+        if len(parts) >= 3 and parts[0] == "videos" and VERSION_DIR.fullmatch(parts[2]):
+            return f"--out is inside the version folder {parts[2]}, which is never rewritten: {out}"
+    return None
+
+
+def _encode(out: Path, first: int, count: int, fps: float, alpha: bool, env: dict) -> Path:
     clip = out / ("clip.mov" if alpha else "clip.mp4")
     codec = (
         ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"]
@@ -142,7 +169,7 @@ def _encode(out: Path, first: int, fps: float, alpha: bool, env: dict) -> Path:
     )
     argv = [
         "ffmpeg", "-y", "-framerate", f"{fps:g}", "-start_number", str(first),
-        "-i", str(out / "f_%04d.png"), *codec, str(clip),
+        "-i", str(out / "f_%04d.png"), "-frames:v", str(count), *codec, str(clip),
     ]  # fmt: skip
     try:
         proc = run(argv, env=env)
@@ -176,6 +203,9 @@ def main(argv: "Optional[list[str]]" = None) -> NoReturn:
         parser.error("fps must be positive")
 
     blend, script, out = Path(args.blend).resolve(), Path(args.script).resolve(), Path(args.out).resolve()
+    refusal = out_dir_refusal(out)
+    if refusal:
+        _fail(refusal)
     if not blend.is_file():
         _fail(f"blend file not found: {blend}")
     if not script.is_file():
@@ -227,7 +257,7 @@ def main(argv: "Optional[list[str]]" = None) -> NoReturn:
     if missing:
         _fail(f"{len(missing)} rendered frame(s) missing, first {missing[0]}", guard=guard, warnings=warnings)
 
-    clip = _encode(out, first, fps, args.alpha, child_env)
+    clip = _encode(out, first, last - first + 1, fps, args.alpha, child_env)
     emit({
         "frames": last - first + 1,
         "out": str(out),
