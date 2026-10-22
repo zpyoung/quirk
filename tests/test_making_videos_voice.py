@@ -27,6 +27,7 @@ def env(tmp_path: Path) -> dict:
         "HOME": str(tmp_path / "home"),
         "QUIRK_STUDIO": str(tmp_path / "studio"),
         "QUIRK_VIDEO_CACHE": str(tmp_path / "cache"),
+        "QUIRK_FFMPEG_FULL_PATHS": "",
     }
 
 
@@ -694,6 +695,33 @@ def test_captions_burn_without_subtitles_filter_exits_3(env, tmp_path):
     assert code == 3
     assert payload["fix"] == "brew install ffmpeg-full"
     assert not (tmp_path / "ffmpeg.argv").exists()
+
+
+def test_captions_burn_finds_ffmpeg_full_through_brew_prefix(env, tmp_path):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Hi.", 0.0, 0.3)])
+    prefix = tmp_path / "cellar" / "ffmpeg-full"
+    stub = fake_ffmpeg(tmp_path)
+    (prefix / "bin").mkdir(parents=True)
+    stub.rename(prefix / "bin" / "ffmpeg")
+    make_stub(tmp_path / "shim" / "brew", f'echo "{prefix}"\n')
+    env = dict(env, PATH=f"{tmp_path / 'shim'}:/usr/bin:/bin")
+    video = tmp_path / "in.mp4"
+    video.write_bytes(b"")
+    code, payload, _ = captions(
+        env,
+        project,
+        tmp_path,
+        [{"id": "a", "text": "x", "start_s": 0}],
+        "--burn",
+        video,
+        "--burned",
+        tmp_path / "burned.mp4",
+        "--aspect",
+        "16:9",
+    )
+    assert code == 0, payload
+    assert (tmp_path / "ffmpeg.argv").exists()
 
 
 def test_captions_burn_encoder_failure_exits_1(env, tmp_path):

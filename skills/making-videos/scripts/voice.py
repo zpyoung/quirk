@@ -28,6 +28,7 @@ from _mv_common import (  # noqa: E402
     SCRUB_ENV,
     cache_root,
     emit,
+    ffmpeg_full_candidates,
     load_brief,
     run,
     studio_root,
@@ -38,7 +39,6 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 WORKER = SCRIPTS_DIR / "voice_worker.py"
 DOCTOR_FIX = f"python3 {SCRIPTS_DIR / 'doctor.py'} install --what tts --yes"
 FFMPEG_FIX = "brew install ffmpeg-full"
-FFMPEG_FULL = Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg")
 FFPROBE_TIMEOUT_S = 60
 
 CLIP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -156,7 +156,8 @@ def _ffmpeg_binary() -> str:
     override = os.environ.get("QUIRK_FFMPEG")
     if override:
         return override
-    return str(FFMPEG_FULL) if FFMPEG_FULL.exists() else "ffmpeg"
+    full = ffmpeg_full_candidates()
+    return str(full[0]) if full else "ffmpeg"
 
 
 def _ffprobe_binary() -> str:
