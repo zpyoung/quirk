@@ -167,9 +167,10 @@ scene kit, so the user judges the look before the build.
 
 1. Write the key scenes as first drafts in `<project>/scenes/` using the kit, with the tokens inlined.
 2. From `scenes/`, snapshot exact moments after motion settles:
-   `python3 "$SKILL_DIR/scripts/hf.py" --project "<project>" -- snapshot --at 1.5,4.2`
-3. Copy the PNGs from `.hyperframes/artifacts/snapshots/` into `<project>/frames-storyboard/` and
-   link them from the storyboard.
+   `python3 "$SKILL_DIR/scripts/hf.py" --project "<project>" -- snapshot --at 1.5,4.2 "<project>/scenes"`
+3. Copy the PNGs from `<project>/scenes/.hyperframes/artifacts/snapshots/<run-id>/` into
+   `<project>/frames-storyboard/` and link them from the storyboard. Files are named
+   `frame-NN-at-Xs.png`, and `snapshot` adds one end-of-timeline frame you did not ask for.
 
 These are previews for the user's approval. Snapshots can differ from the MP4 (fonts rendered correctly
 in snapshots while the MP4 fell back to system fonts in a trial), so they never count as review. Real
@@ -192,7 +193,7 @@ Write it to `<project>/kit/` and summarize it in the storyboard:
   | enter | 0.4 s | `expo.out` or `power3.out` |
   | exit | 0.25 s | `power2.in` |
   | emphasis | 0.3 s | `power2.inOut` |
-  | transition | 0.6 s | `power2.inOut` |
+  | transition | hard cut, or a 0.25 s overlap of the outgoing exit and the incoming enter | exit ease out, enter ease in ([motion.md](motion.md#scene-transitions)) |
   | stagger offset | 0.05-0.1 s between items | same ease as the item |
 
 - Shared components: the pieces that repeat, as copy-ready HTML and CSS snippets (title card, label,

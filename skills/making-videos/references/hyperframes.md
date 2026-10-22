@@ -36,9 +36,46 @@ python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- init "$P/scenes" --non-inte
 ```
 
 - Add `--resolution portrait` or `--resolution square` for 9:16 and 1:1; the default is 1920x1080. Each aspect is its own project folder and its own layout pass. Name the folders `scenes/` (16:9), `scenes-9x16/` and `scenes-1x1/`, for example `init "$P/scenes-9x16" --resolution portrait`. Verify scans every `scenes*/` folder for fonts, and a `*-9x16.mp4` or `*-1x1.mp4` also needs its matching folder to pass. Everything below uses `scenes/`; for another aspect, swap in that folder and name the MP4 and check files to match.
-- The scaffold writes `index.html`, `hyperframes.json`, `meta.json`, `package.json`, `CLAUDE.md` and `AGENTS.md`. Ignore the last two; this reference and `SKILL.md` win.
+- The scaffold writes `index.html`, `hyperframes.json`, `meta.json`, `package.json`, `CLAUDE.md` and `AGENTS.md`. Delete `scenes/CLAUDE.md` and `scenes/AGENTS.md` right after `init`: they tell you to install skills globally, run `npm run dev` and start preview servers, which this skill forbids.
 - `index.html` is the root. Scene files go in `compositions/*.html`; media and fonts go in `assets/`. Asset paths are root-relative (`assets/...`) even inside a scene.
 - The scaffold loads GSAP from jsdelivr, a network fetch at render time. Leave it in place unless the machine is offline.
+
+Replace the scaffold's root with one host `<div>` per scene. This is the whole pattern, shown for two scenes (add the `:root` token block from [Fonts](#fonts) to the head):
+
+```html
+<!-- scenes/index.html -->
+<div id="root" data-composition-id="main" data-start="0" data-duration="7.6" data-width="1920" data-height="1080">
+  <div id="s1" class="clip" data-composition-id="s1" data-composition-src="compositions/s1.html"
+    data-start="0" data-duration="3.8" data-track-index="1" data-width="1920" data-height="1080" style="z-index: 1"></div>
+  <div id="s2" class="clip" data-composition-id="s2" data-composition-src="compositions/s2.html"
+    data-start="3.8" data-duration="3.8" data-track-index="1" data-width="1920" data-height="1080" style="z-index: 1"></div>
+</div>
+<script>
+  window.__timelines = window.__timelines || {};
+  const tl = gsap.timeline({ paused: true });
+  window.__timelines["main"] = tl;
+</script>
+```
+
+```html
+<!-- scenes/compositions/s1.html -->
+<template>
+  <style>/* :root tokens, then #root and #s1-* rules */</style>
+  <div id="root" data-composition-id="s1" data-width="1920" data-height="1080">
+    <div id="s1-title">...</div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#s1-title", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "expo.out" }, 0.2);
+    window.__timelines["s1"] = tl;
+  </script>
+</template>
+```
+
+- `class="clip"` makes the host a timed element: it shows over `[data-start, data-start + data-duration)` and is absent outside it. Without it the scene is on screen the whole film.
+- `data-composition-src` mounts the scene file. The host id, its `data-composition-id`, the scene file's root `data-composition-id` and the `window.__timelines` key are all the scene id.
+- `data-track-index` is a Studio lane number only; paint order is CSS `z-index`. Set `z-index` on hosts that overlap in time so the incoming scene paints above the outgoing one.
+- The root's `data-duration` is the film length and must cover the last scene's end.
 
 ## Authoring rules
 
@@ -52,6 +89,7 @@ A render seeks a paused timeline one frame at a time, so anything that depends o
 - A scene file puts its styles, markup and script inside `<template>`; anything outside it is dropped. Style the scene root as `#root`. Prefix element ids (`#intro-title`) because ids must be unique across the assembled page.
 - A still composition with no timeline gets `data-no-timeline`, or every render waits 45 s.
 - Place tweens at absolute seconds: `tl.fromTo(el, {...}, {...}, 2.4)`.
+- Keep every text box inside the outer 5% margin: x 96..1824 and y 54..1026 at 1080p, scaled for other sizes. The `check` caption-zone bands test element boxes, not glyphs, so a centred text box spanning the full width fails the left and right bands even when the letters sit well inside. Give wide text a `max-width`.
 - Animate transforms and opacity, not `left/top/width/height`. Never tween `display`, `visibility` or `autoAlpha` on a `.clip`; animate a child.
 - Media: never `play()`, `pause()` or set `currentTime`. A `<video>` needs `muted` or `data-has-audio="true"`. Animate a wrapper `<div>` to move a video, and time the video or its wrapper, never both. No `crossorigin`.
 - A start state belongs in the `fromTo`, not in CSS. Text built by script requests its font late; call `document.fonts.load('700 64px "Face"', text)` before measuring it.
@@ -103,10 +141,18 @@ Run in this order: lint, check, snapshot while building, then render, then verif
    ```
 
    The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film (text that sits in a band from 2 to 3 s of a 6 s film passes), so keep the `seek=` list: it samples eleven instants across the film as fractions of its duration.
+   Read the result, not the exit code. `check --json` exits 1 on any error, and the evidence is in `layout.findings` and `contrast.findings` in the JSON; a clean run has both arrays empty (and the file is much smaller). Findings seen in the trials:
+
+   - `caption_zone_collision`: see the table below. A text box counts, not its glyphs.
+   - `text_occluded` and `content_overlap`: one layer covers another, usually an opaque incoming scene over content that has not left yet. Fade or remove the outgoing layer before the opaque one arrives, or overlap with a transparent incoming root ([motion.md](motion.md#scene-transitions)).
+   - `film_silent`: a warning that suggests adding a music bed. It is expected when the brief asked for silence; ignore it.
+
+   `check` also writes snapshot artifacts under `scenes/.hyperframes/`, inside the project; leave them there.
+
    Move flagged text out of the band. Do not add `data-layout-allow-caption-zone` to silence verify; that attribute is for deliberate lower-thirds.
    The audit has a hard 120 s limit, so on a long film `check_runtime_failure` can be the limit and not a bug in your scenes.
 
-3. Snapshot, only to look at your own work while building. The wrapper forces `--describe false`. Snapshots are never review evidence; review frames come from the MP4.
+3. Snapshot, only to look at your own work while building. The wrapper forces `--describe false`. Snapshots are never review evidence; review frames come from the MP4. Look at one snapshot of every new scene before moving on: lint passes CSS that fails to parse (a stray `{{` left by a template gives tiny, unstyled text), and a snapshot is the only thing that catches it. Files land in `scenes/.hyperframes/artifacts/snapshots/<run-id>/`.
 
    ```bash
    python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- snapshot --at 0,1.5,4 "$P/scenes"
@@ -149,7 +195,10 @@ The preview server (`preview --background`) is for looking, not for review. Stop
 | `text_below_floor` | Text under 2.6% of the short side (28 px at 1080) held 0.5 s or more. Raise the size; chrome like a fake URL bar can take `data-layout-ignore`. |
 | `contrast_aa_failure` | Text fails WCAG AA at a sampled instant. A word still mid-entrance can trip it: start entrances from a colour that already passes (`--muted`, not `--rule`). A finding at one sample during an entrance that settles within about 0.15 s is informational, but verify still counts it, so fix it. |
 | `line_unread` | A reading-size line is on screen under its floor (0.4 s for 1 to 2 words, then about 0.3 s per extra word). Hold it longer; the final line needs 2 s. |
-| `caption_zone_collision` | Text inside a `--caption-zone` band. Move it out of the outer 5%. |
+| `caption_zone_collision` | An element box inside a `--caption-zone` band. Move it out of the outer 5%, or narrow a full-width text box with `max-width`. |
+| `text_occluded` | Text hidden behind another layer at a sampled instant. Fade or remove the outgoing layer before the opaque incoming one covers it. |
+| `content_overlap` | Two layers' content overlaps. Same cause and fix as `text_occluded`. |
+| `film_silent` | The film has no audio. Expected when the brief asked for silence; ignore it. |
 | `non_deterministic_code` | `Math.random()` in a composition. Use a seeded PRNG. |
 | `font_family_without_font_face` | A non-bundled family without an inline `@font-face`. |
 | `missing_data_no_timeline` | A still composition without `data-no-timeline`. |

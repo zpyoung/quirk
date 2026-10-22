@@ -59,7 +59,7 @@ python3 "$SKILL_DIR/scripts/verify.py" --project "$P" --version v1 \
 ```
 
 - `--beats` is optional: verify uses `$P/beats.json` when it exists. Omit it for a silent video.
-- `--at` lists seconds for the stills. Pass the midpoint of each storyboard scene; the default is six evenly spaced stills.
+- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its entrances finish (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. The default is six evenly spaced stills.
 - With several MP4s in `$V` (for example 16:9 and 9:16), verify refuses with exit 2. Pass `--mp4` and run once per file; for the second aspect, regenerate the check JSONs from its own `scenes-9x16/` folder. Each MP4 has its own run in `verify.json`, with its own attempt count and stop flag, so a 9:16 retry does not use up the 16:9 attempts. The printed JSON is the run you just made, plus `mp4`.
 - Exit 0 means no check failed. Exit 1 means a check failed, or the MP4 is missing (`missing_render`). Exit 2 is a usage error such as an unreadable input. Exit 3 means ffmpeg or ffprobe is missing.
 - Verify prints one JSON object. The detail of a failing check names what to run or fix.
@@ -76,12 +76,12 @@ Each check reads the source that can see the thing: raw MP4 pixels cannot locate
 | `loudness` | `ffmpeg -af ebur128=peak=true` on the MP4 | narrated: integrated loudness from -17 to -15 LUFS and true peak at or below -1.0 dBTP. Silent video: skipped |
 | `sync` | `beats.json`, `hf.py audio` per clip, and a pixel analysis run in the skill's venv | every beat's first changed frame is within one frame of its word's onset. Silent video: skipped when there are no beats or no venv. Narrated video: fails with "narrated videos need beats.json (see audio.md)" when there is no `beats.json`, and fails with the `doctor.py` fix when the venv is missing |
 | `blender` | every `guard.json` under the project | no default scene and no mirrored frames. Skipped without 3D |
-| `outside_calls` | `calls.jsonl` against the brief's `cloud_allow` | every logged provider is allowed (HyperFrames and Playwright are local) |
+| `outside_calls` | `calls.jsonl` against the brief's `cloud_allow` | every logged cloud provider is in `cloud_allow`. Every `hf.py` and `record.py` call is logged too, as a local provider, so the count of logged calls can be large for a video with no cloud use; only cloud providers need allowing (HyperFrames and Playwright are local) |
 
 Notes on interpreting results:
 - A narrated video cannot pass with `sync` skipped. A failing `sync` with no `beats.json` means write it ([audio.md](audio.md)); with a missing venv, run `doctor.py check --need narration`.
 - In `sync`, a beat flagged "no audio onset near the expected time" was timed against `expected_s` instead; look at it in the frames.
-- A `title_safe` fail means text sits in the outer 5% of an edge. Move the text. Do not waive it with `data-layout-allow-caption-zone`.
+- A `title_safe` fail means an element box sits in the outer 5% of an edge. The bands test boxes, not glyphs, so a full-width centred text box fails even when its letters are well inside. Keep text boxes inside x 96..1824 and y 54..1026 at 1080p (scale for other sizes), for example with a `max-width`. Do not waive it with `data-layout-allow-caption-zone`.
 - A `fonts` fail from the log means the MP4 may use fallback fonts. The fix is to inline the `:root` tokens in each composition ([hyperframes.md](hyperframes.md#fonts)).
 
 ## Reading verify.json
@@ -100,7 +100,7 @@ Look for:
 - Timing: a line held long enough to read, an end card that holds, nothing popping in a frame early or late.
 - Blank or black frames, especially the first and last frames.
 - Mirrored or edge-on text in any 3D clip.
-- Colours and logo against the brand; claims on screen against the storyboard.
+- Colours and logo against the brand; claims on screen against the storyboard. A few RGB units of drift from the H.264 bt709 encode is expected (a ground of 242, 239, 232 decodes near 241, 236, 231). Flag drift above about 8 per channel, or a visibly different hue.
 - Small text: shrink the sheet in your head to phone size and check it still reads.
 
 If you find a problem verify did not, fix it before the user sees the version. Report what you checked and what you could not see.
