@@ -336,17 +336,32 @@ def _read_calls(project: Path) -> "tuple[list[dict], int]":
     return records, bad
 
 
+def _what_ran(rec: dict) -> str:
+    provider = rec.get("provider")
+    if provider == "hyperframes":
+        args = rec.get("args")
+        parts = [rec.get("subcommand")]
+        if isinstance(args, list):
+            parts.append(" ".join(str(a) for a in args))
+        return " ".join(str(p) for p in parts if p)
+    if provider == "playwright":
+        return " ".join(str(p) for p in (rec.get("method"), rec.get("host")) if p)
+    target = "%s%s" % (rec.get("host") or "", rec.get("path") or "")
+    return " ".join(str(p) for p in (rec.get("method"), target) if p)
+
+
 def render_calls(project: Path, brief: Any) -> str:
     records, bad = _read_calls(project)
     allowed = set(brief.get("cloud_allow") or []) if isinstance(brief, dict) else set()
     if not records and not bad:
         return "<p>No outside calls were logged.</p>"
-    cols = ("ts", "provider", "method", "host", "path", "status", "bytes")
+    cols = ("ts", "provider", "what ran", "status", "bytes")
     rows = []
     for rec in records:
         provider = rec.get("provider")
         flagged = provider not in allowed and provider not in LOCAL_PROVIDERS
-        cells = "".join("<td>%s</td>" % esc(rec.get(c)) for c in cols)
+        values = (rec.get("ts"), provider, _what_ran(rec), rec.get("status"), rec.get("bytes"))
+        cells = "".join("<td>%s</td>" % esc(v) for v in values)
         if flagged:
             cells += "<td class=\"flag\">not in cloud_allow</td>"
         else:

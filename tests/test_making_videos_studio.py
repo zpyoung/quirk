@@ -247,25 +247,19 @@ def test_usage_error_is_one_json_object_exit_2(env):
     assert "error" in out
 
 
-def test_common_constants():
-    sys.path.insert(0, str(SCRIPTS))
-    try:
-        import _mv_common as _common
-    finally:
-        sys.path.remove(str(SCRIPTS))
-    assert _common.HYPERFRAMES_VERSION == "0.8.185"
-    assert _common.PLAYWRIGHT_VERSION.count(".") == 2
-    assert set(_common.PROVIDER_KEY_ENV) == {"elevenlabs", "openai", "pexels", "pixabay", "freesound"}
-    assert set(_common.SCRUB_ENV) == {"GEMINI_API_KEY", "GOOGLE_API_KEY", *_common.PROVIDER_KEY_ENV.values()}
-
-
 def _common():
-    sys.path.insert(0, str(SCRIPTS))
-    try:
-        import _mv_common as _common
-    finally:
-        sys.path.remove(str(SCRIPTS))
-    return _common
+    spec = importlib.util.spec_from_file_location("mv_common_for_studio_tests", SCRIPTS / "_mv_common.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_common_constants():
+    _common_mod = _common()
+    assert _common_mod.HYPERFRAMES_VERSION == "0.8.185"
+    assert _common_mod.PLAYWRIGHT_VERSION.count(".") == 2
+    assert set(_common_mod.PROVIDER_KEY_ENV) == {"elevenlabs", "openai", "pexels", "pixabay", "freesound"}
+    assert set(_common_mod.SCRUB_ENV) == {"GEMINI_API_KEY", "GOOGLE_API_KEY", *_common_mod.PROVIDER_KEY_ENV.values()}
 
 
 def test_common_load_brief_and_log_call(env, tmp_path):
@@ -316,9 +310,7 @@ def test_run_hides_scrub_variables_from_the_child(monkeypatch):
     assert "OK" in explicit and not set(common.SCRUB_ENV) & set(explicit)
 
 
-_common_spec = importlib.util.spec_from_file_location("mv_common_for_studio_tests", SCRIPTS / "_mv_common.py")
-common = importlib.util.module_from_spec(_common_spec)
-_common_spec.loader.exec_module(common)
+common = _common()
 
 
 def make_ca_file(directory: Path, name: str = "ca.pem") -> Path:
