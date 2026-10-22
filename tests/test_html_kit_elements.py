@@ -6450,6 +6450,25 @@ def test_flow_trace_expand_keeps_the_current_node_centred_instead_of_fitting_the
     assert frame["k"] >= 1.5 and frame["dx"] <= 2 and frame["dy"] <= 2, frame
 
 
+def test_flow_trace_closing_the_expanded_view_keeps_the_current_node_centred(flow_traces_page: Path) -> None:
+    expand = '#renewal [data-q-flow-action="expand"]'
+    out = run(
+        flow_traces_page,
+        {"emulate": {"reducedMotion": "reduce"}},
+        {"click": TRACE_BTN},
+        {"click": _trace_dot(4)},
+        {"click": expand},
+        {"click": '#renewal [data-q-flow-action="zoom-out"]'},
+        {"click": expand},
+        ev("document.querySelector('#renewal').hasAttribute('data-q-flow-expanded')", "expanded"),
+        ev(TRACE_FRAME_JS, "closed"),
+    )
+    assert_clean(out)
+    assert out["results"]["expanded"] is False
+    frame = out["results"]["closed"]
+    assert frame["k"] >= 1.5 and frame["dx"] <= 2 and frame["dy"] <= 2, frame
+
+
 def test_flow_trace_leaves_focus_mode_exactly_as_it_was_before_tracing(flow_traces_page: Path) -> None:
     lit = """(() => {
       const f = document.querySelector('#renewal');
@@ -7494,6 +7513,33 @@ def test_expand_fits_the_diagram_to_the_full_screen_stage(request: pytest.Fixtur
     r = out["results"]
     assert r["expanded"] != r["zoomed"]
     assert r["expanded"] == r["fitted"]
+
+
+@pytest.mark.parametrize("close", ["button", "escape"])
+@pytest.mark.parametrize(("fixture", "host"), [("flow_page", "#flow-orders"), ("schema_page", "#schema-billing")])
+def test_closing_the_expanded_view_fits_the_diagram_to_the_page_again(
+    request: pytest.FixtureRequest, fixture: str, host: str, close: str
+) -> None:
+    page = request.getfixturevalue(fixture)
+    transform = f"document.querySelector('{host} [data-q-flow-viewport]').getAttribute('transform')"
+    expand = f'{host} [data-q-flow-action="expand"]'
+    out = run(
+        page,
+        ev(transform, "rest"),
+        {"click": expand},
+        {"click": f'{host} [data-q-flow-action="zoom-in"]'},
+        {"click": f'{host} [data-q-flow-action="zoom-in"]'},
+        ev(transform, "zoomed"),
+        {"click": expand} if close == "button" else {"press": "Escape"},
+        ev(f"document.querySelector('{host}').hasAttribute('data-q-flow-expanded')", "expanded"),
+        ev(transform, "closed"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["expanded"] is False
+    assert r["zoomed"] != r["rest"]
+    # fitting the on-page stage reproduces the transform the diagram first rendered with
+    assert r["closed"] == r["rest"]
 
 
 def test_schema_drawer_is_a_bottom_sheet_on_a_phone(schema_page: Path) -> None:
