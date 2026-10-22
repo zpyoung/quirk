@@ -98,7 +98,7 @@ adapts them to what I asked for.
   That's exactly the "base plus add-ins" merge, without a copy script of our own. It also leaves plain
   code in the app for the agent to edit. A pnpm monorepo was rejected: it needs Tailwind workarounds,
   hits open shadcn CLI bugs, and a mini app couldn't stand alone.
-- **React, Vite, Tailwind v4 and shadcn/ui.** That's your stack choice, and shadcn is the most familiar
+- **React, Vite, Tailwind v4 and shadcn/ui.** My stack choice, and shadcn is the most familiar
   component set for agents.
 - **One neutral house style.** All patterns share one set of tokens. This keeps combined patterns
   looking like one app and keeps clear of other apps' trade dress.
