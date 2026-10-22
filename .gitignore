@@ -13,3 +13,6 @@ htmlcov/
 
 # node dependencies
 node_modules/
+
+# captured app frames for building-mini-apps; third-party imagery, never committed
+skills/building-mini-apps/references/media/
