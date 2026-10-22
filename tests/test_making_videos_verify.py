@@ -162,7 +162,7 @@ def test_everything_passes_and_verify_json_is_written(studio):
     assert out["stop"] is False
     statuses = {c["name"]: c["status"] for c in out["checks"]}
     assert statuses == {
-        "fonts": "pass", "contrast": "pass", "title_safe": "pass", "loudness": "skip",
+        "fonts": "pass", "render_log": "pass", "contrast": "pass", "title_safe": "pass", "loudness": "skip",
         "sync": "skip", "blender": "skip", "outside_calls": "pass",
     }
     for check in out["checks"]:
@@ -260,6 +260,25 @@ def test_fonts_fail_when_fewer_families_injected_than_the_brand_has(tmp_path):
     fonts = check_of(out, "fonts")
     assert fonts["status"] == "fail"
     assert fonts["measured"] == {"injected": 1, "required": 2, "unresolved": 0}
+
+
+def test_fonts_fail_on_a_font_shorthand_that_uses_a_font_token(tmp_path):
+    s = Studio(tmp_path, scenes="scenes_shorthand")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail"
+    assert "compositions/a.html:7" in fonts["detail"]
+    assert "font-family: longhand" in fonts["detail"]
+    assert fonts["detail"].count("font: shorthand") == 1
+
+
+def test_fonts_ignore_a_font_shorthand_inside_a_comment_or_without_a_token(tmp_path):
+    s = Studio(tmp_path)
+    page = s.project / "scenes" / "compositions" / "a.html"
+    page.write_text(page.read_text() + "<!-- font: 500 72px var(--font-display) -->\n"
+                    "<style>.x { font: 500 12px sans-serif; font-family: var(--font-mono); }</style>\n")
+    code, out = s.run()
+    assert check_of(out, "fonts")["status"] == "pass"
 
 
 def test_render_log_flag_overrides_the_default_location(tmp_path):
@@ -465,7 +484,30 @@ def test_blender_fails_on_default_scene_and_mirrored_frames(studio):
     assert code == 1 and blender["status"] == "fail"
     assert "default scene" in blender["detail"] and "3d/guard.json" in blender["detail"]
     assert "mirrored" in blender["detail"] and "3d2/guard.json" in blender["detail"]
-    assert blender["measured"] == {"guards": 2, "default_scene": 1, "mirrored_frames": 3}
+    assert blender["measured"] == {
+        "guards": 2, "default_scene": 1, "mirrored_frames": 3,
+        "files": ["assets/3d/guard.json", "assets/3d2/guard.json"],
+    }
+
+
+def test_blender_ignores_guards_under_sketches_and_names_the_ones_it_counted(studio):
+    ok = json.loads((FIX / "guard_ok.json").read_text())
+    bad = json.loads((FIX / "guard_mirrored.json").read_text())
+    write_json(studio.project / "assets" / "3d" / "guard.json", ok)
+    write_json(studio.project / "assets" / "3d" / "sketches" / "s1" / "guard.json", bad)
+    write_json(studio.project / "sketches" / "guard.json", bad)
+    code, out = studio.run()
+    blender = check_of(out, "blender")
+    assert blender["status"] == "pass", blender
+    assert blender["measured"]["guards"] == 1
+    assert blender["measured"]["files"] == ["assets/3d/guard.json"]
+    assert "assets/3d/guard.json" in blender["detail"] and "sketches" not in blender["detail"].replace("(sketches/ ignored)", "")
+
+
+def test_blender_skips_when_only_sketch_guards_exist(studio):
+    write_json(studio.project / "sketches" / "guard.json", json.loads((FIX / "guard_ok.json").read_text()))
+    code, out = studio.run()
+    assert check_of(out, "blender")["status"] == "skip"
 
 
 def test_blender_passes_on_a_clean_guard(studio):
@@ -969,3 +1011,15 @@ def test_media_children_never_see_provider_or_gemini_keys(tmp_path):
     assert "HOME=" in text
     for key in keys:
         assert key not in text
+
+
+@pytest.mark.parametrize("script", sorted(p.name for p in SCRIPTS.glob("*.py")))
+def test_running_a_script_leaves_no_pycache_in_the_skill_directory(tmp_path, script):
+    copy = tmp_path / "scripts"
+    shutil.copytree(SCRIPTS, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+    env.update({"HOME": str(tmp_path / "home"), "QUIRK_STUDIO": str(tmp_path / "studio"),
+                "QUIRK_VIDEO_CACHE": str(tmp_path / "cache")})
+    subprocess.run([sys.executable, str(copy / script), "--help"], stdin=subprocess.DEVNULL,
+                   capture_output=True, text=True, env=env, timeout=60)
+    assert not list(copy.rglob("__pycache__"))

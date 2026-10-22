@@ -8,6 +8,7 @@ Exit codes: 0 ok; 1 the render or a guard check failed (the JSON has an ``error`
 3 Blender or ffmpeg is missing (the JSON names it and the install command).
 The Blender binary is ``$QUIRK_BLENDER``, else ``blender`` on PATH, else the macOS app bundle.
 ``$QUIRK_VIDEO_FPS`` (default 30) sets the encode frame rate unless ``--fps`` is given.
+Arguments after a literal ``--`` are passed on to the scene script after ``--out/--frames/--alpha``.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn, Optional
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bl_guard import parse_frames  # noqa: E402
@@ -75,8 +77,14 @@ def chunk_ranges(first: int, last: int, chunk: Optional[int]) -> "list[tuple[int
     return [(a, min(a + chunk - 1, last)) for a in range(first, last + 1, chunk)]
 
 
-def blender_argv(blender: str, blend: Path, script: Path, out: Path, frames: "tuple[int, int]", alpha: bool) -> "list[str]":
-    """The Blender command line: file first, exit code on, author script then guard, args after ``--``."""
+def blender_argv(
+    blender: str, blend: Path, script: Path, out: Path, frames: "tuple[int, int]", alpha: bool,
+    script_args: "Optional[list[str]]" = None,
+) -> "list[str]":
+    """The Blender command line: file first, exit code on, author script then guard, args after ``--``.
+
+    ``script_args`` follow the runner's own arguments so the scene script can parse them.
+    """
     argv = [
         blender,
         "-b",
@@ -95,7 +103,7 @@ def blender_argv(blender: str, blend: Path, script: Path, out: Path, frames: "tu
     ]
     if alpha:
         argv.append("--alpha")
-    return argv
+    return argv + list(script_args or [])
 
 
 def merge_guards(guards: "list[dict]") -> dict:
@@ -162,10 +170,14 @@ def out_dir_refusal(out: Path) -> Optional[str]:
 
 def _encode(out: Path, first: int, count: int, fps: float, alpha: bool, env: dict) -> Path:
     clip = out / ("clip.mov" if alpha else "clip.mp4")
+    keyframe_gap = max(1, round(fps))
     codec = (
         ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"]
         if alpha
-        else ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "14", "-movflags", "+faststart"]
+        else [
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "14",
+            "-g", str(keyframe_gap), "-keyint_min", str(keyframe_gap), "-movflags", "+faststart",
+        ]
     )
     argv = [
         "ffmpeg", "-y", "-framerate", f"{fps:g}", "-start_number", str(first),
@@ -190,7 +202,9 @@ def main(argv: "Optional[list[str]]" = None) -> NoReturn:
     parser.add_argument("--chunk", type=int)
     parser.add_argument("--alpha", action="store_true")
     parser.add_argument("--fps", type=float)
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    own, script_args = (raw[: raw.index("--")], raw[raw.index("--") + 1 :]) if "--" in raw else (raw, [])
+    args = parser.parse_args(own)
 
     try:
         first, last = parse_frames(args.frames)
@@ -225,7 +239,7 @@ def main(argv: "Optional[list[str]]" = None) -> NoReturn:
         guard_file = out / "guard.json"
         guard_file.unlink(missing_ok=True)
         try:
-            proc = run(blender_argv(blender, blend, script, out, (a, b), args.alpha), env=child_env)
+            proc = run(blender_argv(blender, blend, script, out, (a, b), args.alpha, script_args), env=child_env)
         except FileNotFoundError:
             emit({"error": "Blender not found", "missing": "blender", "install": BLENDER_INSTALL}, EXIT_MISSING_TOOL)
         if proc.returncode != 0:

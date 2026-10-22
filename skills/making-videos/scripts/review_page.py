@@ -19,6 +19,7 @@ from typing import Any, NoReturn, Optional
 from urllib.parse import quote
 
 # siblings are imported by bare name, so the script directory must be on sys.path
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _mv_common import EXIT_FAILED, EXIT_USAGE, emit  # noqa: E402
