@@ -1,0 +1,4 @@
+[INFO] [Compiler] Fetched 9 font face(s) for "Outfit" from Google Fonts (cached to /x/outfit)
+[INFO] [Compiler] Fetched 9 font face(s) for "IBM Plex Mono" from Google Fonts (cached to /x/ibm-plex-mono)
+[INFO] [Compiler] Injected deterministic @font-face rules for 2 requested font families
+[WARN] [Compiler] WARNING: Video "s1-clip" has sparse keyframes (max interval: 8.33s). This causes seek failures and frame freezing. Re-encode with: ffmpeg -i "assets/clip.mp4" -c:v libx264 -r 30 -g 30 -keyint_min 30 -movflags +faststart -c:a copy output.mp4

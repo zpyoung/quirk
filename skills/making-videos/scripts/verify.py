@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Strict verify for one MP4 of a making-videos version; records it in ``<vN>/verify.json``.
 
-Each check reads the source that can see it: the project's HTML and the render log (fonts),
-HyperFrames ``check --json`` output (contrast, title-safe), the MP4 (loudness, voice sync, frames),
+Each check reads the source that can see it: the project's HTML and the render log (fonts,
+render_log), HyperFrames ``check --json`` output (contrast, title-safe), the MP4 (loudness, voice sync, frames),
 ``guard.json`` files (Blender) and ``calls.jsonl`` (outside calls).
 
 ``verify.json`` keeps one run per MP4 filename under ``runs`` (its own attempts, stop flag, checks and
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import NoReturn, Optional
 
 # sibling modules are imported by bare name when this file is run by path
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _mv_common import (  # noqa: E402
@@ -66,6 +67,13 @@ CONTRAST_CODE = "contrast_aa_failure"
 
 _ASPECT_MP4 = re.compile(r"-(9x16|1x1)\.mp4$", re.I)
 _COMMENTS = re.compile(r"<!--.*?-->|/\*.*?\*/", re.S)
+_FONT_SHORTHAND = re.compile(r"(?<![\w-])font\s*:[^;{}\"'<]*var\(\s*--font-", re.I)
+_LOG_LEVEL = re.compile(r"\[(WARN|ERROR)\]\s*(.*)")
+KNOWN_BAD_LOG_PATTERNS = (
+    ("sparse keyframes", re.compile(r"sparse keyframes", re.I),
+     "re-encode the clip with a keyframe every second (ffmpeg -g 30 -keyint_min 30; blender_render.py does this)"),
+)
+LOG_LINES_SHOWN = 10
 _FONT_USE = re.compile(r"var\(\s*(--font-[A-Za-z0-9_-]*)")
 _FONT_DEF = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:")
 _STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.S | re.I)
@@ -178,12 +186,43 @@ def _scan_scenes_dir(project: Path, scenes: Path) -> "list[str]":
     return problems
 
 
+def _blank_comments(text: str) -> str:
+    """``text`` with comments emptied but their newlines kept, so line numbers still match the file."""
+    return _COMMENTS.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def _scan_font_shorthand(project: Path, scenes: Path) -> "list[str]":
+    problems = []
+    for path in _html_files(scenes):
+        text = _blank_comments(path.read_text(encoding="utf-8", errors="replace"))
+        for match in _FONT_SHORTHAND.finditer(text):
+            problems.append(
+                "%s:%d uses the font: shorthand with var(--font-*); the compiler only injects fonts "
+                "from font-family, so use font-family: longhand"
+                % (rel(path, project), text.count("\n", 0, match.start()) + 1)
+            )
+    return problems
+
+
 def scan_fonts(project: Path) -> "list[str]":
-    """Problems with font tokens in the HTML of every ``scenes*/`` folder: unresolved ``var(--font-*)`` and linked token sheets."""
+    """Problems with font tokens in the HTML of every ``scenes*/`` folder.
+
+    Reports unresolved ``var(--font-*)``, linked token sheets and ``font:`` shorthands that use a font token.
+    """
     problems: "list[str]" = []
     for scenes in scenes_dirs(project):
         problems += _scan_scenes_dir(project, scenes)
+        problems += _scan_font_shorthand(project, scenes)
     return problems
+
+
+def missing_render_log_problem(project: Path, version: str, mp4: Path, render_log: Path) -> str:
+    render_cmd = hf_command(
+        project, "render", "--quality", "delivery", "--workers", "2", "--output",
+        str(project / version / mp4.name), str(scenes_dir_for(project, mp4)),
+    )
+    return "render log %s not found; produce it with: %s > %s 2>&1" % (
+        render_log, render_cmd, shlex.quote(str(project / version / "render.log")))
 
 
 def brand_family_count(project: Path, brief: dict) -> "tuple[int, bool]":
@@ -206,14 +245,7 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
     required, _ = brand_family_count(project, brief)
     injected = 0
     if not render_log.is_file():
-        render_cmd = hf_command(
-            project, "render", "--quality", "delivery", "--workers", "2", "--output",
-            str(project / version / mp4.name), str(scenes),
-        )
-        problems.append(
-            "render log %s not found; produce it with: %s > %s 2>&1"
-            % (render_log, render_cmd, shlex.quote(str(project / version / "render.log")))
-        )
+        problems.append(missing_render_log_problem(project, version, mp4, render_log))
     else:
         counts = [int(n) for n in _INJECTED.findall(render_log.read_text(encoding="utf-8", errors="replace"))]
         injected = max(counts) if counts else 0
@@ -235,6 +267,38 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
         "; ".join(problems) if problems else "tokens inlined and %d font famil%s injected at render" % (
             injected, "y" if injected == 1 else "ies"),
     )
+
+
+def check_render_log(project: Path, version: str, mp4: Path, render_log: Path) -> dict:
+    """Fail on known-bad HyperFrames ``[WARN]``/``[ERROR]`` lines; list every other one in ``measured``."""
+    if not render_log.is_file():
+        return make_check(
+            "render_log", "fail", None, {"known_bad": 0},
+            missing_render_log_problem(project, version, mp4, render_log),
+        )
+    entries = []
+    for line in render_log.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = _LOG_LEVEL.search(line)
+        if match:
+            entries.append((match.group(1), match.group(2).strip()))
+    bad = []
+    for level, message in entries:
+        for label, pattern, advice in KNOWN_BAD_LOG_PATTERNS:
+            if pattern.search(message):
+                bad.append((label, message, advice))
+    others = [(level, message) for level, message in entries if not any(p.search(message) for _, p, _ in KNOWN_BAD_LOG_PATTERNS)]
+    measured = {
+        "known_bad": len(bad),
+        "other": len(others),
+        "lines": ["[%s] %s" % entry for entry in others[:LOG_LINES_SHOWN]],
+    }
+    if bad:
+        detail = "; ".join("%s in %s: %s (%s)" % (label, render_log, message, advice) for label, message, advice in bad)
+    elif entries:
+        detail = "%d other warning/error line(s) in %s, none known-bad" % (len(entries), render_log)
+    else:
+        detail = "no [WARN] or [ERROR] lines in %s" % render_log
+    return make_check("render_log", "fail" if bad else "pass", measured, {"known_bad": 0}, detail)
 
 
 # contrast and title-safe -----------------------------------------------------------------------
@@ -381,9 +445,11 @@ def check_title_safe(project: Path, version: str, docs: "list[tuple[Optional[str
 # blender and outside calls ---------------------------------------------------------------------
 
 def check_blender(project: Path) -> dict:
-    guards = sorted(p for p in project.rglob("guard.json") if not SKIPPED_DIRS.intersection(p.relative_to(project).parts))
+    """Check the ``guard.json`` of every render under the project; ``sketches/`` folders hold approval stills and are ignored."""
+    ignored = SKIPPED_DIRS | {"sketches"}
+    guards = sorted(p for p in project.rglob("guard.json") if not ignored.intersection(p.relative_to(project).parts[:-1]))
     if not guards:
-        return make_check("blender", "skip", None, None, "no guard.json under the project, so no 3D clip")
+        return make_check("blender", "skip", None, None, "no guard.json under the project (sketches/ ignored), so no 3D clip")
     default_scene = 0
     mirrored = 0
     problems = []
@@ -404,9 +470,11 @@ def check_blender(project: Path) -> dict:
             problems.append("%s has %d mirrored text frame(s)" % (rel(path, project), len(frames)))
     return make_check(
         "blender", "fail" if problems else "pass",
-        {"guards": len(guards), "default_scene": default_scene, "mirrored_frames": mirrored},
+        {"guards": len(guards), "default_scene": default_scene, "mirrored_frames": mirrored,
+         "files": [rel(p, project) for p in guards]},
         {"default_scene": 0, "mirrored_frames": 0},
-        "; ".join(problems) if problems else "%d guard file(s) clean" % len(guards),
+        "; ".join(problems) if problems else "%d guard file(s) clean: %s" % (
+            len(guards), ", ".join(rel(p, project) for p in guards)),
     )
 
 
@@ -754,6 +822,7 @@ def main(argv: Optional["list[str]"] = None) -> int:
         scenes = scenes_dir_for(project, mp4)
         checks = [
             check_fonts(project, brief, render_log, args.version, mp4),
+            check_render_log(project, args.version, mp4, render_log),
             check_contrast(project, args.version, check_docs, scenes),
             check_title_safe(project, args.version, check_docs, scenes),
             check_loudness(mp4, narrated),

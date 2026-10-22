@@ -184,6 +184,7 @@ def test_mp4_encode_and_json(rig):
     joined = " ".join(ffmpeg)
     for token in ("-c:v libx264", "-pix_fmt yuv420p", "-crf 14", "-movflags +faststart", "-framerate 30"):
         assert token in joined
+    assert "-g 30 -keyint_min 30" in joined
     assert "f_%04d.png" in joined
     assert ffmpeg[-1] == data["clip"]
     assert (rig["out"] / "guard.json").is_file()
@@ -193,11 +194,29 @@ def test_mp4_encode_and_json(rig):
 def test_fps_flag_and_env(rig):
     rc, _ = run_render(rig, "--frames", "1-3", "--fps", "24")
     assert rc == 0
-    assert "-framerate 24" in " ".join(log_lines(rig["ffmpeg_log"])[0])
+    joined = " ".join(log_lines(rig["ffmpeg_log"])[0])
+    assert "-framerate 24" in joined and "-g 24 -keyint_min 24" in joined
     rig["ffmpeg_log"].unlink()
     rc, _ = run_render(rig, "--frames", "1-3", env=with_env(rig, QUIRK_VIDEO_FPS="60"))
     assert rc == 0
     assert "-framerate 60" in " ".join(log_lines(rig["ffmpeg_log"])[0])
+
+
+def test_arguments_after_a_double_dash_reach_the_scene_script(rig):
+    rc, data = run_render(rig, "--frames", "1-4", "--alpha", "--", "--font", "/x/Outfit-SemiBold.ttf", "--accent", "#1e7a52")
+    assert rc == 0, data
+    (argv,) = log_lines(rig["blender_log"])
+    out = str(rig["out"].resolve())
+    assert argv[argv.index("--") :] == [
+        "--", "--out", out, "--frames", "1-4", "--alpha", "--font", "/x/Outfit-SemiBold.ttf", "--accent", "#1e7a52",
+    ]
+
+
+def test_no_double_dash_adds_nothing_to_the_scene_script_argv(rig):
+    rc, _ = run_render(rig, "--frames", "1-4")
+    assert rc == 0
+    (argv,) = log_lines(rig["blender_log"])
+    assert argv[-2:] == ["--frames", "1-4"]
 
 
 def test_alpha_keeps_pngs_and_writes_prores(rig):
@@ -210,7 +229,7 @@ def test_alpha_keeps_pngs_and_writes_prores(rig):
     joined = " ".join(ffmpeg)
     for token in ("-c:v prores_ks", "-profile:v 4444", "-pix_fmt yuva444p10le"):
         assert token in joined
-    assert "libx264" not in joined
+    assert "libx264" not in joined and "-keyint_min" not in joined
     assert len(list(rig["out"].glob("f_*.png"))) == 4
 
 

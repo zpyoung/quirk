@@ -1,0 +1,3 @@
+[INFO] [Compiler] Injected deterministic @font-face rules for 2 requested font families
+[WARN] [Compiler] Video "s1-clip" is variable frame rate (VFR); frame timing may drift
+[ERROR] [Render] Transient capture retry on frame 12
