@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "layout": {
+    "ok": false, "errorCount": 1, "warningCount": 1, "infoCount": 0,
+    "findings": [
+      {"code": "caption_zone_collision", "severity": "error", "selector": "#top", "sourceFile": "index.html", "text": "Top edge text", "message": "<div> \"Top edge text\" overlaps the reserved caption band (~97% up from the bottom).", "time": 3},
+      {"code": "sweep_static", "severity": "warning", "selector": "[data-composition-id]", "message": "Nothing on screen moved under seek."}
+    ]
+  },
+  "contrast": {"ok": true, "errorCount": 0, "warningCount": 0, "infoCount": 0, "findings": [], "enabled": true}
+}
