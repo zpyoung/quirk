@@ -65,5 +65,5 @@ Read a reference when its step starts, not before.
 - [audio](references/audio.md): `voice.py`, pronunciation, loudness targets, music ducking, captions, and beat sync.
 - [3d](references/3d.md): `blender_render.py`, the scene script, colour, fonts, and compositing the clip.
 - [long-form](references/long-form.md): locking the kit, briefing scene subagents, and verifying the assembled MP4.
-- [review](references/review.md): `verify.py`, the seven checks, your visual pass, the review page, and notes.
+- [review](references/review.md): `verify.py`, the eight checks, your visual pass, the review page, and notes.
 - [cloud](references/cloud.md): `cloud_allow`, `cloud.py call`, and the call log.

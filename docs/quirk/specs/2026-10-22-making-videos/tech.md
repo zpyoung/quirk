@@ -271,7 +271,8 @@ A run reads and appends to its own `attempts` list, so a 16:9 and a 9:16 MP4 in 
 `attempt >= 3` with a failure, that run sets `"stop": true` and the skill goes to the review page instead
 of rebuilding. A flat `verify.json` without `runs` is read as the run for the single MP4 present.
 Errors: missing project or version → exit 2; missing MP4 → exit 1 with a `missing_render` error;
-missing ffmpeg → exit 3. Frames: a contact sheet and stills decoded from the MP4 at scene midpoints into
+missing ffmpeg → exit 3. Frames: a contact sheet and stills decoded from the MP4 at the `--at` times the agent passes (settled instants per
+scene; six evenly spaced stills when `--at` is omitted) into
 `<vN>/frames/<mp4 stem>/`, for the agent's own visual review.
 
 ### `review_page.py`

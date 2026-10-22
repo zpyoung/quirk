@@ -199,6 +199,7 @@ measured number in the version's verify results.
 | Voice sync | Each timed beat's first changed frame is within one frame of its word's measured start |
 | Blender | No default-cube render, no mirrored text in a 3D clip |
 | Outside calls | No cloud call the brief didn't name |
+| Render log | No known-bad HyperFrames render warning (such as sparse keyframes in an inserted clip); other warnings are listed |
 
 ## Scope and non-goals
 
@@ -347,3 +348,6 @@ telemetry.
   tokens are inlined, the render log's font-injection line, and the agent viewing frames decoded from
   the MP4. Loudness, voice sync, Blender and outside calls come from the MP4 and the logs. Raw MP4
   pixels can't locate text, so the original wording couldn't be built as written.
+- 2026-10-22: added a `render_log` verify check. Acceptance run 3 rendered a Blender clip with two
+  keyframes in 450 frames; HyperFrames warned that this causes seek failures and frozen frames, and
+  every other check passed. Known-bad render warnings now fail verify; others are listed.
