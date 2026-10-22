@@ -1,6 +1,6 @@
 # Logic spec: `making-videos`, a local-first video skill
 
-**Status**: Draft
+**Status**: Approved
 
 On 2026-10-22 we ran seven parallel trials of a Reddit post's Claude Code video stack (HyperFrames,
 Remotion, GSAP skills, the LottieFiles motion-design skill, Blender MCP) in the `vst-t*` Orca worktrees
@@ -146,7 +146,6 @@ installed.
    - **Then** verify fails the font check. The skill fixes the scene (inlining the tokens) and renders
      again before showing the user anything. After 3 failed attempts on one version it stops at the
      review page with the failing checks flagged instead of looping further.
-     [ASK: Is 3 the right number of failed verify attempts before the skill stops and shows you the failing version?]
 
 6. **SC-6 Notes become a new version**
    - **Given** `v1` on the review page
@@ -258,6 +257,7 @@ Out of scope for v1:
 - A local review page per project with player, storyboard, decoded frames and version history.
 - Notes produce a new version; every version is kept.
 - Strict self-check before the user sees a render.
+- After 3 failed verify attempts on one version, the skill stops and shows the failing render.
 
 **Approach**
 - One phased skill with a few deterministic scripts. Scene subagents only for long pieces, after the
