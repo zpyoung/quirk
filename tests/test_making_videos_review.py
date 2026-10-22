@@ -140,8 +140,10 @@ def project(tmp_path: Path) -> Path:
     calls = [
         {"ts": "2026-10-22T10:00:00Z", "provider": "elevenlabs", "method": "POST",
          "host": "api.elevenlabs.io", "path": "/v1/tts", "status": 200, "bytes": 1234},
-        {"ts": "2026-10-22T10:01:00Z", "provider": "hyperframes", "method": "render",
-         "host": "", "path": "render", "status": 0, "bytes": 0},
+        {"ts": "2026-10-22T10:01:00Z", "provider": "hyperframes", "subcommand": "render",
+         "args": ["render", "--output", "v1/demo.mp4"], "status": 0},
+        {"ts": "2026-10-22T10:01:30Z", "provider": "playwright", "method": "RECORD",
+         "host": "localhost", "path": "/app", "status": 200, "bytes": 5},
         {"ts": "2026-10-22T10:02:00Z", "provider": "pexels", "method": "GET",
          "host": "api.pexels.com", "path": "/v1/search", "status": 200, "bytes": 99},
     ]
@@ -263,6 +265,20 @@ def test_outside_calls_table_highlights_disallowed(page: str) -> None:
     assert "not-allowed" in by_provider["pexels"]
     assert "not-allowed" not in by_provider["elevenlabs"]
     assert "not-allowed" not in by_provider["hyperframes"]
+    assert "render --output v1/demo.mp4" in by_provider["hyperframes"]
+    assert "RECORD localhost" in page
+
+
+def test_outside_calls_what_ran_is_escaped(tmp_path: Path, env: dict) -> None:
+    proj = tmp_path / "esc"
+    proj.mkdir()
+    (proj / "calls.jsonl").write_text(
+        json.dumps({"provider": "hyperframes", "subcommand": "<b>x</b>", "args": ["<i>"], "status": 0}) + "\n"
+    )
+    proc = build(proj, env)
+    assert proc.returncode == 0, proc.stderr
+    html = (proj / "review.html").read_text(encoding="utf-8")
+    assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>x</b>" not in html
 
 
 def test_self_contained(page: str) -> None:
