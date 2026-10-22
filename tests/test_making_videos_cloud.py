@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import http.server
 import json
+import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -367,3 +369,49 @@ def test_redirect_to_a_disallowed_host_is_not_followed(server, project, env):
     assert len(server.seen) == 1
     assert calls(project)[0]["status"] == 302
     assert_key_absent(proc, project)
+
+
+@pytest.fixture()
+def tls_server(tmp_path: Path):
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl CLI not available")
+    cert, key = tmp_path / "server.pem", tmp_path / "server.key"
+    subprocess.run(
+        [
+            openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+            "-subj", "/CN=127.0.0.1", "-keyout", str(key), "-out", str(cert),
+            "-addext", "subjectAltName=IP:127.0.0.1",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    httpd.seen = []
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(str(cert), str(key))
+    httpd.socket = server_ctx.wrap_socket(httpd.socket, server_side=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd, cert
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_https_call_trusts_the_ssl_cert_file(project, env, tls_server):
+    httpd, cert = tls_server
+    env["SSL_CERT_FILE"] = str(cert)
+    proc, out = call(project, "pexels", f"https://127.0.0.1:{httpd.server_address[1]}/x", env)
+    assert proc.returncode == 0, proc.stderr
+    assert out["status"] == 200
+    assert len(httpd.seen) == 1
+
+
+def test_https_call_refuses_an_untrusted_certificate(project, env, tls_server, tmp_path):
+    httpd, _ = tls_server
+    env["QUIRK_CA_FALLBACKS"] = str(tmp_path / "missing.pem")
+    proc, out = call(project, "pexels", f"https://127.0.0.1:{httpd.server_address[1]}/x", env)
+    assert proc.returncode == 1
+    assert "CERTIFICATE_VERIFY_FAILED" in out["error"]
+    assert httpd.seen == []

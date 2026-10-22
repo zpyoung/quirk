@@ -44,6 +44,7 @@ from _mv_common import (  # noqa: E402
     emit,
     load_brief,
     log_call,
+    ssl_context,
 )
 
 LOOPBACK_ENV = "QUIRK_CLOUD_LOOPBACK_OK"
@@ -238,7 +239,10 @@ def _cmd_call(args: argparse.Namespace) -> None:
         headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(url, data=body, headers=headers, method=args.method)
-    opener = urllib.request.build_opener(_CheckedRedirects(provider, credential_names))
+    opener = urllib.request.build_opener(
+        _CheckedRedirects(provider, credential_names),
+        urllib.request.HTTPSHandler(context=ssl_context()),
+    )
 
     record = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),

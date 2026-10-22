@@ -5,6 +5,8 @@ import functools
 import http.server
 import importlib.util
 import json
+import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -389,3 +391,58 @@ def test_unknown_install_target_is_a_usage_error(env):
     code, out = run_doctor("install", "--what", "blender", "--yes", env=env)
     assert code == 2
     assert "error" in out
+
+
+@pytest.fixture()
+def tls_model_server(tmp_path: Path):
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl CLI not available")
+    cert, key = tmp_path / "server.pem", tmp_path / "server.key"
+    subprocess.run(
+        [
+            openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+            "-subj", "/CN=127.0.0.1", "-keyout", str(key), "-out", str(cert),
+            "-addext", "subjectAltName=IP:127.0.0.1",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    root = tmp_path / "served"
+    root.mkdir()
+    (root / "kokoro-v1.0.onnx").write_bytes(b"onnx-bytes" * 100)
+    (root / "voices-v1.0.bin").write_bytes(b"voice-bytes" * 10)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+    handler.log_message = lambda *a, **k: None  # type: ignore[attr-defined]
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(str(cert), str(key))
+    server.socket = server_ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"https://127.0.0.1:{server.server_address[1]}/", cert
+    server.shutdown()
+    server.server_close()
+
+
+def test_install_tts_downloads_over_https_trusting_ssl_cert_file(env, tls_model_server, tmp_path):
+    base_url, cert = tls_model_server
+    env["QUIRK_KOKORO_BASE_URL"] = base_url
+    env["SSL_CERT_FILE"] = str(cert)
+    write_stub(bin_dir(env) / "uv", "")
+    code, out = run_doctor("install", "--what", "tts", "--yes", env=env)
+    assert code == 0, out
+    models = tmp_path / "cache" / "models" / "kokoro"
+    assert (models / "kokoro-v1.0.onnx").read_bytes() == b"onnx-bytes" * 100
+
+
+def test_install_tts_refuses_an_untrusted_https_certificate(env, tls_model_server, tmp_path):
+    base_url, _ = tls_model_server
+    env["QUIRK_KOKORO_BASE_URL"] = base_url
+    env["QUIRK_CA_FALLBACKS"] = str(tmp_path / "missing.pem")
+    write_stub(bin_dir(env) / "uv", "")
+    code, out = run_doctor("install", "--what", "tts", "--yes", env=env)
+    assert code == 1
+    assert "CERTIFICATE_VERIFY_FAILED" in out["error"]
+    assert not list((tmp_path / "cache" / "models" / "kokoro").glob("kokoro*"))
