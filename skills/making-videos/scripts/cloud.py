@@ -6,11 +6,13 @@ prints one JSON object ``{"status", "out", "bytes"}`` (plus a ``preview`` of at 
 characters when ``--out`` is not given, and an ``error`` key on failure). ``--json`` is a file path
 or inline JSON sent as application/json. Diagnostics go to stderr.
 
-A response body larger than ``--max-bytes`` (default 2 GiB) or still arriving after ``--timeout``
-seconds in total (default 300) aborts the call: the log record gains an ``aborted`` reason and the
-bytes read so far, and the exit code is 1. The body streams into a temporary file beside ``--out``
-that replaces it only after a complete 2xx download, so a failed call leaves an existing ``--out``
-untouched. An HTTP error body is read only up to 64 KiB and within the same ``--timeout``.
+A response body larger than ``--max-bytes`` (default 2 GiB) aborts the call, and so does a call
+that is still running ``--timeout`` seconds after it started (default 300): connect, TLS, redirects,
+headers and the success or error body all count against that one limit. The log record gains an
+``aborted`` reason (``timeout`` for the time limit) and the bytes read so far, and the exit code is 1.
+The body streams into a temporary file beside ``--out`` that replaces it only after a complete 2xx
+download, so a failed call leaves an existing ``--out`` untouched. An HTTP error body is read only up
+to 64 KiB.
 
 Exit codes: 0 ok; 1 refused or failed (provider not in the brief's ``cloud_allow``, key env var
 unset, URL scheme or host not allowed for the provider, redirect to a disallowed host, HTTP error
@@ -35,8 +37,10 @@ import datetime
 import json
 import os
 import socket
+import signal
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -107,6 +111,54 @@ class _Aborted(Exception):
         self.reason = reason
         self.status = status
         self.nbytes = nbytes
+
+
+class _Deadline(BaseException):
+    """The total ``--timeout`` elapsed; derives from BaseException so no library handler swallows it."""
+
+
+class _TotalDeadline:
+    """One wall-clock limit over a whole transfer.
+
+    On the main thread a SIGALRM timer raises ``_Deadline`` wherever the process is blocked. Elsewhere
+    (or without ``setitimer``) the timer is unavailable, so ``check()`` raises once the time is up and
+    must be called between reads.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        self.end = 0.0
+        self.use_timer = hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread()
+        self.armed = False
+        self.previous = None
+
+    @staticmethod
+    def _on_alarm(signum, frame) -> None:
+        raise _Deadline()
+
+    def __enter__(self) -> "_TotalDeadline":
+        self.end = time.monotonic() + self.seconds
+        if self.use_timer:
+            self.previous = signal.signal(signal.SIGALRM, self._on_alarm)
+            self.armed = True
+            signal.setitimer(signal.ITIMER_REAL, self.seconds)
+        return self
+
+    def check(self) -> None:
+        if not self.use_timer and time.monotonic() > self.end:
+            raise _Deadline()
+
+    def disarm(self) -> None:
+        if self.armed:
+            self.armed = False
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def __exit__(self, *exc_info: object) -> None:
+        try:
+            self.disarm()
+        finally:
+            if self.use_timer:
+                signal.signal(signal.SIGALRM, self.previous if self.previous is not None else signal.SIG_DFL)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -238,26 +290,23 @@ def _fail(message: str, key: str = "", **extra: object) -> NoReturn:
     emit({"error": message, **extra}, EXIT_FAILED)
 
 
-def _read_error_body(exc: urllib.error.HTTPError, deadline: float) -> "tuple[bytes, bool]":
-    """Read at most ``ERROR_BODY_CAP`` bytes of an HTTP error body, stopping at ``deadline``.
+def _read_error_body(exc: urllib.error.HTTPError, data: bytearray, deadline: _TotalDeadline) -> None:
+    """Append at most ``ERROR_BODY_CAP`` bytes of an HTTP error body to ``data``.
 
-    Returns the bytes read and whether the deadline (or a socket timeout) cut the read short.
+    ``data`` keeps what was read when ``_Deadline`` interrupts the read.
     """
-    data = b""
     read = getattr(exc, "read1", exc.read)
     try:
         while len(data) < ERROR_BODY_CAP:
-            if time.monotonic() > deadline:
-                return data, True
+            deadline.check()
             chunk = read(min(CHUNK, ERROR_BODY_CAP - len(data))) or b""
             if not chunk:
                 break
             data += chunk
     except (socket.timeout, TimeoutError):
-        return data, True
+        raise _Deadline()
     except OSError:
         pass
-    return data, False
 
 
 def _cmd_call(args: argparse.Namespace) -> None:
@@ -325,62 +374,70 @@ def _cmd_call(args: argparse.Namespace) -> None:
             emit({"error": message, "request_sent": True, "status": status, "bytes": nbytes}, EXIT_FAILED)
 
     out_path: Optional[Path] = Path(args.out) if args.out else None
-    deadline = time.monotonic() + args.timeout
+    progress = {"status": 0, "bytes": 0}
+    error_body: Optional[bytearray] = None
+    head = b""
     try:
-        with opener.open(request, timeout=min(TIMEOUT_S, args.timeout)) as resp:
-            status = resp.status
-            total = 0
-            head = b""
-            sink = None
-            tmp_path: Optional[Path] = None
+        with _TotalDeadline(args.timeout) as deadline:
             try:
-                declared = resp.headers.get("Content-Length", "")
-                if declared.isdigit() and int(declared) > args.max_bytes:
-                    raise _Aborted(f"response declares {declared} bytes, over --max-bytes {args.max_bytes}",
-                                   status, 0)
-                if out_path is not None:
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    fd, tmp_name = tempfile.mkstemp(dir=str(out_path.parent), prefix=f".{out_path.name}.",
-                                                    suffix=".part")
-                    tmp_path = Path(tmp_name)
-                    sink = os.fdopen(fd, "wb")
-                while True:
-                    try:
-                        chunk = resp.read1(CHUNK)
-                    except (socket.timeout, TimeoutError):
-                        raise _Aborted("timed out waiting for the response body", status, total)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > args.max_bytes:
-                        raise _Aborted(f"response body exceeded --max-bytes {args.max_bytes}", status, total)
-                    if sink is not None:
-                        sink.write(chunk)
-                    elif len(head) < PREVIEW_CHARS * 4:
-                        head += chunk
-                    if time.monotonic() > deadline:
-                        raise _Aborted(f"response body exceeded --timeout {args.timeout:g}s", status, total)
-                if sink is not None:
-                    sink.close()
+                with opener.open(request, timeout=min(TIMEOUT_S, args.timeout + 1)) as resp:
+                    progress["status"] = resp.status
+                    total = 0
                     sink = None
-                    os.replace(tmp_path, out_path)
-                    tmp_path = None
-            finally:
-                if sink is not None:
-                    sink.close()
-                if tmp_path is not None:
-                    tmp_path.unlink(missing_ok=True)
+                    tmp_path: Optional[Path] = None
+                    try:
+                        declared = resp.headers.get("Content-Length", "")
+                        if declared.isdigit() and int(declared) > args.max_bytes:
+                            raise _Aborted(f"response declares {declared} bytes, over --max-bytes {args.max_bytes}",
+                                           resp.status, 0)
+                        if out_path is not None:
+                            out_path.parent.mkdir(parents=True, exist_ok=True)
+                            fd, tmp_name = tempfile.mkstemp(dir=str(out_path.parent), prefix=f".{out_path.name}.",
+                                                            suffix=".part")
+                            tmp_path = Path(tmp_name)
+                            sink = os.fdopen(fd, "wb")
+                        while True:
+                            deadline.check()
+                            try:
+                                chunk = resp.read1(CHUNK)
+                            except (socket.timeout, TimeoutError):
+                                raise _Aborted("timed out waiting for the response body", resp.status, total)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            progress["bytes"] = total
+                            if total > args.max_bytes:
+                                raise _Aborted(f"response body exceeded --max-bytes {args.max_bytes}", resp.status,
+                                               total)
+                            if sink is not None:
+                                sink.write(chunk)
+                            elif len(head) < PREVIEW_CHARS * 4:
+                                head += chunk
+                        deadline.disarm()
+                        if sink is not None:
+                            sink.close()
+                            sink = None
+                            os.replace(tmp_path, out_path)
+                            tmp_path = None
+                    finally:
+                        if sink is not None:
+                            sink.close()
+                        if tmp_path is not None:
+                            tmp_path.unlink(missing_ok=True)
+            except urllib.error.HTTPError as exc:
+                progress["status"] = exc.code
+                error_body = bytearray()
+                _read_error_body(exc, error_body, deadline)
+    except _Deadline:
+        nbytes = len(error_body) if error_body is not None else progress["bytes"]
+        extra = {"preview": _preview(bytes(error_body), key)} if error_body is not None else {}
+        finish(progress["status"], nbytes, "timeout")
+        _fail(f"{provider} call exceeded --timeout {args.timeout:g}s", key, status=progress["status"], out=None,
+              bytes=nbytes, aborted="timeout", **extra)
     except _Aborted as exc:
         finish(exc.status, exc.nbytes, exc.reason)
         _fail(f"{provider} response aborted: {exc.reason}", key, status=exc.status, out=None,
               bytes=exc.nbytes, aborted=exc.reason)
-    except urllib.error.HTTPError as exc:
-        data, timed_out = _read_error_body(exc, deadline)
-        reason = f"error body exceeded --timeout {args.timeout:g}s" if timed_out else None
-        finish(exc.code, len(data), reason)
-        extra = {"aborted": reason} if reason else {}
-        _fail(f"HTTP {exc.code} from {provider}", key, status=exc.code, out=None,
-              bytes=len(data), preview=_preview(data, key), **extra)
     except _Refused as exc:
         finish(exc.status, 0)
         _fail(str(exc), key)
@@ -388,10 +445,15 @@ def _cmd_call(args: argparse.Namespace) -> None:
         finish(0, 0)
         _fail(f"{provider} request failed: {getattr(exc, 'reason', exc)}", key)
 
-    finish(status, total)
+    if error_body is not None:
+        finish(progress["status"], len(error_body))
+        _fail(f"HTTP {progress['status']} from {provider}", key, status=progress["status"], out=None,
+              bytes=len(error_body), preview=_preview(bytes(error_body), key))
+
+    finish(progress["status"], total)
     if out_path is not None:
-        emit({"status": status, "out": str(out_path), "bytes": total})
-    emit({"status": status, "out": None, "bytes": total, "preview": _preview(head, key)})
+        emit({"status": progress["status"], "out": str(out_path), "bytes": total})
+    emit({"status": progress["status"], "out": None, "bytes": total, "preview": _preview(head, key)})
 
 
 def build_parser() -> argparse.ArgumentParser:

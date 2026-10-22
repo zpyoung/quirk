@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.server
+import importlib.util
 import json
 import shutil
 import ssl
@@ -54,6 +55,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._stream(b"d" * 10, 40, delay=0.3, declare=True)
         elif route == "/drip-error":
             self._stream(b"e" * 10, 40, delay=0.3, declare=True, status=500)
+        elif route == "/stall-error":
+            self.send_response(500)
+            self.send_header("Content-Length", "10")
+            self.end_headers()
+            self.wfile.flush()
+            self.server.release.wait(30)
+        elif route == "/slow-headers":
+            self.server.release.wait(30)
+            self._reply(200, b"too late", "text/plain")
         elif route == "/redir":
             self.send_response(302)
             self.send_header("Location", "https://evil.example.com/steal")
@@ -93,9 +103,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def server():
     httpd = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     httpd.seen = []
+    httpd.release = threading.Event()
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield httpd
+    httpd.release.set()
     httpd.shutdown()
     httpd.server_close()
 
@@ -386,12 +398,12 @@ def test_slow_body_past_timeout_aborts_and_deletes_the_partial_file(server, proj
     dest = tmp_path / "slow.bin"
     started = time.monotonic()
     proc, out = call(project, "pexels", base_url(server) + "/drip", env, "--out", dest, "--timeout", 1)
-    assert time.monotonic() - started < 10
+    assert time.monotonic() - started < 3
     assert proc.returncode == 1
-    assert "--timeout" in out["aborted"]
+    assert out["aborted"] == "timeout"
     assert not dest.exists()
     (record,) = calls(project)
-    assert "--timeout" in record["aborted"]
+    assert record["aborted"] == "timeout"
     assert 0 < record["bytes"] < 400
 
 
@@ -408,14 +420,61 @@ def test_http_error_body_is_read_only_up_to_64_kib(server, project, env):
 def test_trickling_http_error_body_is_cut_off_at_the_timeout(server, project, env):
     started = time.monotonic()
     proc, out = call(project, "openai", base_url(server) + "/drip-error", env, "--timeout", 1)
-    assert time.monotonic() - started < 8
+    assert time.monotonic() - started < 3
     assert proc.returncode == 1
     assert out["status"] == 500
-    assert "--timeout" in out["aborted"]
+    assert out["aborted"] == "timeout"
     assert 0 < out["bytes"] < 400
     (record,) = calls(project)
     assert record["status"] == 500
-    assert "--timeout" in record["aborted"]
+    assert record["aborted"] == "timeout"
+
+
+@pytest.mark.parametrize(
+    "route,status",
+    [("/drip", 200), ("/drip-error", 500), ("/stall-error", 500), ("/slow-headers", 0)],
+)
+def test_total_timeout_covers_every_phase_and_spares_an_existing_out_file(
+    server, project, env, tmp_path, route, status
+):
+    outdir = tmp_path / "assets"
+    outdir.mkdir()
+    dest = outdir / "existing.bin"
+    dest.write_bytes(b"original bytes")
+    started = time.monotonic()
+    proc, out = call(project, "pexels", base_url(server) + route, env, "--out", dest, "--timeout", 1)
+    assert time.monotonic() - started < 3
+    assert proc.returncode == 1
+    assert out["aborted"] == "timeout"
+    assert out["status"] == status
+    assert dest.read_bytes() == b"original bytes"
+    assert _leftovers(outdir, dest) == []
+    (record,) = calls(project)
+    assert record["aborted"] == "timeout"
+    assert record["status"] == status
+    assert_key_absent(proc, project)
+
+
+def test_total_timeout_falls_back_to_checks_off_the_main_thread():
+    spec = importlib.util.spec_from_file_location("mv_cloud_deadline_under_test", CLOUD_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    result = {}
+
+    def run() -> None:
+        try:
+            with module._TotalDeadline(0.2) as deadline:
+                assert not deadline.use_timer
+                while True:
+                    time.sleep(0.05)
+                    deadline.check()
+        except module._Deadline:
+            result["raised"] = True
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(5)
+    assert result == {"raised": True}
 
 
 @pytest.mark.parametrize("flag,value", [("--max-bytes", "0"), ("--max-bytes", "x"), ("--timeout", "0"), ("--timeout", "-1")])
