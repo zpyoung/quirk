@@ -56,7 +56,7 @@ Everything lives under `~/Studio`, outside the user's repo. `QUIRK_STUDIO` overr
 |---|---|
 | `product` | required; must equal `--product` |
 | `colors` | required; token name to `#rrggbb`. Name tokens as the product's CSS does, without the leading `--` |
-| `fonts` | required; role to `{family, files}`. `files` are paths inside the brand folder (keep TTF or OTF; WOFF2 is unverified in Blender). Roles become `--font-<role>` |
+| `fonts` | required; role to `{family, files}`. `files` are paths inside the brand folder (static TTF or OTF; Blender cannot load WOFF2 or pick a weight from a variable font, see [3d.md](3d.md#fonts)). Roles become `--font-<role>` |
 | `voice` | required; `{engine, id}`. Engine is `kokoro`, `elevenlabs` or `openai`. One voice per brand, reused by every video |
 | `logo` | path inside the brand folder, or `null` |
 | `pronunciations` | optional; word to `{from, to}` phoneme patch for Kokoro ([audio.md](audio.md)) |
@@ -76,9 +76,12 @@ Do this when `studio.py brand show --product P` prints `"brand": null`, or a bra
    map them to roles: ground (background), ink (text), muted, rule, accent. Use a color from a screenshot
    only when no token exists.
 2. **Fonts.** Read `font-family`, `@font-face` and font `<link>` tags. Copy any TTF or OTF files found in
-   the repo into `~/Studio/brands/<product>/fonts/`, because Blender needs a file. If no file exists,
-   record the family with an empty `files` list and say so at stop 1; HyperFrames loads common families
-   by name ([hyperframes.md](hyperframes.md)).
+   the repo into `~/Studio/brands/<product>/fonts/` (create the folder by hand; no `studio.py` command does
+   it) and list them in `files`, because Blender needs a file. Blender needs a static file of the exact
+   weight, not a variable font ([3d.md](3d.md#fonts)). If no file exists, record the family with an empty
+   `files` list and say so at stop 1; HyperFrames loads common families by name
+   ([hyperframes.md](hyperframes.md)). For a 3D shot, fetch the static file from the font's own upstream
+   repo and add it to `files`.
 3. **Logo.** Look for `logo*` and SVGs under `assets/`, `public/`, `docs/`. Copy it into the brand folder.
    If there is none, set `logo` to `null` and set the name in type. Do not draw a logo.
 4. **Captured site.** Take tokens and fonts from a [URL capture](gather.md) only when the URL is the
@@ -128,4 +131,5 @@ the render log's `Injected deterministic @font-face rules` line lists every bran
 from the MP4 to confirm. Details and the HyperFrames rules are in [hyperframes.md](hyperframes.md).
 
 - Do not copy a token file into `assets/` and link it; the t1 trial did, and the fonts broke.
+- Use `font-family: var(--font-display)`, never the `font:` shorthand with `var(--font-*)`: the compiler's font injection sees only the longhand, and the shorthand rendered fallback fonts in a real run. Verify fails it.
 - Read colors in GSAP from the tokens at runtime so a hex value lives in one place.

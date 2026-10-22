@@ -9,6 +9,7 @@ Contents:
 - [Fonts](#fonts)
 - [Recipes](#recipes)
 - [Lint and check warnings seen in the trials](#lint-and-check-warnings-seen-in-the-trials)
+- [Render-log warnings](#render-log-warnings)
 - [Audio in the composition](#audio-in-the-composition)
 - [macOS capture mode](#macos-capture-mode)
 
@@ -112,7 +113,8 @@ Inline the brand's `:root` tokens in every composition and never link a styleshe
 </style>
 ```
 
-- Put the block in `index.html` and repeat it inside the `<template>` of each scene file. Use the tokens as `var(--font-display)`.
+- Put the block in `index.html` and repeat it inside the `<template>` of each scene file. Use the tokens as `font-family: var(--font-display)`.
+- Never use the CSS `font:` shorthand with `var(--font-*)` (`font: 500 72px/1.1 var(--font-display)`). The compiler's font injection sees only the longhand `font-family`, so the shorthand rendered fallback fonts in a real run, even with the tokens inline. Write `font-size`, `font-weight`, `line-height` and `font-family` separately. `verify.py` fails the `fonts` check on the shorthand.
 - Bundled families need no `@font-face`: Inter, Montserrat, Outfit, Nunito, Oswald, League Gothic, Archivo Black, Space Mono, IBM Plex Mono, JetBrains Mono, EB Garamond, Playfair Display, Source Code Pro, Noto Sans JP, Roboto, Open Sans, Lato, Poppins.
 - Any other family needs an inline `@font-face` in the file that uses it (`src: url('assets/fonts/x.woff2')`, or `src: local('Exact Name')` for an installed font), or lint fails `font_family_without_font_face`.
 - Keep font files in `assets/fonts/`. Blender is stricter about formats than Chrome; see [3d.md](3d.md).
@@ -191,7 +193,7 @@ The preview server (`preview --background`) is for looking, not for review. Stop
 | Code | Meaning and fix |
 |---|---|
 | `gsap_timeline_set_initial_hide` | An initial hidden state set with `tl.set(..., 0)` does not render at frame 0. Use `gsap.set(...)` instead. |
-| `first_frame_empty` | Frame 0 paints only the background; it becomes the social thumbnail. Put the first element on screen at 0 s, or start a fade at 0.3 opacity instead of 0. |
+| `first_frame_empty` | Frame 0 paints only the background; it becomes the social thumbnail. Put the first element on screen at 0 s, or start a fade at 0.3 opacity instead of 0. A `<video>` that is the film's only content at opacity 1 did not trigger it ([3d.md](3d.md#compositing-the-clip)). |
 | `text_below_floor` | Text under 2.6% of the short side (28 px at 1080) held 0.5 s or more. Raise the size; chrome like a fake URL bar can take `data-layout-ignore`. |
 | `contrast_aa_failure` | Text fails WCAG AA at a sampled instant. A word still mid-entrance can trip it: start entrances from a colour that already passes (`--muted`, not `--rule`). A finding at one sample during an entrance that settles within about 0.15 s is informational, but verify still counts it, so fix it. |
 | `line_unread` | A reading-size line is on screen under its floor (0.4 s for 1 to 2 words, then about 0.3 s per extra word). Hold it longer; the final line needs 2 s. |
@@ -204,6 +206,17 @@ The preview server (`preview --background`) is for looking, not for review. Stop
 | `missing_data_no_timeline` | A still composition without `data-no-timeline`. |
 
 Per-letter spans count as separate words in the checker; set a name as one line.
+
+## Render-log warnings
+
+Lint and check do not see the compiler's `[WARN]` lines, which appear only in the render log. Open `$V/render.log` after every render and look for:
+
+| Log line | Meaning and fix |
+|---|---|
+| `Injected deterministic @font-face rules for N requested font families` | Should be present, with N at least the brand's family count. Missing means fallback fonts: inline the `:root` tokens and replace any `font:` shorthand ([Fonts](#fonts)). |
+| `Video "<id>" has sparse keyframes ... causes seek failures and frame freezing` | The video has too few keyframes. `blender_render.py` encodes one per second; any other inserted video needs a re-encode with `-g <fps> -keyint_min <fps>` ([3d.md](3d.md#compositing-the-clip)). Re-render afterwards. |
+
+`verify.py` fails its `render_log` check on known-bad warnings such as the sparse-keyframes line ([review.md](review.md#the-verify-checks)). A warning it does not know still needs your eyes.
 
 ## Audio in the composition
 
