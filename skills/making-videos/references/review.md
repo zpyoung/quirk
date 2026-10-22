@@ -6,7 +6,7 @@ Contents:
 - [The loop](#the-loop)
 - [Preparing verify's inputs](#preparing-verifys-inputs)
 - [Running verify](#running-verify)
-- [The seven checks](#the-seven-checks)
+- [The verify checks](#the-verify-checks)
 - [Reading verify.json](#reading-verifyjson)
 - [Your own visual pass](#your-own-visual-pass)
 - [Review page and stop 2](#review-page-and-stop-2)
@@ -59,23 +59,24 @@ python3 "$SKILL_DIR/scripts/verify.py" --project "$P" --version v1 \
 ```
 
 - `--beats` is optional: verify uses `$P/beats.json` when it exists. Omit it for a silent video.
-- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its entrances finish (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. The default is six evenly spaced stills.
+- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its entrances finish (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. When scenes overlap for the whole film, scene ends do not apply: pick the moments after each major move lands, and look at the animation to find them. The default is six evenly spaced stills.
 - With several MP4s in `$V` (for example 16:9 and 9:16), verify refuses with exit 2. Pass `--mp4` and run once per file; for the second aspect, regenerate the check JSONs from its own `scenes-9x16/` folder. Each MP4 has its own run in `verify.json`, with its own attempt count and stop flag, so a 9:16 retry does not use up the 16:9 attempts. The printed JSON is the run you just made, plus `mp4`.
 - Exit 0 means no check failed. Exit 1 means a check failed, or the MP4 is missing (`missing_render`). Exit 2 is a usage error such as an unreadable input. Exit 3 means ffmpeg or ffprobe is missing.
 - Verify prints one JSON object. The detail of a failing check names what to run or fix.
 
-## The seven checks
+## The verify checks
 
 Each check reads the source that can see the thing: raw MP4 pixels cannot locate text, so contrast and title-safe come from HyperFrames `check` on the page. A check with status `skip` does not fail the run; read its detail to see why.
 
 | Check | Source | Passes when |
 |---|---|---|
-| `fonts` | static scan of every HTML file under every `scenes*/` folder (`scenes/`, `scenes-9x16/`, `scenes-1x1/`), plus the render log; a `*-9x16.mp4` or `*-1x1.mp4` also needs its matching folder to exist and pass | every `var(--font-*)` resolves in an inline `<style>` or `style=` (in that file or the root `index.html`); no linked stylesheet defines `--font-*`; and the log's `Injected deterministic @font-face rules for N requested font families` has N at least the number of families in `brand.json` |
+| `fonts` | static scan of every HTML file under every `scenes*/` folder (`scenes/`, `scenes-9x16/`, `scenes-1x1/`), plus the render log; a `*-9x16.mp4` or `*-1x1.mp4` also needs its matching folder to exist and pass | every `var(--font-*)` resolves in an inline `<style>` or `style=` (in that file or the root `index.html`); no linked stylesheet defines `--font-*`; no `font:` shorthand uses `var(--font-*)` (write `font-family`); and the log's `Injected deterministic @font-face rules for N requested font families` has N at least the number of families in `brand.json` |
 | `contrast` | `contrast.findings` in the check JSONs | no `contrast_aa_failure`; measured is the failing count and the worst ratio. It fails if a JSON has no enabled contrast section (lint errors skip the browser audit) or reports an error |
 | `title_safe` | `layout.findings` in the four band JSONs, each sampled at eleven instants across the film | no `caption_zone_collision` in any band, and all four bands were supplied |
 | `loudness` | `ffmpeg -af ebur128=peak=true` on the MP4 | narrated: integrated loudness from -17 to -15 LUFS and true peak at or below -1.0 dBTP. Silent video: skipped |
 | `sync` | `beats.json`, `hf.py audio` per clip, and a pixel analysis run in the skill's venv | every beat's first changed frame is within one frame of its word's onset. Silent video: skipped when there are no beats or no venv. Narrated video: fails with "narrated videos need beats.json (see audio.md)" when there is no `beats.json`, and fails with the `doctor.py` fix when the venv is missing |
-| `blender` | every `guard.json` under the project | no default scene and no mirrored frames. Skipped without 3D |
+| `blender` | every `guard.json` under the project, except those under a `sketches/` folder | no default scene and no mirrored frames. Skipped without 3D |
+| `render_log` | `render.log` | no known-bad compiler warning, such as `Video "<id>" has sparse keyframes`. Fix the cause and re-render ([hyperframes.md](hyperframes.md#render-log-warnings)) |
 | `outside_calls` | `calls.jsonl` against the brief's `cloud_allow` | every logged cloud provider is in `cloud_allow`. Every `hf.py` and `record.py` call is logged too, as a local provider, so the count of logged calls can be large for a video with no cloud use; only cloud providers need allowing (HyperFrames and Playwright are local) |
 
 Notes on interpreting results:
