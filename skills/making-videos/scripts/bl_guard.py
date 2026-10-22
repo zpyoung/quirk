@@ -98,17 +98,57 @@ def _write_guard(out: Path, guard: dict) -> None:
     (out / "guard.json").write_text(json.dumps(guard), encoding="utf-8")
 
 
+def render_visible(object_hidden: bool, collection_visible: Sequence[bool]) -> bool:
+    """True when an object renders: not hidden itself and in at least one render-visible collection.
+
+    ``collection_visible`` holds one flag per collection the object belongs to; empty means no
+    collection information, so only the object's own flag counts.
+    """
+    if object_hidden:
+        return False
+    return not collection_visible or any(collection_visible)
+
+
+def _collection_render_state(scene) -> dict:
+    """Map collection name to whether it renders, honouring ``hide_render`` and view-layer exclusion on itself and every ancestor."""
+    states: dict = {}
+    layers = getattr(scene, "view_layers", None)
+    if not layers:
+        return states
+
+    def walk(layer_collection, parent_ok: bool) -> None:
+        collection = layer_collection.collection
+        ok = parent_ok and not layer_collection.exclude and not collection.hide_render
+        states[collection.name] = ok
+        for child in layer_collection.children:
+            walk(child, ok)
+
+    walk(layers[0].layer_collection, True)
+    return states
+
+
+def _object_renders(obj, states: dict) -> bool:
+    flags = [states[c.name] for c in getattr(obj, "users_collection", ()) if c.name in states]
+    return render_visible(bool(obj.hide_render), flags)
+
+
 def _inspect_text(scene, first: int, last: int) -> Tuple[list, list, list]:
-    texts = [o for o in scene.objects if o.type == "FONT" and not o.hide_render]
-    mirrored, edge_on = [], []
-    if texts and scene.camera is None:
-        raise RuntimeError("scene has no active camera")
+    texts = [o for o in scene.objects if o.type == "FONT"]
+    seen, mirrored, edge_on = [], [], []
+    if not texts:
+        return seen, mirrored, edge_on
     for frame in range(first, last + 1):
-        if not texts:
-            break
         scene.frame_set(frame)
+        states = _collection_render_state(scene)
+        visible = [o for o in texts if _object_renders(o, states)]
+        if not visible:
+            continue
+        if scene.camera is None:
+            raise RuntimeError("scene has no active camera")
         cam_pos = tuple(scene.camera.matrix_world.translation)
-        for obj in texts:
+        for obj in visible:
+            if obj.name not in seen:
+                seen.append(obj.name)
             world = obj.matrix_world
             normal = world_normal([tuple(row)[:3] for row in world.to_3x3()])
             is_mirrored, is_edge = classify_facing(normal, tuple(world.translation), cam_pos)
@@ -116,7 +156,7 @@ def _inspect_text(scene, first: int, last: int) -> Tuple[list, list, list]:
                 mirrored.append(frame)
             if is_edge and frame not in edge_on:
                 edge_on.append(frame)
-    return [o.name for o in texts], mirrored, edge_on
+    return seen, mirrored, edge_on
 
 
 def main(argv: Sequence[str]) -> int:

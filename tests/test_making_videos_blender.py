@@ -417,6 +417,119 @@ def test_default_scene_false_for_real_content(guard):
     assert not guard.is_default_scene(_objs(("Cube", "MESH"), ("Rig", "EMPTY"), *base))
 
 
+class _Matrix:
+    def __init__(self, rows, translation):
+        self._rows, self.translation = rows, translation
+
+    def to_3x3(self):
+        return self._rows
+
+
+class _Coll:
+    def __init__(self, name, hide_render=False):
+        self.name, self.hide_render = name, hide_render
+
+
+class _LayerColl:
+    def __init__(self, collection, children=(), exclude=False):
+        self.collection, self.children, self.exclude = collection, list(children), exclude
+
+
+class _Text:
+    def __init__(self, name, rows, collections=(), hidden_on=()):
+        self.type, self.name = "FONT", name
+        self.matrix_world = _Matrix(rows, (0, 0, 0))
+        self.users_collection = list(collections)
+        self.hidden_on = set(hidden_on)
+        self.hide_render = False
+
+
+class _Scene:
+    def __init__(self, texts, layer_collection=None):
+        self.objects = texts
+        self.camera = type("Cam", (), {"matrix_world": _Matrix(IDENTITY, (0, 0, 5))})()
+        self.view_layers = [type("VL", (), {"layer_collection": layer_collection})()] if layer_collection else []
+        self.collections = []
+
+    def frame_set(self, frame):
+        for t in self.objects:
+            t.hide_render = frame in t.hidden_on
+        for c in self.collections:
+            c.hide_render = frame in getattr(c, "hidden_on", ())
+
+
+FLIPPED = ((1, 0, 0), (0, 1, 0), (0, 0, -1))
+
+
+def test_render_visible(guard):
+    assert guard.render_visible(False, [])
+    assert not guard.render_visible(True, [True])
+    assert not guard.render_visible(False, [False, False])
+    assert guard.render_visible(False, [False, True])
+
+
+def test_text_hidden_then_visible_and_mirrored_is_caught(guard):
+    title = _Text("BackwardsTitle", FLIPPED, hidden_on={1, 2})
+    result = guard._inspect_text(_Scene([title]), 1, 3)
+    assert result == (["BackwardsTitle"], [3], [])
+
+
+def test_text_hidden_for_whole_range_is_ignored(guard):
+    title = _Text("Hidden", FLIPPED, hidden_on={1, 2, 3})
+    assert guard._inspect_text(_Scene([title]), 1, 3) == ([], [], [])
+
+
+def test_text_visible_only_before_it_is_mirrored_is_not_flagged_later(guard):
+    title = _Text("Gone", FLIPPED, hidden_on={2, 3})
+    assert guard._inspect_text(_Scene([title]), 1, 3) == (["Gone"], [1], [])
+
+
+def test_text_in_hidden_collection_is_ignored(guard):
+    sub = _Coll("Sub", hide_render=True)
+    root = _Coll("Scene Collection")
+    layer = _LayerColl(root, [_LayerColl(sub)])
+    title = _Text("Title", FLIPPED, collections=[sub])
+    assert guard._inspect_text(_Scene([title], layer), 1, 2) == ([], [], [])
+
+
+def test_text_in_excluded_collection_is_ignored(guard):
+    sub = _Coll("Sub")
+    layer = _LayerColl(_Coll("Scene Collection"), [_LayerColl(sub, exclude=True)])
+    title = _Text("Title", FLIPPED, collections=[sub])
+    assert guard._inspect_text(_Scene([title], layer), 1, 2) == ([], [], [])
+
+
+def test_text_inherits_hidden_ancestor_collection(guard):
+    parent, child = _Coll("Parent", hide_render=True), _Coll("Child")
+    layer = _LayerColl(_Coll("Scene Collection"), [_LayerColl(parent, [_LayerColl(child)])])
+    title = _Text("Title", FLIPPED, collections=[child])
+    assert guard._inspect_text(_Scene([title], layer), 1, 2) == ([], [], [])
+
+
+def test_text_in_collection_that_becomes_visible_mid_range_is_caught(guard):
+    sub = _Coll("Sub", hide_render=True)
+    sub.hidden_on = {1, 2}
+    layer = _LayerColl(_Coll("Scene Collection"), [_LayerColl(sub)])
+    title = _Text("Title", FLIPPED, collections=[sub])
+    scene = _Scene([title], layer)
+    scene.collections = [sub]
+    assert guard._inspect_text(scene, 1, 3) == (["Title"], [3], [])
+
+
+def test_text_visible_via_any_of_its_collections(guard):
+    hidden, shown = _Coll("Hidden", hide_render=True), _Coll("Shown")
+    layer = _LayerColl(_Coll("Scene Collection"), [_LayerColl(hidden), _LayerColl(shown)])
+    title = _Text("Title", FLIPPED, collections=[hidden, shown])
+    assert guard._inspect_text(_Scene([title], layer), 1, 1) == (["Title"], [1], [])
+
+
+def test_visible_text_without_camera_raises(guard):
+    scene = _Scene([_Text("Title", IDENTITY)])
+    scene.camera = None
+    with pytest.raises(RuntimeError):
+        guard._inspect_text(scene, 1, 1)
+
+
 def test_parse_frames(guard):
     assert guard.parse_frames("3-12") == (3, 12)
     with pytest.raises(ValueError):
