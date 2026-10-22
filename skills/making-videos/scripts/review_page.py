@@ -188,10 +188,14 @@ def _checks_table(checks: Any) -> str:
 def _verdict(data: dict) -> str:
     passed = bool(data.get("passed"))
     attempts = data.get("attempt")
+    failed = data.get("failed_attempts")
+    label = ""
+    if attempts is not None:
+        label = " (attempt %s%s)" % (attempts, " (%s failed)" % failed if failed is not None else "")
     return "<p class=\"verdict %s\"><strong>%s</strong>%s</p>" % (
         "pass" if passed else "fail",
         "Verify passed" if passed else "Verify failed",
-        esc(" (attempt %s)" % attempts) if attempts is not None else "",
+        esc(label),
     )
 
 
