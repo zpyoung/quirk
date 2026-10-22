@@ -1,6 +1,6 @@
 # Logic spec: `making-videos`, a local-first video skill
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: touches >3 source files across skill docs, scripts, and tests)
 
 On 2026-10-22 we ran seven parallel trials of a Reddit post's Claude Code video stack (HyperFrames,
 Remotion, GSAP skills, the LottieFiles motion-design skill, Blender MCP) in the `vst-t*` Orca worktrees
@@ -186,8 +186,9 @@ installed.
 
 ### Strict verify checks
 
-Verify runs on frames and audio decoded from the rendered MP4. Every check produces a measured number
-in the version's verify results.
+Verify takes each check from the source that can see it (see Amendments): the rendered MP4 and its
+logs, plus HyperFrames `check` on the page for contrast and title-safe. Every check produces a
+measured number in the version's verify results.
 
 | Check | Passes when |
 |---|---|
@@ -338,4 +339,11 @@ telemetry.
 
 ## Status & amendments
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-22, assumed (question timed out, recommended default applied): verify takes each check from
+  the source that can see it, not all from the decoded MP4. Contrast and title-safe come from
+  HyperFrames `check` on the page, which knows where text is. Fonts come from a static check that
+  tokens are inlined, the render log's font-injection line, and the agent viewing frames decoded from
+  the MP4. Loudness, voice sync, Blender and outside calls come from the MP4 and the logs. Raw MP4
+  pixels can't locate text, so the original wording couldn't be built as written.
