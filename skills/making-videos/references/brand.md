@@ -69,7 +69,8 @@ brand, so re-save a confirmed brand with `--confirm`.
 ## First video: extract and save
 
 Do this when `studio.py brand show --product P` prints `"brand": null`, or a brand with `confirmed: false`
-(a draft whose storyboard was never approved).
+(a draft whose storyboard was never approved). If the brand is already confirmed, reuse it and skip steps 6 and 8: there
+is no draft file to save, and studio folders are shared across runs, so another run may have confirmed it since you looked.
 
 1. **Colors.** If the product has no site, CSS or design system, skip the search: propose a palette (ground, ink, accent) and a display and mono type pair that suit it, write them into the draft, and mark them as proposed in what you show. Ask at stop 1 whether to keep them. Otherwise find CSS custom properties first: grep `--[a-z-]+:` in `:root` blocks of `site.css`,
    `tokens.css`, `globals.css`, and theme or Tailwind config files. Keep the product's own token names and
