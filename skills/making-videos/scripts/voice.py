@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -47,6 +48,7 @@ MAX_LINE_CHARS = 42
 MAX_CPS = 20.0
 MIN_CUE_S = 1.0
 PAUSE_BREAK_S = 0.6
+MAX_REFLOW_GROUPS = 4
 SENTENCE_END = re.compile(r"[.!?][\"')\]]*$")
 
 
@@ -144,6 +146,10 @@ def _valid_pronunciations(raw: object) -> dict:
     return raw
 
 
+def _child_env() -> dict:
+    return {k: v for k, v in os.environ.items() if k not in SCRUB_ENV}
+
+
 def _ffmpeg_binary() -> str:
     override = os.environ.get("QUIRK_FFMPEG")
     if override:
@@ -165,7 +171,7 @@ def _require_venv() -> Path:
 
 def _run_worker(args_list: "list[str]", extra_env: Optional[dict] = None) -> dict:
     python = _require_venv()
-    env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV}
+    env = _child_env()
     env["ORT_DISABLE_TELEMETRY"] = "1"
     env["HF_HOME"] = str(cache_root() / "hf")
     env.update(extra_env or {})
@@ -288,36 +294,154 @@ def _group(words: "list[Word]") -> "list[list[Word]]":
     return groups
 
 
+def _chars(words: "list[Word]") -> int:
+    return len(" ".join(w.text for w in words))
+
+
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))
+
+
+def _fast_enough(chars: int, start: float, end: float) -> bool:
+    """True when ``chars`` shown from ``start`` to ``end`` stay within the speed limit, to the millisecond."""
+    return chars * 1000 <= MAX_CPS * (_ms(end) - _ms(start))
+
+
 def _fit(words: "list[Word]", next_start: float) -> float:
     """End time for a cue, stretched to the reading-speed and minimum-length floors.
 
     The end never passes ``next_start``.
     """
     start = words[0].start
-    chars = len(" ".join(w.text for w in words))
-    wanted = max(words[-1].end, start + chars / MAX_CPS, start + MIN_CUE_S)
+    reading = (_ms(start) + math.ceil(_chars(words) * 1000 / MAX_CPS)) / 1000
+    wanted = max(words[-1].end, reading, start + MIN_CUE_S)
     return min(wanted, next_start)
+
+
+def _speed_ok(words: "list[Word]", next_start: float) -> bool:
+    return _fast_enough(_chars(words), words[0].start, _fit(words, next_start))
+
+
+def _chain_ok(parts: "list[list[Word]]", next_start: float) -> bool:
+    for j, part in enumerate(parts):
+        following = parts[j + 1][0].start if j + 1 < len(parts) else next_start
+        if not _speed_ok(part, following):
+            return False
+    return True
+
+
+def _worst_ratio(parts: "list[list[Word]]", next_start: float) -> float:
+    worst = 0.0
+    for j, part in enumerate(parts):
+        following = parts[j + 1][0].start if j + 1 < len(parts) else next_start
+        span = max(_fit(part, following) - part[0].start, 1e-6)
+        worst = max(worst, _chars(part) / span)
+    return worst
+
+
+def _repair(groups: "list[tuple[int, list[Word]]]", i: int) -> "Optional[tuple[int, int, list[list[Word]]]]":
+    """Merge group ``i`` with its neighbours in the same clip and re-split at word boundaries.
+
+    Returns ``(first, last, parts)`` replacing ``groups[first:last + 1]`` with cues that all meet
+    the speed limit, or None when no regrouping of nearby words can.
+    """
+    clip = groups[i][0]
+    lo = i
+    while lo > 0 and groups[lo - 1][0] == clip:
+        lo -= 1
+    hi = i
+    while hi + 1 < len(groups) and groups[hi + 1][0] == clip:
+        hi += 1
+    for size in range(2, min(MAX_REFLOW_GROUPS, hi - lo + 1) + 1):
+        for first in range(i, i - size, -1):
+            last = first + size - 1
+            if first < lo or last > hi:
+                continue
+            words = [w for _, g in groups[first : last + 1] for w in g]
+            next_start = groups[last + 1][1][0].start if last + 1 < len(groups) else float("inf")
+            candidates = [[words]] + [[words[:k], words[k:]] for k in range(1, len(words))]
+            best = None
+            for parts in candidates:
+                if any(_wrap(p) is None for p in parts) or not _chain_ok(parts, next_start):
+                    continue
+                score = (len(parts), _worst_ratio(parts, next_start))
+                if best is None or score < best[0]:
+                    best = (score, parts)
+            if best is not None:
+                return first, last, best[1]
+    return None
+
+
+def _reflow(groups: "list[tuple[int, list[Word]]]") -> "list[tuple[int, list[Word]]]":
+    groups = list(groups)
+    i = 0
+    while i < len(groups):
+        next_start = groups[i + 1][1][0].start if i + 1 < len(groups) else float("inf")
+        if _speed_ok(groups[i][1], next_start):
+            i += 1
+            continue
+        fix = _repair(groups, i)
+        if fix is None:
+            i += 1
+            continue
+        first, last, parts = fix
+        groups[first : last + 1] = [(groups[i][0], part) for part in parts]
+        i = first + len(parts)
+    return groups
+
+
+def _pieces(text: str, start: float, end: float) -> "list[Word]":
+    """``text`` as one Word, or hyphen-broken pieces of at most 42 characters sharing its time span."""
+    if len(text) <= MAX_LINE_CHARS:
+        return [Word(text, start, end)]
+    size = MAX_LINE_CHARS - 1
+    chunks = [text[i : i + size] + "-" for i in range(0, len(text) - MAX_LINE_CHARS, size)]
+    chunks.append(text[size * len(chunks) :])
+    total = sum(len(c) for c in chunks)
+    words, cursor = [], start
+    for n, chunk in enumerate(chunks):
+        stop = end if n == len(chunks) - 1 else cursor + (end - start) * len(chunk) / total
+        words.append(Word(chunk, cursor, stop))
+        cursor = stop
+    return words
 
 
 def build_cues(clips: "list[tuple[float, list[dict]]]") -> "list[Cue]":
     """Cues for ``(start_s, words)`` clips on the video timeline.
 
-    Each cue holds at most two lines of 42 characters and is stretched to 20 characters per second
-    and 1.0 s, using only the silence before the next cue. Cues break at sentence ends, pauses of
-    0.6 s or more, clip boundaries and the line limits, so a cue that cannot be stretched far
-    enough is speech faster than 20 characters per second and is left at its spoken length.
+    Each cue holds at most two lines of 42 characters; a longer word is broken with a hyphen. Cues
+    are stretched to 20 characters per second and 1.0 s using only the silence before the next
+    cue. Cues break at sentence ends, pauses of 0.6 s or more, clip boundaries and the line limits;
+    a cue still too fast is regrouped with its neighbours in the same clip. Speech that is faster
+    than 20 characters per second even then leaves an over-limit cue, which ``speed_violations``
+    reports.
     """
-    groups: "list[list[Word]]" = []
-    for offset, raw in clips:
-        words = [Word(str(w["text"]), offset + float(w["start"]), offset + float(w["end"])) for w in raw]
-        groups.extend(_group(words))
-    groups.sort(key=lambda g: g[0].start)
+    groups: "list[tuple[int, list[Word]]]" = []
+    for index, (offset, raw) in enumerate(clips):
+        words: "list[Word]" = []
+        for w in raw:
+            words.extend(_pieces(str(w["text"]), offset + float(w["start"]), offset + float(w["end"])))
+        groups.extend((index, g) for g in _group(words))
+    groups.sort(key=lambda g: g[1][0].start)
+    groups = _reflow(groups)
     cues: "list[Cue]" = []
-    for i, group in enumerate(groups):
-        next_start = groups[i + 1][0].start if i + 1 < len(groups) else float("inf")
+    for i, (_, group) in enumerate(groups):
+        next_start = groups[i + 1][1][0].start if i + 1 < len(groups) else float("inf")
         end = _fit(group, next_start)
         cues.append(Cue(group[0].start, end, _wrap(group) or [" ".join(w.text for w in group)]))
     return cues
+
+
+def speed_violations(cues: "list[Cue]") -> "list[dict]":
+    """Cues shown faster than 20 characters per second, as ``{cue, start, end, cps}`` (cue is 1-based)."""
+    found = []
+    for n, cue in enumerate(cues, 1):
+        chars = len(" ".join(cue.lines))
+        if not _fast_enough(chars, cue.start, cue.end):
+            seconds = (_ms(cue.end) - _ms(cue.start)) / 1000
+            cps = round(chars / seconds, 2) if seconds > 0 else None
+            found.append({"cue": n, "start": round(cue.start, 3), "end": round(cue.end, 3), "cps": cps})
+    return found
 
 
 def _timestamp(seconds: float) -> str:
@@ -345,7 +469,7 @@ def _burn(srt: Path, video: Path, out: Path) -> None:
     ffmpeg = _ffmpeg_binary()
     missing = {"missing": "ffmpeg subtitles filter", "fix": FFMPEG_FIX}
     try:
-        probe = run([ffmpeg, "-hide_banner", "-filters"], timeout=60)
+        probe = run([ffmpeg, "-hide_banner", "-filters"], env=_child_env(), timeout=60)
     except FileNotFoundError:
         _fail(f"ffmpeg not found: {ffmpeg}", EXIT_MISSING_TOOL, **missing)
     except Exception as exc:
@@ -368,7 +492,7 @@ def _burn(srt: Path, video: Path, out: Path) -> None:
         str(out),
     ]
     try:
-        proc = run(argv, timeout=FFMPEG_TIMEOUT_S)
+        proc = run(argv, env=_child_env(), timeout=FFMPEG_TIMEOUT_S)
     except Exception as exc:
         _fail(f"ffmpeg did not finish: {type(exc).__name__}: {exc}", srt=str(srt))
     if proc.returncode != 0:
@@ -398,6 +522,14 @@ def _cmd_captions(args: argparse.Namespace) -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_srt(cues), encoding="utf-8")
+    slow = speed_violations(cues)
+    if slow:
+        message = (
+            f"{len(slow)} caption cue(s) exceed {MAX_CPS:g} characters per second because the "
+            "narration is that fast; slow the narration or shorten the line, then rerun"
+        )
+        print(message, file=sys.stderr)
+        emit({"ok": False, "error": message, "srt": str(out), "cps_violations": slow}, EXIT_FAILED)
     burned = None
     if args.burn:
         _burn(out, Path(args.burn), Path(args.burned))
