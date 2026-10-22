@@ -33,6 +33,7 @@ from _mv_common import (  # noqa: E402
     EXIT_USAGE,
     emit,
     load_brief,
+    scrubbed_env,
     studio_root,
     venv_python,
 )
@@ -232,13 +233,35 @@ def parse_check_args(values: "list[str]") -> "list[tuple[Optional[str], Path, ob
     return parsed
 
 
-def _findings(doc) -> "list[dict]":
-    out = []
-    if isinstance(doc, dict):
-        for section in doc.values():
-            if isinstance(section, dict) and isinstance(section.get("findings"), list):
-                out.extend(f for f in section["findings"] if isinstance(f, dict))
-    return out
+def _section_findings(doc, section: str) -> "list[dict]":
+    body = doc.get(section) if isinstance(doc, dict) else None
+    items = body.get("findings") if isinstance(body, dict) else None
+    return [f for f in items if isinstance(f, dict)] if isinstance(items, list) else []
+
+
+def _evidence_problem(doc, section: str, needs_enabled: bool) -> Optional[str]:
+    """What is missing from ``doc`` for ``section`` to count as an executed check, or ``None``."""
+    if not isinstance(doc, dict):
+        return "is not a JSON object"
+    if doc.get("error"):
+        return "reports a tool error: %s" % str(doc["error"])[:120]
+    body = doc.get(section)
+    if not isinstance(body, dict):
+        return "has no %r section" % section
+    if needs_enabled and body.get("enabled") is not True:
+        return "has %r but it is not enabled" % section
+    if not isinstance(body.get("findings"), list):
+        return "has no %r findings list" % section
+    return None
+
+
+def _evidence_problems(docs, section: str, needs_enabled: bool) -> "list[str]":
+    problems = []
+    for _, path, doc in docs:
+        reason = _evidence_problem(doc, section, needs_enabled)
+        if reason:
+            problems.append("%s %s" % (path, reason))
+    return problems
 
 
 def _finding_ratio(finding: dict) -> Optional[float]:
@@ -257,10 +280,16 @@ def check_contrast(project: Path, version: str, docs: "list[tuple[Optional[str],
             "no check JSON passed; run `%s > %s` and pass it with --check-json"
             % (cmd, shlex.quote(str(project / version / "check.json"))),
         )
+    problems = _evidence_problems(docs, "contrast", True)
+    if problems:
+        return make_check(
+            "contrast", "fail", None, {"failing": 0},
+            "check JSON is not a completed contrast run: %s" % "; ".join(problems),
+        )
     seen = set()
     failing = []
     for _, _, doc in docs:
-        for finding in _findings(doc):
+        for finding in _section_findings(doc, "contrast"):
             if finding.get("code") != CONTRAST_CODE:
                 continue
             key = (finding.get("sourceFile"), finding.get("selector"), finding.get("text"), finding.get("requiredRatio"))
@@ -291,12 +320,18 @@ def check_title_safe(project: Path, version: str, docs: "list[tuple[Optional[str
     how = "run each, then pass them as --check-json top=FILE bottom=FILE left=FILE right=FILE: " + " ; ".join(band_cmds)
     if not docs:
         return make_check("title_safe", "fail", None, {"collisions": 0}, "no check JSON passed; " + how)
+    problems = _evidence_problems(docs, "layout", False)
+    if problems:
+        return make_check(
+            "title_safe", "fail", None, {"collisions": 0},
+            "check JSON is not a completed layout run: %s; %s" % ("; ".join(problems), how),
+        )
     collisions = []
     covered = set()
     for band, _, doc in docs:
         if band:
             covered.add(band)
-        for finding in _findings(doc):
+        for finding in _section_findings(doc, "layout"):
             if finding.get("code") == CAPTION_ZONE_CODE:
                 collisions.append((band, finding))
     if collisions:
@@ -384,7 +419,7 @@ def probe_video(mp4: Path) -> dict:
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream=avg_frame_rate,r_frame_rate,width,height,duration", "-show_entries", "format=duration",
          "-of", "json", str(mp4)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=scrubbed_env(),
     )
     try:
         data = json.loads(proc.stdout or "{}")
@@ -421,7 +456,7 @@ def check_loudness(mp4: Path, narrated: bool) -> dict:
         return make_check("loudness", "skip", None, threshold, "silent video (brief.narration is false)")
     proc = subprocess.run(
         ["ffmpeg", "-nostats", "-i", str(mp4), "-af", "ebur128=peak=true", "-f", "null", "-"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=scrubbed_env(),
     )
     lufs, peak = parse_ebur128(proc.stderr)
     if lufs is None or peak is None:
@@ -479,7 +514,7 @@ def collect_audio(project: Path, beats: "list[dict]", supplied: "dict[str, Path]
             proc = subprocess.run(
                 [sys.executable, str(HF_PY), "--project", str(project), "--", "audio", str(clip_path),
                  "--only", "loudness,onsets,silence,envelope", "--hop-ms", "10", "--json"],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True, timeout=300, env=scrubbed_env(),
             )
             if proc.returncode == EXIT_MISSING_TOOL:
                 return items, "hf.py reported a missing tool: %s" % (proc.stdout.strip() or proc.stderr.strip())[:200], True
@@ -515,7 +550,8 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
         "audio": items, "beats": [dict(b, clip_key=b["clip"]) for b in beats],
     }
     try:
-        proc = subprocess.run([str(py), str(WORKER_PY)], input=json.dumps(request), capture_output=True, text=True, timeout=900)
+        proc = subprocess.run([str(py), str(WORKER_PY)], input=json.dumps(request), capture_output=True, text=True, timeout=900,
+                              env=scrubbed_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return make_check("sync", "fail", None, threshold, "media_worker did not run: %s" % exc)
     try:
@@ -544,8 +580,12 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
     if flagged:
         detail += "; flagged (no audio onset near the expected time, expected time used): %s" % ", ".join(flagged)
     measured = {
-        "worst_frames": worst,
-        "beats": [{k: r.get(k) for k in ("id", "via", "offset_frames")} for r in rows],
+        "worst_frames": round(worst, 2),
+        "beats": [
+            dict({k: r.get(k) for k in ("id", "via")},
+                 offset_frames=None if r.get("offset_frames") is None else round(r["offset_frames"], 2))
+            for r in rows
+        ],
     }
     return make_check("sync", "fail" if problems else "pass", measured, threshold, detail)
 
@@ -555,7 +595,7 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
 def _grab(mp4: Path, at: float, out: Path) -> None:
     proc = subprocess.run(
         ["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", "%.3f" % at, "-i", str(mp4), "-frames:v", "1", str(out)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=scrubbed_env(),
     )
     if proc.returncode != 0 or not out.is_file():
         raise RuntimeError("ffmpeg could not grab a frame at %.3f s: %s" % (at, proc.stderr.strip()[-200:]))
@@ -581,7 +621,7 @@ def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]
             ["ffmpeg", "-nostdin", "-v", "error", "-y", "-framerate", "1", "-i", str(work / "s%02d.png"),
              "-vf", "scale=%d:-1,tile=%dx%d" % (SHEET_TILE_WIDTH, SHEET_COLUMNS, SHEET_ROWS),
              "-frames:v", "1", str(sheet)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=scrubbed_env(),
         )
         if proc.returncode != 0 or not sheet.is_file():
             raise RuntimeError("ffmpeg could not tile the contact sheet: %s" % proc.stderr.strip()[-200:])

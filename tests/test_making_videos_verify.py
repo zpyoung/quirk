@@ -252,7 +252,7 @@ def test_contrast_fails_with_count_and_worst_ratio(studio):
 
 
 def test_contrast_ratio_falls_back_to_the_message(tmp_path):
-    doc = {"contrast": {"findings": [
+    doc = {"contrast": {"enabled": True, "findings": [
         {"code": "contrast_aa_failure", "message": "Contrast is 2.10:1; WCAG AA requires 4.5:1.", "text": "x"},
     ]}}
     s = Studio(tmp_path)
@@ -298,6 +298,62 @@ def test_unreadable_check_json_is_a_usage_error(studio, tmp_path):
     bad = write_json(tmp_path / "bad.json", "no json here")
     code, out = studio.run(check_args=[bad])
     assert code == 2 and "bad.json" in out["error"]
+
+
+def _every_band(tmp_path: Path, doc: object) -> list:
+    path = write_json(tmp_path / "doc.json", doc)
+    return ["%s=%s" % (band, path) for band in BANDS]
+
+
+@pytest.mark.parametrize("doc", [
+    {"error": "browser launch failed"},
+    {"ok": False, "error": "browser failed to launch"},
+    {},
+    {"ok": True},
+    [],
+])
+def test_check_json_without_results_fails_contrast_and_title_safe(studio, tmp_path, doc):
+    code, out = studio.run(check_args=_every_band(tmp_path, doc))
+    assert code == 1
+    for name in ("contrast", "title_safe"):
+        check = check_of(out, name)
+        assert check["status"] == "fail", check
+        assert "doc.json" in check["detail"]
+
+
+def test_a_tool_error_next_to_complete_sections_still_fails(studio, tmp_path):
+    doc = json.loads((FIX / "check_clean.json").read_text())
+    doc["error"] = "partial run"
+    code, out = studio.run(check_args=_every_band(tmp_path, doc))
+    assert check_of(out, "contrast")["status"] == "fail"
+    assert check_of(out, "title_safe")["status"] == "fail"
+
+
+def test_contrast_needs_the_enabled_flag(studio, tmp_path):
+    doc = json.loads((FIX / "check_clean.json").read_text())
+    doc["contrast"]["enabled"] = False
+    code, out = studio.run(check_args=_every_band(tmp_path, doc))
+    contrast = check_of(out, "contrast")
+    assert contrast["status"] == "fail" and "enabled" in contrast["detail"]
+    assert check_of(out, "title_safe")["status"] == "pass"
+
+
+def test_title_safe_needs_a_layout_findings_list_in_every_band(studio, tmp_path):
+    doc = json.loads((FIX / "check_clean.json").read_text())
+    del doc["layout"]["findings"]
+    bad = write_json(tmp_path / "left.json", doc)
+    code, out = studio.run(check_args=studio.checks[:1] + studio.checks[2:] + ["left=%s" % bad])
+    safe = check_of(out, "title_safe")
+    assert safe["status"] == "fail" and "left.json" in safe["detail"] and "layout" in safe["detail"]
+    assert check_of(out, "contrast")["status"] == "pass"
+
+
+def test_an_invalid_band_document_does_not_count_as_covered(studio, tmp_path):
+    bad = write_json(tmp_path / "left.json", {"error": "crashed"})
+    code, out = studio.run(check_args=studio.checks[:2] + studio.checks[3:] + ["left=%s" % bad])
+    safe = check_of(out, "title_safe")
+    assert safe["status"] == "fail"
+    assert "left.json" in safe["detail"]
 
 
 # loudness ---------------------------------------------------------------------------------------
@@ -699,3 +755,64 @@ def test_worker_main_reports_a_request_error(tmp_path):
     proc = subprocess.run([sys.executable, str(WORKER_PY)], input="not json", capture_output=True, text=True)
     assert proc.returncode == 1
     assert "error" in json.loads(proc.stdout)
+
+
+def test_worker_keeps_full_precision_offsets():
+    worker = _load_worker()
+    frames = blank(6)
+    for i in (3, 4, 5):
+        frames[i][:, :] = 200
+    worker.decode_window = lambda *a, **k: frames
+    worker.select_onset = lambda *a, **k: (2 / 24, "silence", False)
+    report = worker.analyse({
+        "mp4": "x.mp4", "fps": 24, "width": 80, "height": 40, "audio": {"a": {}},
+        "beats": [{"id": "b", "clip_key": "a", "expected_s": 0.5, "baseline_s": 0.0, "region": [0, 0, 80, 40]}],
+    })
+    row = report["beats"][0]
+    assert row["offset_s"] == pytest.approx(1 / 24, abs=1e-12)
+    assert row["offset_frames"] == pytest.approx(1.0, abs=1e-9)
+
+
+def test_worker_ffmpeg_child_is_scrubbed_of_keys(monkeypatch):
+    worker = _load_worker()
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    monkeypatch.setattr(worker.subprocess, "run", fake_run)
+    worker.decode_window("x.mp4", 0, 1, 24.0, 4, 4)
+    assert "GEMINI_API_KEY" not in seen["env"]
+
+
+def test_sync_passes_a_beat_exactly_one_frame_off_at_full_precision(tmp_path):
+    s = Studio(tmp_path)
+    shim = s.cache / "venv" / "bin" / "python"
+    shim.parent.mkdir(parents=True)
+    row = {"id": "label", "via": "silence", "offset_s": 1 / 30, "offset_frames": 1.0}
+    shim.write_text("#!/bin/sh\ncat >/dev/null\necho '%s'\n" % json.dumps({"beats": [row]}))
+    shim.chmod(0o755)
+    beats = beats_file(tmp_path / "beats.json")
+    audio = write_json(tmp_path / "vo.audio.json", audio_doc())
+    code, out = s.run("--beats", beats, "--audio-json", "assets/vo.wav=%s" % audio)
+    sync = check_of(out, "sync")
+    assert sync["status"] == "pass", sync
+    assert sync["measured"]["worst_frames"] == 1.0
+
+
+def test_media_children_never_see_provider_or_gemini_keys(tmp_path):
+    s = Studio(tmp_path)
+    log = tmp_path / "env.log"
+    for name in ("ffmpeg", "ffprobe"):
+        path = s.bin / name
+        body = path.read_text().split("\n", 1)[1]
+        path.write_text('#!/bin/sh\nenv >> "$ENV_LOG"\n' + body)
+    keys = {k: "secret" for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY")}
+    code, out = s.run(env=s.env(ENV_LOG=str(log), **keys))
+    assert code == 0, out
+    text = log.read_text()
+    assert "HOME=" in text
+    for key in keys:
+        assert key not in text

@@ -280,3 +280,25 @@ def test_common_paths_honor_env(monkeypatch, tmp_path):
     assert common.venv_python() == tmp_path / "c" / "venv" / "bin" / "python"
     monkeypatch.delenv("QUIRK_STUDIO")
     assert common.studio_root().name == "Studio"
+
+
+def test_scrubbed_env_drops_every_scrub_variable_and_keeps_the_rest(monkeypatch):
+    common = _common()
+    for name in common.SCRUB_ENV:
+        monkeypatch.setenv(name, "secret")
+    monkeypatch.setenv("KEEP_ME", "yes")
+    env = common.scrubbed_env({"EXTRA": "1", "OPENAI_API_KEY": "sneaky"})
+    assert not set(common.SCRUB_ENV) & set(env)
+    assert env["KEEP_ME"] == "yes" and env["EXTRA"] == "1"
+    assert not set(common.SCRUB_ENV) & set(common.scrubbed_env())
+
+
+def test_run_hides_scrub_variables_from_the_child(monkeypatch):
+    common = _common()
+    for name in common.SCRUB_ENV:
+        monkeypatch.setenv(name, "secret")
+    probe = [sys.executable, "-c", "import json,os;print(json.dumps(sorted(os.environ)))"]
+    inherited = json.loads(common.run(probe).stdout)
+    assert not set(common.SCRUB_ENV) & set(inherited)
+    explicit = json.loads(common.run(probe, env={"GEMINI_API_KEY": "x", "ELEVENLABS_API_KEY": "y", "OK": "1"}).stdout)
+    assert "OK" in explicit and not set(common.SCRUB_ENV) & set(explicit)
