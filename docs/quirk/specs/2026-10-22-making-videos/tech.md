@@ -23,7 +23,7 @@ skills/making-videos/
   references/cloud.md          opt-in providers, licensing/attribution
   references/long-form.md      > ~60 s pieces, scene subagents from the locked kit
   evals/trigger-evals.json     trigger eval set
-  scripts/_common.py           shared: paths, pins, JSON emit, subprocess helpers   (stdlib)
+  scripts/_mv_common.py           shared: paths, pins, JSON emit, subprocess helpers   (stdlib)
   scripts/studio.py            studio/brand/project/version bookkeeping              (stdlib)
   scripts/hf.py                the HyperFrames wrapper                               (stdlib)
   scripts/doctor.py            tool check + consented installs                       (stdlib)
@@ -97,7 +97,7 @@ QUIRK_STUDIO        default ~/Studio
 QUIRK_VIDEO_CACHE   default ~/.cache/quirk-video
 ```
 
-### `_common.py`
+### `_mv_common.py`
 
 `CONTRACT:`
 ```

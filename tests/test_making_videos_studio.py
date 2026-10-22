@@ -238,7 +238,7 @@ def test_usage_error_is_one_json_object_exit_2(env):
 def test_common_constants():
     sys.path.insert(0, str(SCRIPTS))
     try:
-        import _common
+        import _mv_common as _common
     finally:
         sys.path.remove(str(SCRIPTS))
     assert _common.HYPERFRAMES_VERSION == "0.8.185"
@@ -250,7 +250,7 @@ def test_common_constants():
 def _common():
     sys.path.insert(0, str(SCRIPTS))
     try:
-        import _common
+        import _mv_common as _common
     finally:
         sys.path.remove(str(SCRIPTS))
     return _common

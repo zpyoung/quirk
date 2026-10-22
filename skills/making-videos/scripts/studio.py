@@ -17,7 +17,7 @@ from typing import NoReturn, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _common import (  # noqa: E402
+from _mv_common import (  # noqa: E402
     EXIT_FAILED,
     EXIT_USAGE,
     PROVIDER_KEY_ENV,
