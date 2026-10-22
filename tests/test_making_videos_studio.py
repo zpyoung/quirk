@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import datetime
+import importlib.util
 import json
+import os
+import shutil
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -302,3 +306,76 @@ def test_run_hides_scrub_variables_from_the_child(monkeypatch):
     assert not set(common.SCRUB_ENV) & set(inherited)
     explicit = json.loads(common.run(probe, env={"GEMINI_API_KEY": "x", "ELEVENLABS_API_KEY": "y", "OK": "1"}).stdout)
     assert "OK" in explicit and not set(common.SCRUB_ENV) & set(explicit)
+
+
+_common_spec = importlib.util.spec_from_file_location("mv_common_for_studio_tests", SCRIPTS / "_mv_common.py")
+common = importlib.util.module_from_spec(_common_spec)
+_common_spec.loader.exec_module(common)
+
+
+def make_ca_file(directory: Path, name: str = "ca.pem") -> Path:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl CLI not available")
+    key, cert = directory / f"{name}.key", directory / name
+    subprocess.run(
+        [
+            openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+            "-subj", "/CN=quirk-test-ca", "-keyout", str(key), "-out", str(cert),
+            "-addext", "basicConstraints=critical,CA:TRUE",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert
+
+
+def empty_context() -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
+
+
+@pytest.fixture()
+def clean_tls_env(monkeypatch):
+    for var in ("SSL_CERT_FILE", "SSL_CERT_DIR", "QUIRK_CA_FALLBACKS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(common, "_default_context", empty_context)
+
+
+def test_ssl_context_prefers_ssl_cert_file(clean_tls_env, monkeypatch, tmp_path):
+    ca = make_ca_file(tmp_path)
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca))
+    ctx = common.ssl_context()
+    assert ctx.cert_store_stats()["x509_ca"] == 1
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+def test_ssl_context_falls_back_to_first_existing_bundle(clean_tls_env, monkeypatch, tmp_path):
+    ca = make_ca_file(tmp_path)
+    monkeypatch.setenv("QUIRK_CA_FALLBACKS", os.pathsep.join([str(tmp_path / "missing.pem"), str(ca)]))
+    ctx = common.ssl_context()
+    assert ctx.cert_store_stats()["x509_ca"] == 1
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+def test_ssl_context_ignores_a_missing_ssl_cert_file(clean_tls_env, monkeypatch, tmp_path):
+    ca = make_ca_file(tmp_path)
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "nope.pem"))
+    monkeypatch.setenv("QUIRK_CA_FALLBACKS", str(ca))
+    assert common.ssl_context().cert_store_stats()["x509_ca"] == 1
+
+
+def test_ssl_context_keeps_a_default_context_that_has_roots(clean_tls_env, monkeypatch, tmp_path):
+    ca = make_ca_file(tmp_path)
+    loaded = ssl.create_default_context(cafile=str(ca))
+    monkeypatch.setattr(common, "_default_context", lambda: loaded)
+    monkeypatch.setenv("QUIRK_CA_FALLBACKS", str(tmp_path / "unused.pem"))
+    assert common.ssl_context() is loaded
+
+
+def test_ssl_context_without_any_bundle_still_verifies(clean_tls_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("QUIRK_CA_FALLBACKS", str(tmp_path / "missing.pem"))
+    ctx = common.ssl_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert ctx.cert_store_stats()["x509_ca"] == 0

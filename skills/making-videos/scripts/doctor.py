@@ -40,6 +40,7 @@ from _mv_common import (  # noqa: E402
     cache_root,
     emit,
     run,
+    ssl_context,
     venv_python,
 )
 
@@ -282,7 +283,7 @@ def _download(url: str, dest: Path) -> None:
     """Stream ``url`` to a temp file beside ``dest`` and rename it on success."""
     tmp = dest.with_name(dest.name + ".part")
     try:
-        with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as fh:
+        with urllib.request.urlopen(url, timeout=60, context=ssl_context()) as resp, open(tmp, "wb") as fh:
             shutil.copyfileobj(resp, fh, 1024 * 1024)
         os.replace(tmp, dest)
     except (OSError, ValueError) as exc:

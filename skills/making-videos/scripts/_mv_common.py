@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,46 @@ def venv_python() -> Path:
 def project_dir(name: str) -> Path:
     """The project folder for a dated name such as ``2026-10-22-launch``."""
     return studio_root() / "videos" / name
+
+
+CA_BUNDLE_FALLBACKS = (
+    "/etc/ssl/cert.pem",
+    "/opt/homebrew/etc/openssl@3/cert.pem",
+    "/usr/local/etc/openssl@3/cert.pem",
+)
+
+
+def _default_context() -> ssl.SSLContext:
+    return ssl.create_default_context()
+
+
+def ssl_context() -> ssl.SSLContext:
+    """A certificate-verifying TLS context that works on Pythons with no CA bundle of their own.
+
+    Resolution order: ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` when set to something that exists; the
+    interpreter's default context when it has CA certificates loaded; else the first existing
+    bundle among ``CA_BUNDLE_FALLBACKS`` (macOS ``/etc/ssl/cert.pem``, Homebrew OpenSSL). When none
+    exists the default context is returned as is. Verification is never disabled.
+    ``QUIRK_CA_FALLBACKS`` (an ``os.pathsep`` list of files) replaces the fallback list so tests can
+    point it at a temporary bundle.
+    """
+    cafile = os.environ.get("SSL_CERT_FILE") or ""
+    capath = os.environ.get("SSL_CERT_DIR") or ""
+    use_file = bool(cafile) and Path(cafile).is_file()
+    use_dir = bool(capath) and Path(capath).is_dir()
+    if use_file or use_dir:
+        return ssl.create_default_context(
+            cafile=cafile if use_file else None, capath=capath if use_dir else None
+        )
+    ctx = _default_context()
+    if ctx.cert_store_stats().get("x509_ca", 0) > 0:
+        return ctx
+    override = os.environ.get("QUIRK_CA_FALLBACKS")
+    fallbacks = tuple(p for p in override.split(os.pathsep) if p) if override is not None else CA_BUNDLE_FALLBACKS
+    for candidate in fallbacks:
+        if Path(candidate).is_file():
+            return ssl.create_default_context(cafile=candidate)
+    return ctx
 
 
 def emit(obj: dict, code: int = 0) -> NoReturn:
