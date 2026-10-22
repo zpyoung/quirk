@@ -26,6 +26,7 @@ case "$*" in
   echo "[Parsed_ebur128_0 @ 0x1] t: 1.0 TARGET:-23 LUFS M: -30 S: -30 I: -30.0 LUFS" >&2
   printf '[Parsed_ebur128_0 @ 0x1] Summary:\\n\\n  Integrated loudness:\\n    I:         %s LUFS\\n' "${FAKE_LUFS:--16.0}" >&2
   printf '    LRA:         0.0 LU\\n\\n  True peak:\\n    Peak:      %s dBFS\\n' "${FAKE_TP:--1.5}" >&2
+  if [ -n "$FAKE_FFMPEG_FAIL" ]; then echo "Conversion failed!" >&2; exit 1; fi
   ;;
 *)
   for last; do :; done
@@ -202,6 +203,20 @@ def test_frames_contact_sheet_and_default_stills(studio):
     assert not [p for p in frames.iterdir() if p.name.startswith(".")]
 
 
+def test_rerunning_with_other_still_times_removes_the_previous_stills(studio):
+    code, first = studio.run()
+    old = [Path(p) for p in first["frames"]["stills"]]
+    assert code == 0 and all(p.is_file() for p in old)
+    other = studio.vdir / "frames" / "demo-16x9" / "notes.txt"
+    other.write_text("keep")
+    code, second = studio.run("--at", "0.5,2")
+    frames = studio.vdir / "frames" / "demo-16x9"
+    assert code == 0
+    assert sorted(p for p in frames.glob("still-*.png")) == sorted(Path(p) for p in second["frames"]["stills"])
+    assert not any(p.is_file() for p in old if p not in map(Path, second["frames"]["stills"]))
+    assert other.is_file()
+
+
 def test_stills_at_given_times(studio):
     code, out = studio.run("--at", "0.5,2,5.5")
     assert code == 0
@@ -260,6 +275,48 @@ def test_fonts_fail_when_fewer_families_injected_than_the_brand_has(tmp_path):
     fonts = check_of(out, "fonts")
     assert fonts["status"] == "fail"
     assert fonts["measured"] == {"injected": 1, "required": 2, "unresolved": 0}
+
+
+def _wrong_family_scenes(s: Studio) -> None:
+    index = s.project / "scenes" / "index.html"
+    index.write_text(index.read_text().replace('"Outfit"', '"Different Display"'))
+
+
+def test_fonts_fail_when_the_log_names_other_families_than_the_brand(tmp_path):
+    s = Studio(tmp_path)
+    (s.vdir / "render.log").write_text(
+        '[INFO] [Compiler] Fetched 9 font face(s) for "Different Display" from Google Fonts\n'
+        '[INFO] [Compiler] Fetched 9 font face(s) for "IBM Plex Mono" from Google Fonts\n'
+        "[INFO] [Compiler] Injected deterministic @font-face rules for 2 requested font families\n")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail"
+    assert "Outfit" in fonts["detail"] and "IBM Plex Mono" not in fonts["detail"].split("names:")[0]
+
+
+def test_fonts_name_comparison_ignores_case(tmp_path):
+    s = Studio(tmp_path)
+    (s.vdir / "render.log").write_text(
+        '[INFO] [Compiler] Fetched 9 font face(s) for "outfit" from Google Fonts\n'
+        '[INFO] [Compiler] Fetched 9 font face(s) for "ibm plex mono" from Google Fonts\n'
+        "[INFO] [Compiler] Injected deterministic @font-face rules for 2 requested font families\n")
+    code, out = s.run()
+    assert check_of(out, "fonts")["status"] == "pass"
+
+
+def test_fonts_fail_when_a_count_only_log_meets_the_count_but_a_token_is_another_family(tmp_path):
+    s = Studio(tmp_path, render_log="render_other_warn.log")
+    _wrong_family_scenes(s)
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "fail"
+    assert "--font-display" in fonts["detail"] and "Different Display" in fonts["detail"]
+
+
+def test_fonts_pass_when_a_count_only_log_meets_the_count_and_tokens_are_brand_families(tmp_path):
+    s = Studio(tmp_path, render_log="render_other_warn.log")
+    code, out = s.run()
+    assert check_of(out, "fonts")["status"] == "pass"
 
 
 def test_fonts_fail_on_a_font_shorthand_that_uses_a_font_token(tmp_path):
@@ -424,6 +481,26 @@ def test_a_tool_error_next_to_complete_sections_still_fails(studio, tmp_path):
     assert check_of(out, "title_safe")["status"] == "fail"
 
 
+@pytest.mark.parametrize("where", ["layout", "contrast"])
+def test_a_runtime_failure_finding_fails_contrast_and_title_safe(studio, tmp_path, where):
+    doc = json.loads((FIX / "check_clean.json").read_text())
+    doc[where]["ok"] = False
+    doc[where]["findings"] = [{"code": "check_runtime_failure", "severity": "error", "message": "Audit exceeded 120 seconds"}]
+    code, out = studio.run(check_args=_every_band(tmp_path, doc))
+    assert code == 1
+    for name in ("contrast", "title_safe"):
+        check = check_of(out, name)
+        assert check["status"] == "fail", check
+        assert "runtime failure" in check["detail"] and "120 seconds" in check["detail"]
+
+
+def test_a_runtime_section_with_errors_fails_title_safe(studio, tmp_path):
+    doc = json.loads((FIX / "check_clean.json").read_text())
+    doc["runtime"] = {"ok": False, "errors": ["page crashed"]}
+    code, out = studio.run(check_args=_every_band(tmp_path, doc))
+    assert check_of(out, "title_safe")["status"] == "fail"
+
+
 def test_contrast_needs_the_enabled_flag(studio, tmp_path):
     doc = json.loads((FIX / "check_clean.json").read_text())
     doc["contrast"]["enabled"] = False
@@ -465,6 +542,13 @@ def test_loudness_thresholds(narrated, lufs, peak, status):
     assert loud["status"] == status
     assert loud["measured"] == {"lufs": float(lufs), "true_peak_dbtp": float(peak)}
     assert loud["threshold"] == {"lufs": [-17.0, -15.0], "true_peak_dbtp_max": -1.0}
+
+
+def test_loudness_fails_when_ffmpeg_exits_nonzero_even_with_a_summary(narrated):
+    code, out = narrated.run(env=narrated.env(FAKE_FFMPEG_FAIL="1"))
+    loud = check_of(out, "loudness")
+    assert code == 1 and loud["status"] == "fail"
+    assert "exited 1" in loud["detail"] and "Conversion failed!" in loud["detail"]
 
 
 def test_loudness_is_skipped_for_silent_videos(tmp_path):
@@ -532,6 +616,20 @@ def test_outside_calls_fail_lists_offenders(tmp_path):
     assert code == 1 and calls["status"] == "fail"
     assert "elevenlabs" in calls["detail"] and "pexels" not in calls["detail"]
     assert calls["measured"] == {"elevenlabs": 2}
+
+
+def test_outside_calls_fail_on_a_malformed_line_and_name_it(tmp_path):
+    s = Studio(tmp_path, cloud_allow=["pexels"])
+    shutil.copy(FIX / "calls_ok.jsonl", s.project / "calls.jsonl")
+    with (s.project / "calls.jsonl").open("a") as handle:
+        handle.write('{"provider":"elevenlabs"\n\n{"provider": "pexels"}\nnot json\n')
+    code, out = s.run()
+    calls = check_of(out, "outside_calls")
+    assert code == 1 and calls["status"] == "fail"
+    assert "malformed" in calls["detail"]
+    last = len((s.project / "calls.jsonl").read_text().splitlines())
+    assert calls["measured"]["malformed_lines"] == [last - 3, last]
+    assert ("line %d, %d" % (last - 3, last)) in calls["detail"]
 
 
 def test_outside_calls_fail_when_nothing_is_allowed(tmp_path):

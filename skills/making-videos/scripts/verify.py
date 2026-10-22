@@ -64,6 +64,7 @@ BANDS = {
 }
 CAPTION_ZONE_CODE = "caption_zone_collision"
 CONTRAST_CODE = "contrast_aa_failure"
+RUNTIME_FAILURE_CODE = "check_runtime_failure"
 
 _ASPECT_MP4 = re.compile(r"-(9x16|1x1)\.mp4$", re.I)
 _COMMENTS = re.compile(r"<!--.*?-->|/\*.*?\*/", re.S)
@@ -82,6 +83,9 @@ _LINK_TAG = re.compile(r"<link\b[^>]*>", re.I)
 _REL_STYLESHEET = re.compile(r"""\brel\s*=\s*["']?[^"'>]*\bstylesheet\b""", re.I)
 _HREF = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
 _INJECTED = re.compile(r"Injected deterministic @font-face rules for (\d+) requested font famil", re.I)
+_FONT_VALUE = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:\s*([^;}]*)")
+_FONT_NAMED = re.compile(r"""Fetched\s+\d+\s+font face\(s\) for ["']([^"']+)["']""", re.I)
+_STILL_NAME = re.compile(r"^still-\d+-\d+(?:\.\d+)?s\.png$")
 _RATIO = re.compile(r"Contrast is ([0-9.]+):1")
 _LOUDNESS_I = re.compile(r"^\s*I:\s+(-?[0-9.]+|-inf)\s+LUFS", re.M)
 _LOUDNESS_TP = re.compile(r"^\s*Peak:\s+(-?[0-9.]+|-inf)\s+dBFS", re.M)
@@ -141,6 +145,17 @@ def _inline_definitions(text: str) -> "set[str]":
     return {name for chunk in chunks for name in _FONT_DEF.findall(chunk)}
 
 
+def _inline_values(text: str) -> "dict[str, str]":
+    chunks = _STYLE_BLOCK.findall(text)
+    chunks += [a or b for a, b in _STYLE_ATTR.findall(text)]
+    return {name: value for chunk in chunks for name, value in _FONT_VALUE.findall(chunk)}
+
+
+def _first_family(value: str) -> str:
+    first = value.split(",", 1)[0].strip()
+    return first.strip("\"' \t\r\n").lower()
+
+
 def scenes_dirs(project: Path) -> "list[Path]":
     """Every HyperFrames project folder: ``scenes/`` (16:9) and ``scenes-9x16/``, ``scenes-1x1/`` layout passes."""
     return sorted(p for p in project.iterdir() if p.is_dir() and (p.name == "scenes" or p.name.startswith("scenes-")))
@@ -152,11 +167,14 @@ def scenes_dir_for(project: Path, mp4: Path) -> Path:
     return project / ("scenes-%s" % match.group(1).lower() if match else "scenes")
 
 
-def _scan_scenes_dir(project: Path, scenes: Path) -> "list[str]":
+def _scan_scenes_dir(project: Path, scenes: Path, families: "Optional[set[str]]" = None) -> "list[str]":
     roots = [p for p in (scenes / "index.html", project / "index.html") if p.is_file()]
     root_defs: "set[str]" = set()
+    root_values: "dict[str, str]" = {}
     for root in roots:
-        root_defs |= _inline_definitions(_COMMENTS.sub("", root.read_text(encoding="utf-8", errors="replace")))
+        root_text = _COMMENTS.sub("", root.read_text(encoding="utf-8", errors="replace"))
+        root_defs |= _inline_definitions(root_text)
+        root_values.update(_inline_values(root_text))
     problems = []
     for path in _html_files(scenes):
         text = _COMMENTS.sub("", path.read_text(encoding="utf-8", errors="replace"))
@@ -164,6 +182,15 @@ def _scan_scenes_dir(project: Path, scenes: Path) -> "list[str]":
         missing = sorted(set(_FONT_USE.findall(text)) - defined)
         for name in missing:
             problems.append("%s uses var(%s) but no inline <style> or style= defines it" % (rel(path, project), name))
+        if families is not None:
+            values = dict(root_values, **_inline_values(text))
+            for name in sorted(set(_FONT_USE.findall(text)) & set(values)):
+                first = _first_family(values[name])
+                if first and first not in families:
+                    problems.append(
+                        "%s: font token %s resolves to %r, which is not a brand font family"
+                        % (rel(path, project), name, values[name].split(",", 1)[0].strip().strip("\"'"))
+                    )
         for tag in _LINK_TAG.findall(text):
             if not _REL_STYLESHEET.search(tag):
                 continue
@@ -204,14 +231,15 @@ def _scan_font_shorthand(project: Path, scenes: Path) -> "list[str]":
     return problems
 
 
-def scan_fonts(project: Path) -> "list[str]":
+def scan_fonts(project: Path, families: "Optional[set[str]]" = None) -> "list[str]":
     """Problems with font tokens in the HTML of every ``scenes*/`` folder.
 
     Reports unresolved ``var(--font-*)``, linked token sheets and ``font:`` shorthands that use a font token.
+    With ``families`` (lowercase brand family names) it also reports tokens whose first family is not one of them.
     """
     problems: "list[str]" = []
     for scenes in scenes_dirs(project):
-        problems += _scan_scenes_dir(project, scenes)
+        problems += _scan_scenes_dir(project, scenes, families)
         problems += _scan_font_shorthand(project, scenes)
     return problems
 
@@ -225,29 +253,32 @@ def missing_render_log_problem(project: Path, version: str, mp4: Path, render_lo
         render_log, render_cmd, shlex.quote(str(project / version / "render.log")))
 
 
-def brand_family_count(project: Path, brief: dict) -> "tuple[int, bool]":
-    """Number of font families in the brand and whether brand.json was found."""
+def brand_families(project: Path, brief: dict) -> "tuple[list[str], int, bool]":
+    """Brand font family names, how many families the brand needs, and whether brand.json was found."""
     product = brief.get("product")
     path = studio_root() / "brands" / str(product) / "brand.json"
     try:
         fonts = json.loads(path.read_text(encoding="utf-8")).get("fonts") or {}
     except (OSError, ValueError, AttributeError):
-        return 1, False
-    families = {f.get("family") for f in fonts.values() if isinstance(f, dict) and f.get("family")}
-    return (len(families) or len(fonts) or 1), True
+        return [], 1, False
+    names = sorted({str(f["family"]) for f in fonts.values() if isinstance(f, dict) and f.get("family")})
+    return names, (len(names) or len(fonts) or 1), True
 
 
 def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4: Path) -> dict:
+    names, required, _ = brand_families(project, brief)
+    wanted = {n.lower() for n in names}
     problems = scan_fonts(project)
     scenes = scenes_dir_for(project, mp4)
     if scenes.name != "scenes" and not scenes.is_dir():
         problems.append("%s was rendered from %s/, which does not exist in the project" % (mp4.name, scenes.name))
-    required, _ = brand_family_count(project, brief)
     injected = 0
     if not render_log.is_file():
         problems.append(missing_render_log_problem(project, version, mp4, render_log))
     else:
-        counts = [int(n) for n in _INJECTED.findall(render_log.read_text(encoding="utf-8", errors="replace"))]
+        log_text = render_log.read_text(encoding="utf-8", errors="replace")
+        counts = [int(n) for n in _INJECTED.findall(log_text)]
+        logged = {n.strip().lower() for n in _FONT_NAMED.findall(log_text)}
         injected = max(counts) if counts else 0
         if not counts:
             problems.append(
@@ -259,6 +290,15 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
                 "render log injected %d font famil%s but the brand has %d"
                 % (injected, "y" if injected == 1 else "ies", required)
             )
+        elif wanted and logged:
+            absent = [n for n in names if n.lower() not in logged]
+            if absent:
+                problems.append(
+                    "render log does not show brand font famil%s %s being injected (it names: %s)"
+                    % ("y" if len(absent) == 1 else "ies", ", ".join(absent), ", ".join(sorted(logged)))
+                )
+        elif wanted:
+            problems += [p for p in scan_fonts(project, wanted) if "not a brand font family" in p]
     unresolved = sum(1 for p in problems if "var(" in p or "links stylesheet" in p)
     return make_check(
         "fonts", "fail" if problems else "pass",
@@ -327,12 +367,33 @@ def _section_findings(doc, section: str) -> "list[dict]":
     return [f for f in items if isinstance(f, dict)] if isinstance(items, list) else []
 
 
+def _runtime_failure(doc: dict) -> Optional[str]:
+    """The message of a ``check_runtime_failure`` finding or runtime error list in ``doc``, or ``None``."""
+    for body in doc.values():
+        if not isinstance(body, dict):
+            continue
+        for finding in body.get("findings") if isinstance(body.get("findings"), list) else []:
+            if isinstance(finding, dict) and finding.get("code") == RUNTIME_FAILURE_CODE:
+                return str(finding.get("message") or RUNTIME_FAILURE_CODE)
+    runtime = doc.get("runtime")
+    if isinstance(runtime, dict):
+        errors = runtime.get("errors")
+        if isinstance(errors, list) and errors:
+            return str(errors[0])
+        if isinstance(errors, (int, float)) and errors > 0:
+            return "%d runtime error(s)" % errors
+    return None
+
+
 def _evidence_problem(doc, section: str, needs_enabled: bool) -> Optional[str]:
     """What is missing from ``doc`` for ``section`` to count as an executed check, or ``None``."""
     if not isinstance(doc, dict):
         return "is not a JSON object"
     if doc.get("error"):
         return "reports a tool error: %s" % str(doc["error"])[:120]
+    failure = _runtime_failure(doc)
+    if failure:
+        return "reports a runtime failure, so the audit did not finish: %s" % failure[:120]
     body = doc.get(section)
     if not isinstance(body, dict):
         return "has no %r section" % section
@@ -483,23 +544,33 @@ def check_outside_calls(project: Path, brief: dict) -> dict:
     offenders: "dict[str, int]" = {}
     path = project / "calls.jsonl"
     total = 0
+    malformed: "list[int]" = []
     if path.is_file():
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            if not line.strip():
+                continue
             try:
                 provider = json.loads(line).get("provider")
             except (ValueError, AttributeError):
+                malformed.append(number)
                 continue
             total += 1
             if provider not in allowed:
                 offenders[str(provider)] = offenders.get(str(provider), 0) + 1
-    detail = "%d logged call(s), all to allowed providers" % total
+    problems = []
     if offenders:
-        detail = "calls to providers the brief does not allow: %s" % ", ".join(
+        problems.append("calls to providers the brief does not allow: %s" % ", ".join(
             "%s (%d)" % (p, n) for p, n in sorted(offenders.items())
-        )
+        ))
+    if malformed:
+        problems.append("calls.jsonl has %d malformed line(s), so its calls cannot be audited: line %s" % (
+            len(malformed), ", ".join(str(n) for n in malformed[:10])))
+    measured = dict(offenders)
+    if malformed:
+        measured["malformed_lines"] = malformed
     return make_check(
-        "outside_calls", "fail" if offenders else "pass", offenders, {"cloud_allow": sorted(brief.get("cloud_allow") or [])},
-        detail,
+        "outside_calls", "fail" if problems else "pass", measured, {"cloud_allow": sorted(brief.get("cloud_allow") or [])},
+        "; ".join(problems) if problems else "%d logged call(s), all to allowed providers" % total,
     )
 
 
@@ -550,9 +621,14 @@ def check_loudness(mp4: Path, narrated: bool) -> dict:
         ["ffmpeg", "-nostats", "-i", str(mp4), "-af", "ebur128=peak=true", "-f", "null", "-"],
         capture_output=True, text=True, env=scrubbed_env(),
     )
+    if proc.returncode != 0:
+        return make_check(
+            "loudness", "fail", None, threshold,
+            "ffmpeg exited %d during the loudness measurement: %s" % (proc.returncode, proc.stderr.strip()[-200:]),
+        )
     lufs, peak = parse_ebur128(proc.stderr)
     if lufs is None or peak is None:
-        return make_check("loudness", "fail", None, threshold, "ffmpeg ebur128 reported no loudness; the MP4 may have no audio")
+        return make_check("loudness", "fail", None, threshold, "ffmpeg ebur128 reported no loudness; the MP4 may have no audio: %s" % proc.stderr.strip()[-200:])
     ok = LUFS_RANGE[0] <= lufs <= LUFS_RANGE[1] and peak <= TRUE_PEAK_MAX
     detail = "integrated %.1f LUFS, true peak %.1f dBTP" % (lufs, peak)
     if not ok:
@@ -702,6 +778,9 @@ def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]
     """Contact sheet and stills decoded from the MP4 into ``<vN>/frames/<mp4 stem>/``."""
     frames = vdir / "frames" / mp4.stem
     frames.mkdir(parents=True, exist_ok=True)
+    for old in frames.iterdir():
+        if old.is_file() and _STILL_NAME.match(old.name):
+            old.unlink()
     last = max(info["duration"] - 1.0 / info["fps"], 0.0)
 
     def clamp(t: float) -> float:
