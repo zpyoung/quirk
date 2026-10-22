@@ -3721,11 +3721,6 @@
         host._expandBtn.setAttribute('aria-pressed', 'true');
         host._expandBtn.textContent = 'Close';
       }
-      if (host._trace && host._frameTraceStep) {
-        host._frameTraceStep(true);
-      } else {
-        host._fitBounds(host._bounds, false);
-      }
     } else {
       host.removeAttribute('data-q-flow-expanded');
       host._focusedAfterExpand = false;
@@ -3733,6 +3728,11 @@
         host._expandBtn.setAttribute('aria-pressed', 'false');
         host._expandBtn.textContent = 'Expand';
       }
+    }
+    if (host._trace && host._frameTraceStep) {
+      host._frameTraceStep(true);
+    } else {
+      host._fitBounds(host._bounds, false);
     }
   }
 
