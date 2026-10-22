@@ -6,9 +6,14 @@ prints one JSON object ``{"status", "out", "bytes"}`` (plus a ``preview`` of at 
 characters when ``--out`` is not given, and an ``error`` key on failure). ``--json`` is a file path
 or inline JSON sent as application/json. Diagnostics go to stderr.
 
+A response body larger than ``--max-bytes`` (default 2 GiB) or still arriving after ``--timeout``
+seconds in total (default 300) aborts the call: a partial ``--out`` file is deleted, the log record
+gains an ``aborted`` reason and the bytes read so far, and the exit code is 1. An HTTP error body
+is read only up to 64 KiB.
+
 Exit codes: 0 ok; 1 refused or failed (provider not in the brief's ``cloud_allow``, key env var
 unset, URL scheme or host not allowed for the provider, redirect to a disallowed host, HTTP error
-status, network failure); 2 usage error (including an unknown provider or malformed ``--json``).
+status, response over the size or time limit, network failure); 2 usage error (including an unknown provider or malformed ``--json``).
 
 Credentials come only from the provider's env var (``PROVIDER_KEY_ENV``) and are sent only to the
 provider's API hosts, never to its CDN hosts: ``xi-api-key`` for elevenlabs, ``Authorization:
@@ -28,7 +33,9 @@ import argparse
 import datetime
 import json
 import os
+import socket
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -54,6 +61,9 @@ PREVIEW_CHARS = 2000
 MIN_KEY_FRAGMENT = 4
 CHUNK = 1 << 16
 TIMEOUT_S = 120
+DEFAULT_MAX_BYTES = 2 << 30
+DEFAULT_TOTAL_TIMEOUT_S = 300.0
+ERROR_BODY_CAP = 64 << 10
 USER_AGENT = "quirk-making-videos/1"
 
 PROVIDERS = {
@@ -87,12 +97,36 @@ class _Refused(Exception):
         self.status = status
 
 
+class _Aborted(Exception):
+    """A response that exceeded the size or time limit; ``nbytes`` is what was read before aborting."""
+
+    def __init__(self, reason: str, status: int, nbytes: int) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
+        self.nbytes = nbytes
+
+
 class _Parser(argparse.ArgumentParser):
     """Argument parser whose usage errors are one JSON object on stdout, exit 2."""
 
     def error(self, message: str) -> NoReturn:
         print(f"{self.prog}: error: {message}", file=sys.stderr)
         emit({"error": message}, EXIT_USAGE)
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return number
+
+
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if not number > 0 or number == float("inf"):
+        raise argparse.ArgumentTypeError("must be a finite number greater than 0")
+    return number
 
 
 def _loopback_ok() -> bool:
@@ -255,8 +289,10 @@ def _cmd_call(args: argparse.Namespace) -> None:
         "bytes": 0,
     }
 
-    def finish(status: int, nbytes: int) -> None:
+    def finish(status: int, nbytes: int, aborted: Optional[str] = None) -> None:
         record["status"], record["bytes"] = status, nbytes
+        if aborted:
+            record["aborted"] = aborted
         try:
             log_call(project, record)
         except OSError as exc:
@@ -265,30 +301,48 @@ def _cmd_call(args: argparse.Namespace) -> None:
             emit({"error": message, "request_sent": True, "status": status, "bytes": nbytes}, EXIT_FAILED)
 
     out_path: Optional[Path] = Path(args.out) if args.out else None
+    deadline = time.monotonic() + args.timeout
     try:
-        with opener.open(request, timeout=TIMEOUT_S) as resp:
+        with opener.open(request, timeout=min(TIMEOUT_S, args.timeout)) as resp:
             status = resp.status
             total = 0
             head = b""
             sink = None
             try:
+                declared = resp.headers.get("Content-Length", "")
+                if declared.isdigit() and int(declared) > args.max_bytes:
+                    raise _Aborted(f"response declares {declared} bytes, over --max-bytes {args.max_bytes}",
+                                   status, 0)
                 if out_path is not None:
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     sink = open(out_path, "wb")
                 while True:
-                    chunk = resp.read(CHUNK)
+                    try:
+                        chunk = resp.read1(CHUNK)
+                    except (socket.timeout, TimeoutError):
+                        raise _Aborted("timed out waiting for the response body", status, total)
                     if not chunk:
                         break
                     total += len(chunk)
+                    if total > args.max_bytes:
+                        raise _Aborted(f"response body exceeded --max-bytes {args.max_bytes}", status, total)
                     if sink is not None:
                         sink.write(chunk)
                     elif len(head) < PREVIEW_CHARS * 4:
                         head += chunk
+                    if time.monotonic() > deadline:
+                        raise _Aborted(f"response body exceeded --timeout {args.timeout:g}s", status, total)
             finally:
                 if sink is not None:
                     sink.close()
+    except _Aborted as exc:
+        if out_path is not None:
+            out_path.unlink(missing_ok=True)
+        finish(exc.status, exc.nbytes, exc.reason)
+        _fail(f"{provider} response aborted: {exc.reason}", key, status=exc.status, out=None,
+              bytes=exc.nbytes, aborted=exc.reason)
     except urllib.error.HTTPError as exc:
-        data = exc.read() or b""
+        data = exc.read(ERROR_BODY_CAP) or b""
         finish(exc.code, len(data))
         _fail(f"HTTP {exc.code} from {provider}", key, status=exc.code, out=None,
               bytes=len(data), preview=_preview(data, key))
@@ -315,6 +369,10 @@ def build_parser() -> argparse.ArgumentParser:
     call.add_argument("--url", required=True)
     call.add_argument("--json", help="request body: a JSON file path or inline JSON")
     call.add_argument("--out", help="write the response body here instead of previewing it")
+    call.add_argument("--max-bytes", type=_positive_int, default=DEFAULT_MAX_BYTES,
+                      help="abort when the response body exceeds this many bytes (default 2 GiB)")
+    call.add_argument("--timeout", type=_positive_float, default=DEFAULT_TOTAL_TIMEOUT_S,
+                      help="abort when the whole call takes longer than this many seconds (default 300)")
     call.set_defaults(func=_cmd_call)
     return parser
 
