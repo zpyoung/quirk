@@ -109,6 +109,30 @@ def fake_ffmpeg(tmp_path: Path, with_subtitles: bool = True, fail: bool = False)
     return make_stub(tmp_path / "bin" / "ffmpeg", body)
 
 
+def fake_ffprobe(tmp_path: Path, width: int = 1080, height: int = 1920, extra: str = "") -> Path:
+    stream = f'{{"width": {width}, "height": {height}{extra}}}'
+    body = f"""echo '{{"streams": [{stream}]}}'\n"""
+    return make_stub(tmp_path / "bin" / "ffprobe", body)
+
+
+def burn_vf(tmp_path: Path) -> str:
+    argv = (tmp_path / "ffmpeg.argv").read_text().split()
+    return argv[argv.index("-vf") + 1]
+
+
+def style_of(vf: str) -> dict:
+    match = re.search(r"force_style='([^']*)'", vf)
+    assert match, vf
+    return dict(pair.split("=", 1) for pair in match.group(1).split(","))
+
+
+def burn_args(tmp_path: Path, *extra: object) -> "tuple[list, Path]":
+    video = tmp_path / "in.mp4"
+    video.write_bytes(b"")
+    burned = tmp_path / "out" / "burned.mp4"
+    return ["--burn", video, "--burned", burned, *extra], burned
+
+
 def parse_srt(text: str) -> "list[dict]":
     cues = []
     for block in text.strip().split("\n\n"):
@@ -487,6 +511,8 @@ def test_captions_burn_argv(env, tmp_path):
         video,
         "--burned",
         burned,
+        "--aspect",
+        "16:9",
     )
     assert code == 0
     assert payload == {"srt": str(srt), "burned": str(burned)}
@@ -504,6 +530,105 @@ def test_captions_burn_argv(env, tmp_path):
     ]:
         assert argv[argv.index(flag) + 1] == value
     assert argv[-1] == str(burned)
+
+
+def _burn_style(env, tmp_path, aspect=None, probed=None):
+    project = make_project(tmp_path)
+    write_words(project, "a", [("Hi.", 0.0, 0.3)])
+    stub = fake_ffmpeg(tmp_path)
+    if probed:
+        fake_ffprobe(tmp_path, *probed)
+    args, _ = burn_args(tmp_path, *(["--aspect", aspect] if aspect else []))
+    code, payload, _ = captions(
+        dict(env, QUIRK_FFMPEG=str(stub)), project, tmp_path, [{"id": "a", "text": "x", "start_s": 0}], *args
+    )
+    return code, payload
+
+
+def test_captions_burn_9x16_lifts_captions_clear_of_platform_ui(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, aspect="9:16", probed=(1080, 1920))
+    assert code == 0
+    style = style_of(burn_vf(tmp_path))
+    # libass units at PlayRes 384x288: 672 px * 288/1920, 120 and 192 px * 384/1080, 48 px font * 288/1920
+    assert style["MarginV"] == "101"
+    assert style["MarginL"] == "43"
+    assert style["MarginR"] == "68"
+    assert float(style["FontSize"]) == pytest.approx(7.2)
+    assert float(style["Outline"]) == pytest.approx(0.6)
+    assert style["Alignment"] == "2" and style["BorderStyle"] == "1"
+    assert style["PrimaryColour"] == "&H00FFFFFF" and style["OutlineColour"] == "&H00000000"
+
+
+def test_captions_burn_style_scales_with_the_probed_size(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, aspect="9:16", probed=(540, 960))
+    assert code == 0
+    style = style_of(burn_vf(tmp_path))
+    # same pixel fractions on half the frame: 336 px bottom -> 336 * 288/960
+    assert style["MarginV"] == "101"
+    assert float(style["FontSize"]) == pytest.approx(7.2)
+
+
+def test_captions_burn_1x1_margins(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, aspect="1:1", probed=(1080, 1080))
+    assert code == 0
+    style = style_of(burn_vf(tmp_path))
+    assert style["MarginV"] == "29"
+    assert style["MarginL"] == style["MarginR"] == "19"
+    assert float(style["FontSize"]) == pytest.approx(11.73)
+
+
+def test_captions_burn_16x9_keeps_a_five_percent_bottom_margin(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, aspect="16:9", probed=(1920, 1080))
+    assert code == 0
+    style = style_of(burn_vf(tmp_path))
+    assert style["MarginV"] == "14"
+    assert style["MarginL"] == style["MarginR"] == "19"
+
+
+def test_captions_burn_infers_9x16_from_probed_size(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, probed=(1080, 1920))
+    assert code == 0
+    assert style_of(burn_vf(tmp_path))["MarginV"] == "101"
+
+
+def test_captions_burn_infers_16x9_and_1x1_from_probed_size(env, tmp_path):
+    assert _burn_style(env, tmp_path, probed=(1920, 1080))[0] == 0
+    assert style_of(burn_vf(tmp_path))["MarginV"] == "14"
+    assert _burn_style(env, tmp_path, probed=(1080, 1080))[0] == 0
+    assert style_of(burn_vf(tmp_path))["MarginV"] == "29"
+
+
+def test_captions_burn_swaps_size_for_rotated_video(env, tmp_path):
+    probed = (1920, 1080, ', "side_data_list": [{"rotation": -90}]')
+    code, _ = _burn_style(env, tmp_path, probed=probed)
+    assert code == 0
+    assert style_of(burn_vf(tmp_path))["MarginV"] == "101"
+
+
+def test_captions_burn_without_aspect_or_ffprobe_exits_2(env, tmp_path):
+    code, payload = _burn_style(env, tmp_path)
+    assert code == 2
+    assert "--aspect" in payload["error"]
+    assert not (tmp_path / "ffmpeg.argv").exists()
+    assert payload["srt"].endswith("demo.srt")
+
+
+def test_captions_burn_with_aspect_but_no_ffprobe_assumes_reference_size(env, tmp_path):
+    code, _ = _burn_style(env, tmp_path, aspect="9:16")
+    assert code == 0
+    assert style_of(burn_vf(tmp_path))["MarginV"] == "101"
+
+
+def test_captions_burn_aspect_that_contradicts_the_video_exits_2(env, tmp_path):
+    code, payload = _burn_style(env, tmp_path, aspect="9:16", probed=(1920, 1080))
+    assert code == 2
+    assert "disagrees" in payload["error"]
+    assert not (tmp_path / "ffmpeg.argv").exists()
+
+
+def test_captions_rejects_unknown_aspect(env, tmp_path):
+    code, payload = _burn_style(env, tmp_path, aspect="4:3")
+    assert code == 2
 
 
 def test_captions_burn_children_do_not_inherit_secrets(env, tmp_path):
@@ -539,6 +664,8 @@ def test_captions_burn_children_do_not_inherit_secrets(env, tmp_path):
         video,
         "--burned",
         tmp_path / "burned.mp4",
+        "--aspect",
+        "16:9",
     )
     assert code == 0
     logged = envlog.read_text()
@@ -585,6 +712,8 @@ def test_captions_burn_encoder_failure_exits_1(env, tmp_path):
         video,
         "--burned",
         tmp_path / "burned.mp4",
+        "--aspect",
+        "16:9",
     )
     assert code == 1
     assert "encoder exploded" in payload["error"]

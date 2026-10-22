@@ -38,6 +38,7 @@ WORKER = SCRIPTS_DIR / "voice_worker.py"
 DOCTOR_FIX = f"python3 {SCRIPTS_DIR / 'doctor.py'} install --what tts --yes"
 FFMPEG_FIX = "brew install ffmpeg-full"
 FFMPEG_FULL = Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg")
+FFPROBE_TIMEOUT_S = 60
 
 CLIP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 WORKER_TIMEOUT_S = 3600
@@ -155,6 +156,14 @@ def _ffmpeg_binary() -> str:
     if override:
         return override
     return str(FFMPEG_FULL) if FFMPEG_FULL.exists() else "ffmpeg"
+
+
+def _ffprobe_binary() -> str:
+    override = os.environ.get("QUIRK_FFPROBE")
+    if override:
+        return override
+    sibling = Path(_ffmpeg_binary()).with_name("ffprobe")
+    return str(sibling) if sibling.is_file() else "ffprobe"
 
 
 def _require_venv() -> Path:
@@ -465,7 +474,120 @@ def _filter_path(path: str) -> str:
     return re.sub(r"([\\:',\[\];])", r"\\\1", path)
 
 
-def _burn(srt: Path, video: Path, out: Path) -> None:
+class CaptionLayout(NamedTuple):
+    """Caption placement in pixels of a reference frame of ``width`` x ``height``."""
+
+    width: int
+    height: int
+    margin_bottom: int
+    margin_left: int
+    margin_right: int
+    font: int
+    outline: int
+
+
+# 9:16 is the conservative envelope from the craft research (bottom 672, left 120, right 192 on
+# 1080x1920) that clears TikTok, Reels and Shorts UI. The 1:1 and 16:9 figures are chosen here, not
+# sourced: 1:1 keeps the 90% caption width BBC specifies, 16:9 keeps the 5% title-safe margin.
+CAPTION_LAYOUTS = {
+    "9:16": CaptionLayout(1080, 1920, 672, 120, 192, 48, 4),
+    "1:1": CaptionLayout(1080, 1080, 108, 54, 54, 44, 4),
+    "16:9": CaptionLayout(1920, 1080, 54, 96, 96, 54, 3),
+}
+ASPECTS = tuple(CAPTION_LAYOUTS)
+ASS_PLAYRES_X = 384
+ASS_PLAYRES_Y = 288
+
+
+def aspect_of(width: int, height: int) -> str:
+    """The supported aspect nearest to ``width`` x ``height``, compared on a log scale."""
+    ratio = math.log(width / height)
+    return min(ASPECTS, key=lambda a: abs(ratio - math.log(CAPTION_LAYOUTS[a].width / CAPTION_LAYOUTS[a].height)))
+
+
+def caption_style(aspect: str, width: int, height: int) -> str:
+    """The libass ``force_style`` string that places captions for ``aspect`` on a ``width`` x ``height`` frame.
+
+    ffmpeg turns an SRT into an ASS script with PlayRes 384x288, and libass reads ``FontSize``,
+    ``Outline`` and ``MarginV`` against PlayResY and ``MarginL``/``MarginR`` against PlayResX. The
+    filter's ``original_size`` option only corrects pixel aspect and leaves PlayRes alone, so the
+    pixel layout is converted here instead: vertical values times 288/height, horizontal margins
+    times 384/width. Margins are rounded to whole units, so they land within about 4 px of the
+    target on a 1080x1920 frame; font size and outline keep two decimals.
+    """
+    layout = CAPTION_LAYOUTS[aspect]
+    sy = height / layout.height
+    sx = width / layout.width
+    down_y = ASS_PLAYRES_Y / height
+    down_x = ASS_PLAYRES_X / width
+    fields = [
+        ("FontSize", round(layout.font * sy * down_y, 2)),
+        ("Outline", round(layout.outline * sy * down_y, 2)),
+        ("Shadow", 0),
+        ("BorderStyle", 1),
+        ("PrimaryColour", "&H00FFFFFF"),
+        ("OutlineColour", "&H00000000"),
+        ("Alignment", 2),
+        ("MarginV", round(layout.margin_bottom * sy * down_y)),
+        ("MarginL", round(layout.margin_left * sx * down_x)),
+        ("MarginR", round(layout.margin_right * sx * down_x)),
+    ]
+    return ",".join(f"{name}={value}" for name, value in fields)
+
+
+def _probe_size(video: Path) -> Optional["tuple[int, int]"]:
+    """Displayed (width, height) of ``video``'s first video stream, or None when ffprobe cannot tell."""
+    argv = [
+        _ffprobe_binary(), "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+        "-of", "json", str(video),
+    ]
+    try:
+        proc = run(argv, env=_child_env(), timeout=FFPROBE_TIMEOUT_S)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        stream = json.loads(proc.stdout)["streams"][0]
+        width, height = int(stream["width"]), int(stream["height"])
+        turns = [stream.get("tags", {}).get("rotate")] + [
+            d.get("rotation") for d in stream.get("side_data_list", []) if isinstance(d, dict)
+        ]
+        rotated = any(t is not None and int(float(t)) % 180 == 90 for t in turns)
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (height, width) if rotated else (width, height)
+
+
+def _resolve_layout(video: Path, srt: Path, aspect: Optional[str]) -> "tuple[str, int, int]":
+    """Aspect and pixel size to style captions for; exits 2 when neither the flag nor the file says."""
+    size = _probe_size(video)
+    if aspect is None:
+        if size is None:
+            _fail(
+                f"cannot tell the aspect of {video} (ffprobe could not read it); pass --aspect 16:9, 9:16 or 1:1",
+                EXIT_USAGE,
+                srt=str(srt),
+            )
+        return aspect_of(*size), size[0], size[1]
+    if size is None:
+        reference = CAPTION_LAYOUTS[aspect]
+        print(f"ffprobe could not read {video}; assuming {reference.width}x{reference.height}", file=sys.stderr)
+        return aspect, reference.width, reference.height
+    seen = aspect_of(*size)
+    if seen != aspect:
+        _fail(
+            f"--aspect {aspect} disagrees with {video}, which is {size[0]}x{size[1]} ({seen})",
+            EXIT_USAGE,
+            srt=str(srt),
+        )
+    return aspect, size[0], size[1]
+
+
+def _burn(srt: Path, video: Path, out: Path, aspect: Optional[str] = None) -> None:
     ffmpeg = _ffmpeg_binary()
     missing = {"missing": "ffmpeg subtitles filter", "fix": FFMPEG_FIX}
     try:
@@ -483,10 +605,12 @@ def _burn(srt: Path, video: Path, out: Path) -> None:
         )
     if not video.is_file():
         _fail(f"video to burn into not found: {video}", srt=str(srt))
+    aspect, width, height = _resolve_layout(video, srt, aspect)
+    style = caption_style(aspect, width, height)
     out.parent.mkdir(parents=True, exist_ok=True)
     argv = [
         ffmpeg, "-y", "-v", "error", "-i", str(video),
-        "-vf", f"subtitles={_filter_path(str(srt))}",
+        "-vf", f"subtitles={_filter_path(str(srt))}:force_style='{style}'",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
         "-c:a", "copy", "-movflags", "+faststart",
         str(out),
@@ -532,7 +656,7 @@ def _cmd_captions(args: argparse.Namespace) -> None:
         emit({"ok": False, "error": message, "srt": str(out), "cps_violations": slow}, EXIT_FAILED)
     burned = None
     if args.burn:
-        _burn(out, Path(args.burn), Path(args.burned))
+        _burn(out, Path(args.burn), Path(args.burned), args.aspect)
         burned = str(Path(args.burned))
     emit({"srt": str(out), "burned": burned})
 
@@ -558,6 +682,11 @@ def build_parser() -> argparse.ArgumentParser:
     caps.add_argument("--out", required=True, help="SRT file to write")
     caps.add_argument("--burn", help="video to burn the captions into")
     caps.add_argument("--burned", help="where to write the captioned video")
+    caps.add_argument(
+        "--aspect",
+        choices=ASPECTS,
+        help="caption placement for --burn; default: inferred from the video's size with ffprobe",
+    )
     caps.set_defaults(func=_cmd_captions)
     return parser
 
