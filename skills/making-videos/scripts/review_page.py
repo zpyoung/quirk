@@ -2,7 +2,8 @@
 """Build the self-contained review page for a making-videos project.
 
 ``review_page.py --project DIR`` writes ``<project>/review.html`` and prints ``{"page": path}``.
-The page is one file: inline CSS, a few lines of inline JS for the compare players, no network
+Each MP4's verify run and frames (``frames/<mp4 stem>/``) get their own block; an older flat
+``verify.json`` and ``frames/`` still render. The page is one file: inline CSS, a few lines of inline JS for the compare players, no network
 resources, so it opens from ``file://``. Every value taken from project files is HTML-escaped.
 Exit codes: 0 ok; 1 the page could not be written; 2 usage error or missing project.
 """
@@ -183,7 +184,18 @@ def _checks_table(checks: Any) -> str:
     )
 
 
-def _verify_block(vdir: Path, missing: "list[str]") -> str:
+def _verdict(data: dict) -> str:
+    passed = bool(data.get("passed"))
+    attempts = data.get("attempt")
+    return "<p class=\"verdict %s\"><strong>%s</strong>%s</p>" % (
+        "pass" if passed else "fail",
+        "Verify passed" if passed else "Verify failed",
+        esc(" (attempt %s)" % attempts) if attempts is not None else "",
+    )
+
+
+def _verify_block(vdir: Path, mp4s: "list[Path]", missing: "list[str]") -> str:
+    """Verdict and check table per MP4 run; a flat ``verify.json`` without ``runs`` renders as one run."""
     data, reason = _read_json(vdir / "verify.json")
     if reason == "missing":
         missing.append("no verify.json")
@@ -191,14 +203,51 @@ def _verify_block(vdir: Path, missing: "list[str]") -> str:
     if reason or not isinstance(data, dict):
         missing.append("verify.json %s" % (reason or "is not an object"))
         return ""
-    passed = bool(data.get("passed"))
-    attempts = data.get("attempt")
-    summary = "<p class=\"verdict %s\"><strong>%s</strong>%s</p>" % (
-        "pass" if passed else "fail",
-        "Verify passed" if passed else "Verify failed",
-        esc(" (attempt %s)" % attempts) if attempts is not None else "",
-    )
-    return summary + _checks_table(data.get("checks"))
+    runs = data.get("runs")
+    if not isinstance(runs, dict):
+        return _verdict(data) + _checks_table(data.get("checks"))
+    parts = [_verdict(data)]
+    for name in sorted(runs):
+        run = runs[name]
+        if not isinstance(run, dict):
+            continue
+        parts.append(
+            "<div class=\"run\" id=\"run-%s\"><h4>%s</h4>%s%s</div>"
+            % (esc(name), esc(name), _verdict(run), _checks_table(run.get("checks")))
+        )
+    missing.extend("no verify run for %s" % mp4.name for mp4 in mp4s if mp4.name not in runs)
+    return "".join(parts)
+
+
+def _frames_html(project: Path, vdir: Path, mp4s: "list[Path]", missing: "list[str]") -> "list[str]":
+    """Contact sheet and stills per MP4 (``frames/<stem>/``), or the flat ``frames/`` of an older verify run."""
+    frames = vdir / "frames"
+    groups = [(mp4.name, "frames/%s/" % mp4.stem, frames / mp4.stem) for mp4 in mp4s if (frames / mp4.stem).is_dir()]
+    if not groups or (frames.is_dir() and any(frames.glob("*.png"))):
+        groups.append(("", "frames/", frames))
+    out = []
+    for label, where, folder in groups:
+        sheet = folder / "sheet.png"
+        stills = sorted(p for p in folder.glob("*.png") if p.name != "sheet.png") if folder.is_dir() else []
+        if label:
+            out.append("<h4>%s</h4>" % esc(label))
+        if sheet.is_file():
+            out.append(
+                "<figure><img loading=\"lazy\" alt=\"Contact sheet for %s\" src=\"%s\">"
+                "<figcaption>Contact sheet</figcaption></figure>" % (esc(label or vdir.name), rel_url(sheet, project))
+            )
+        else:
+            missing.append("no %ssheet.png" % where)
+        if stills:
+            imgs = "".join(
+                "<figure><img loading=\"lazy\" alt=\"%s\" src=\"%s\"><figcaption>%s</figcaption></figure>"
+                % (esc(s.name), rel_url(s, project), esc(s.name))
+                for s in stills
+            )
+            out.append("<div class=\"stills\">%s</div>" % imgs)
+        else:
+            missing.append("no stills in %s" % where)
+    return out
 
 
 def render_version(project: Path, vdir: Path) -> "tuple[str, list[Path]]":
@@ -222,30 +271,9 @@ def render_version(project: Path, vdir: Path) -> "tuple[str, list[Path]]":
         )
 
     parts.append("<h3>Verify</h3>")
-    parts.append(_verify_block(vdir, missing))
-
-    frames = vdir / "frames"
-    sheet = frames / "sheet.png"
-    stills = sorted(p for p in frames.glob("*.png") if p.name != "sheet.png") if frames.is_dir() else []
-    frame_html = []
-    if sheet.is_file():
-        frame_html.append(
-            "<figure><img loading=\"lazy\" alt=\"Contact sheet for %s\" src=\"%s\">"
-            "<figcaption>Contact sheet</figcaption></figure>" % (esc(vdir.name), rel_url(sheet, project))
-        )
-    else:
-        missing.append("no frames/sheet.png")
-    if stills:
-        imgs = "".join(
-            "<figure><img loading=\"lazy\" alt=\"%s\" src=\"%s\"><figcaption>%s</figcaption></figure>"
-            % (esc(s.name), rel_url(s, project), esc(s.name))
-            for s in stills
-        )
-        frame_html.append("<div class=\"stills\">%s</div>" % imgs)
-    else:
-        missing.append("no stills in frames/")
+    parts.append(_verify_block(vdir, mp4s, missing))
     parts.append("<h3>Frames</h3>")
-    parts.extend(frame_html)
+    parts.extend(_frames_html(project, vdir, mp4s, missing))
 
     note = ""
     if missing:
@@ -343,6 +371,7 @@ font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-wrap:anywhe
 main{max-width:1100px;margin:0 auto}
 h1{font-size:1.6rem;margin:0 0 .5rem}h2{font-size:1.25rem;margin:1.5rem 0 .5rem}
 h3{font-size:1rem;margin:1rem 0 .4rem;color:var(--muted)}
+h4{font-size:.95rem;margin:.75rem 0 .3rem}
 a{color:var(--accent)}
 .facts{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin:0 0 1rem}
 .facts div{min-width:6rem}.facts dt{font-size:.8rem;color:var(--muted)}.facts dd{margin:0}

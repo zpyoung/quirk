@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Strict verify for one rendered version of a making-videos project; writes ``<vN>/verify.json``.
+"""Strict verify for one MP4 of a making-videos version; records it in ``<vN>/verify.json``.
 
 Each check reads the source that can see it: the project's HTML and the render log (fonts),
 HyperFrames ``check --json`` output (contrast, title-safe), the MP4 (loudness, voice sync, frames),
 ``guard.json`` files (Blender) and ``calls.jsonl`` (outside calls).
 
-Prints exactly one JSON object to stdout; diagnostics go to stderr.
+``verify.json`` keeps one run per MP4 filename under ``runs`` (its own attempts, stop flag, checks and
+frames in ``<vN>/frames/<mp4 stem>/``); its top-level ``passed`` is true only when every run passed.
+
+Prints exactly one JSON object to stdout (this run's result plus ``mp4``); diagnostics go to stderr.
 Exit codes: 0 every check passed or was skipped; 1 a check failed, or the MP4 is missing
 (``{"error": "missing_render"}``); 2 usage error (missing project, version or flag, ambiguous MP4,
 unreadable input); 3 ffmpeg or ffprobe is missing.
@@ -51,15 +54,17 @@ DEFAULT_STILLS = 6
 LOCAL_PROVIDERS = frozenset({"hyperframes", "playwright"})
 SKIPPED_DIRS = frozenset({"node_modules", ".hyperframes"})
 
+CAPTION_SEEK = "seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"
 BANDS = {
-    "top": "x0=0;y0=0;x1=1;y1=.05;severity=error",
-    "bottom": "x0=0;y0=.95;x1=1;y1=1;severity=error",
-    "left": "x0=0;y0=0;x1=.05;y1=1;severity=error",
-    "right": "x0=.95;y0=0;x1=1;y1=1;severity=error",
+    "top": "x0=0;y0=0;x1=1;y1=.05;severity=error;" + CAPTION_SEEK,
+    "bottom": "x0=0;y0=.95;x1=1;y1=1;severity=error;" + CAPTION_SEEK,
+    "left": "x0=0;y0=0;x1=.05;y1=1;severity=error;" + CAPTION_SEEK,
+    "right": "x0=.95;y0=0;x1=1;y1=1;severity=error;" + CAPTION_SEEK,
 }
 CAPTION_ZONE_CODE = "caption_zone_collision"
 CONTRAST_CODE = "contrast_aa_failure"
 
+_ASPECT_MP4 = re.compile(r"-(9x16|1x1)\.mp4$", re.I)
 _COMMENTS = re.compile(r"<!--.*?-->|/\*.*?\*/", re.S)
 _FONT_USE = re.compile(r"var\(\s*(--font-[A-Za-z0-9_-]*)")
 _FONT_DEF = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:")
@@ -128,16 +133,24 @@ def _inline_definitions(text: str) -> "set[str]":
     return {name for chunk in chunks for name in _FONT_DEF.findall(chunk)}
 
 
-def scan_fonts(project: Path) -> "list[str]":
-    """Problems with font tokens in the scene HTML: unresolved ``var(--font-*)`` and linked token sheets."""
-    scenes = project / "scenes"
-    files = _html_files(scenes)
+def scenes_dirs(project: Path) -> "list[Path]":
+    """Every HyperFrames project folder: ``scenes/`` (16:9) and ``scenes-9x16/``, ``scenes-1x1/`` layout passes."""
+    return sorted(p for p in project.iterdir() if p.is_dir() and (p.name == "scenes" or p.name.startswith("scenes-")))
+
+
+def scenes_dir_for(project: Path, mp4: Path) -> Path:
+    """The folder an MP4 was rendered from, by the ``-9x16`` / ``-1x1`` suffix of its name."""
+    match = _ASPECT_MP4.search(mp4.name)
+    return project / ("scenes-%s" % match.group(1).lower() if match else "scenes")
+
+
+def _scan_scenes_dir(project: Path, scenes: Path) -> "list[str]":
     roots = [p for p in (scenes / "index.html", project / "index.html") if p.is_file()]
     root_defs: "set[str]" = set()
     for root in roots:
         root_defs |= _inline_definitions(_COMMENTS.sub("", root.read_text(encoding="utf-8", errors="replace")))
     problems = []
-    for path in files:
+    for path in _html_files(scenes):
         text = _COMMENTS.sub("", path.read_text(encoding="utf-8", errors="replace"))
         defined = _inline_definitions(text) | root_defs
         missing = sorted(set(_FONT_USE.findall(text)) - defined)
@@ -165,6 +178,14 @@ def scan_fonts(project: Path) -> "list[str]":
     return problems
 
 
+def scan_fonts(project: Path) -> "list[str]":
+    """Problems with font tokens in the HTML of every ``scenes*/`` folder: unresolved ``var(--font-*)`` and linked token sheets."""
+    problems: "list[str]" = []
+    for scenes in scenes_dirs(project):
+        problems += _scan_scenes_dir(project, scenes)
+    return problems
+
+
 def brand_family_count(project: Path, brief: dict) -> "tuple[int, bool]":
     """Number of font families in the brand and whether brand.json was found."""
     product = brief.get("product")
@@ -177,14 +198,17 @@ def brand_family_count(project: Path, brief: dict) -> "tuple[int, bool]":
     return (len(families) or len(fonts) or 1), True
 
 
-def check_fonts(project: Path, brief: dict, render_log: Path, version: str) -> dict:
+def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4: Path) -> dict:
     problems = scan_fonts(project)
+    scenes = scenes_dir_for(project, mp4)
+    if scenes.name != "scenes" and not scenes.is_dir():
+        problems.append("%s was rendered from %s/, which does not exist in the project" % (mp4.name, scenes.name))
     required, _ = brand_family_count(project, brief)
     injected = 0
     if not render_log.is_file():
         render_cmd = hf_command(
             project, "render", "--quality", "delivery", "--workers", "2", "--output",
-            str(project / version / "<slug>-16x9.mp4"), str(project / "scenes"),
+            str(project / version / mp4.name), str(scenes),
         )
         problems.append(
             "render log %s not found; produce it with: %s > %s 2>&1"
@@ -272,9 +296,9 @@ def _finding_ratio(finding: dict) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
-def check_contrast(project: Path, version: str, docs: "list[tuple[Optional[str], Path, object]]") -> dict:
+def check_contrast(project: Path, version: str, docs: "list[tuple[Optional[str], Path, object]]", scenes: Path) -> dict:
     if not docs:
-        cmd = hf_command(project, "check", "--json", str(project / "scenes"))
+        cmd = hf_command(project, "check", "--json", str(scenes))
         return make_check(
             "contrast", "fail", None, {"failing": 0},
             "no check JSON passed; run `%s > %s` and pass it with --check-json"
@@ -308,11 +332,11 @@ def check_contrast(project: Path, version: str, docs: "list[tuple[Optional[str],
     return make_check("contrast", "fail" if failing else "pass", measured, {"failing": 0}, detail)
 
 
-def check_title_safe(project: Path, version: str, docs: "list[tuple[Optional[str], Path, object]]") -> dict:
+def check_title_safe(project: Path, version: str, docs: "list[tuple[Optional[str], Path, object]]", scenes: Path) -> dict:
     band_cmds = [
         "%s > %s"
         % (
-            hf_command(project, "check", "--json", "--caption-zone", BANDS[band], str(project / "scenes")),
+            hf_command(project, "check", "--json", "--caption-zone", BANDS[band], str(scenes)),
             shlex.quote(str(project / version / ("check-%s.json" % band))),
         )
         for band in BANDS
@@ -531,20 +555,25 @@ def collect_audio(project: Path, beats: "list[dict]", supplied: "dict[str, Path]
     return items, None, False
 
 
-def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]"], supplied: "dict[str, Path]") -> dict:
+def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]"], supplied: "dict[str, Path]",
+               narrated: bool = False) -> dict:
+    """Beat-to-word offsets. A narrated video cannot skip: missing beats or tooling fails it."""
     threshold = {"offset_frames_max": 1}
+    unavailable = "fail" if narrated else "skip"
     if not beats:
+        if narrated:
+            return make_check("sync", "fail", None, threshold, "narrated videos need beats.json (see audio.md)")
         return make_check("sync", "skip", None, threshold, "no beats.json, so there are no timed beats to measure")
     py = venv_python()
     if not py.is_file():
         return make_check(
-            "sync", "skip", None, threshold,
+            "sync", unavailable, None, threshold,
             "venv python not found at %s; run `python3 %s check --need narration` to see the fix"
             % (py, SCRIPTS_DIR / "doctor.py"),
         )
     items, error, tool_missing = collect_audio(project, beats, supplied)
     if error:
-        return make_check("sync", "skip" if tool_missing else "fail", None, threshold, error)
+        return make_check("sync", unavailable if tool_missing else "fail", None, threshold, error)
     request = {
         "mp4": str(mp4), "fps": info["fps"], "width": info["width"], "height": info["height"],
         "audio": items, "beats": [dict(b, clip_key=b["clip"]) for b in beats],
@@ -559,7 +588,7 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
     except (IndexError, ValueError):
         return make_check("sync", "fail", None, threshold, "media_worker printed no JSON: %s" % proc.stderr.strip()[-200:])
     if proc.returncode == EXIT_MISSING_TOOL:
-        return make_check("sync", "skip", None, threshold, "media_worker needs numpy in the venv: %s" % report.get("error"))
+        return make_check("sync", unavailable, None, threshold, "media_worker needs numpy in the venv: %s" % report.get("error"))
     if proc.returncode != 0 or "beats" not in report:
         return make_check("sync", "fail", None, threshold, "media_worker failed: %s" % report.get("error", proc.stderr.strip()[-200:]))
     rows = report["beats"]
@@ -602,9 +631,9 @@ def _grab(mp4: Path, at: float, out: Path) -> None:
 
 
 def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]") -> dict:
-    """Contact sheet and stills decoded from the MP4 into ``<vN>/frames/``."""
-    frames = vdir / "frames"
-    frames.mkdir(exist_ok=True)
+    """Contact sheet and stills decoded from the MP4 into ``<vN>/frames/<mp4 stem>/``."""
+    frames = vdir / "frames" / mp4.stem
+    frames.mkdir(parents=True, exist_ok=True)
     last = max(info["duration"] - 1.0 / info["fps"], 0.0)
 
     def clamp(t: float) -> float:
@@ -638,11 +667,25 @@ def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]
 
 # attempts and main -----------------------------------------------------------------------------
 
-def read_attempts(path: Path) -> "list[dict]":
+def read_runs(path: Path, vdir: Path) -> "dict[str, dict]":
+    """Per-MP4 runs from ``verify.json``; a flat file without ``runs`` is the run of the single MP4 present."""
     try:
-        attempts = json.loads(path.read_text(encoding="utf-8")).get("attempts")
-    except (OSError, ValueError, AttributeError):
-        return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if isinstance(data.get("runs"), dict):
+        return {name: run for name, run in data["runs"].items() if isinstance(run, dict)}
+    mp4s = sorted(vdir.glob("*.mp4"))
+    if isinstance(data.get("attempts"), list) and len(mp4s) == 1:
+        keys = ("attempts", "attempt", "passed", "stop", "checks", "frames")
+        return {mp4s[0].name: {k: data[k] for k in keys if k in data}}
+    return {}
+
+
+def run_attempts(run: Optional[dict]) -> "list[dict]":
+    attempts = run.get("attempts") if isinstance(run, dict) else None
     return [a for a in attempts if isinstance(a, dict)] if isinstance(attempts, list) else []
 
 
@@ -657,7 +700,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="verify.py", description="Strict verify for one rendered version.")
     parser.add_argument("--project", required=True, help="project directory")
     parser.add_argument("--version", required=True, help="version folder name, such as v1")
-    parser.add_argument("--mp4", help="the render to check (default: the only *.mp4 in the version folder)")
+    parser.add_argument("--mp4", help="the render to check (default: the only *.mp4 in the version folder); "
+                        "a *-9x16.mp4 or *-1x1.mp4 also needs the matching scenes-9x16/ or scenes-1x1/ folder")
     parser.add_argument("--beats", help="beats.json (default: <project>/beats.json when present)")
     parser.add_argument("--check-json", action="append", default=[], metavar="[BAND=]FILE",
                         help="hf.py check --json output; BAND is top|bottom|left|right for a --caption-zone run")
@@ -706,12 +750,14 @@ def main(argv: Optional["list[str]"] = None) -> int:
     try:
         info = probe_video(mp4)
         render_log = Path(args.render_log) if args.render_log else vdir / "render.log"
+        narrated = bool(brief.get("narration"))
+        scenes = scenes_dir_for(project, mp4)
         checks = [
-            check_fonts(project, brief, render_log, args.version),
-            check_contrast(project, args.version, check_docs),
-            check_title_safe(project, args.version, check_docs),
-            check_loudness(mp4, bool(brief.get("narration"))),
-            check_sync(project, mp4, info, beats, supplied),
+            check_fonts(project, brief, render_log, args.version, mp4),
+            check_contrast(project, args.version, check_docs, scenes),
+            check_title_safe(project, args.version, check_docs, scenes),
+            check_loudness(mp4, narrated),
+            check_sync(project, mp4, info, beats, supplied, narrated),
             check_blender(project),
             check_outside_calls(project, brief),
         ]
@@ -722,23 +768,28 @@ def main(argv: Optional["list[str]"] = None) -> int:
 
     passed = all(c["status"] != "fail" for c in checks)
     verify_json = vdir / "verify.json"
-    attempts = read_attempts(verify_json)
+    runs = read_runs(verify_json, vdir)
+    attempts = run_attempts(runs.get(mp4.name))
     attempts.append({
         "n": len(attempts) + 1,
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "passed": passed,
     })
     attempt = len(attempts)
-    result = {
-        "version": args.version,
-        "attempt": attempt,
-        "passed": passed,
-        "stop": attempt >= MAX_ATTEMPTS and not passed,
-        "checks": checks,
-        "frames": frames,
+    stop = attempt >= MAX_ATTEMPTS and not passed
+    runs[mp4.name] = {
+        "attempts": attempts, "attempt": attempt, "passed": passed, "stop": stop, "checks": checks, "frames": frames,
     }
-    verify_json.write_text(json.dumps(dict(result, attempts=attempts), indent=2) + "\n", encoding="utf-8")
-    emit(result, EXIT_OK if passed else EXIT_FAILED)
+    document = {
+        "version": args.version,
+        "passed": all(bool(run.get("passed")) for run in runs.values()),
+        "runs": runs,
+    }
+    verify_json.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    emit({
+        "version": args.version, "mp4": mp4.name, "attempt": attempt, "passed": passed, "stop": stop,
+        "checks": checks, "frames": frames,
+    }, EXIT_OK if passed else EXIT_FAILED)
 
 
 if __name__ == "__main__":

@@ -128,7 +128,9 @@ Put the call to action after the context is set; TikTok links a closing card to 
 ## Aspect handling
 
 16:9 is designed first. 9:16 and 1:1 are separate layout passes over the same scenes, timings and
-narration; never scale-crop. A centred 9:16 crop of a 16:9 frame keeps only about 32% of the width, so
+narration; never scale-crop. Each pass is its own HyperFrames folder: `scenes/` for 16:9, `scenes-9x16/`
+and `scenes-1x1/` for the others, with MP4s named `<slug>-9x16.mp4` and `<slug>-1x1.mp4`. Verify scans
+every `scenes*/` folder for fonts, and an aspect MP4 only passes when its matching folder does. A centred 9:16 crop of a 16:9 frame keeps only about 32% of the width, so
 side-by-side panels and wide UI are lost. Per aspect: stack panels vertically, zoom to the active UI
 region, and enlarge type. Recommended assets are separate per aspect on [Google's guidance](https://support.google.com/google-ads/answer/9128498?hl=en).
 
