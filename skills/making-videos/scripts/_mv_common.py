@@ -93,6 +93,39 @@ def ssl_context() -> ssl.SSLContext:
     return ctx
 
 
+FFMPEG_FULL_PATHS = (
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+    "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+)
+BREW_PREFIX_TIMEOUT_S = 15
+
+
+def ffmpeg_full_candidates() -> "list[Path]":
+    """Existing ``ffmpeg-full`` binaries, in preference order; empty when none is installed.
+
+    Order: the Apple Silicon and Intel Homebrew prefixes (``FFMPEG_FULL_PATHS``), then
+    ``$(brew --prefix ffmpeg-full)/bin/ffmpeg`` when ``brew`` is on PATH. The brew call (one
+    subprocess, scrubbed env, short timeout, any failure ignored) only runs when neither fixed
+    path exists. ``QUIRK_FFMPEG_FULL_PATHS`` (an ``os.pathsep`` list, empty allowed) replaces the
+    two fixed paths so tests do not see the machine's real Homebrew install. An explicit
+    ``QUIRK_FFMPEG`` is the caller's concern and always outranks this list.
+    """
+    override = os.environ.get("QUIRK_FFMPEG_FULL_PATHS")
+    fixed = tuple(p for p in override.split(os.pathsep) if p) if override is not None else FFMPEG_FULL_PATHS
+    found = [Path(p) for p in fixed if Path(p).is_file()]
+    if found:
+        return found
+    try:
+        proc = run(["brew", "--prefix", "ffmpeg-full"], timeout=BREW_PREFIX_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    prefix = proc.stdout.strip() if proc.returncode == 0 else ""
+    if not prefix:
+        return []
+    candidate = Path(prefix) / "bin" / "ffmpeg"
+    return [candidate] if candidate.is_file() else []
+
+
 def emit(obj: dict, code: int = 0) -> NoReturn:
     """Print ``obj`` as the one JSON object on stdout, then exit with ``code``."""
     sys.stdout.write(json.dumps(obj) + "\n")

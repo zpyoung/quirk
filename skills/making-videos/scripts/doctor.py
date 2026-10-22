@@ -13,7 +13,8 @@ Exit codes: 0 ok; 1 an install step failed; 2 usage error (unknown need, install
 ``--yes``); 3 a tool needed to install is missing (``uv`` or ``pnpm``).
 Overrides, all for tests and unusual installs: ``QUIRK_VIDEO_CACHE`` (cache root),
 ``QUIRK_PLATFORM`` (replaces ``sys.platform``), ``QUIRK_FFMPEG`` (the only ffmpeg checked for the
-``subtitles`` filter, needed only by ``captions``), ``QUIRK_BLENDER`` (the only Blender checked), ``QUIRK_KOKORO_BASE_URL``
+``subtitles`` filter, needed only by ``captions``), ``QUIRK_FFMPEG_FULL_PATHS`` (replaces the fixed
+ffmpeg-full locations; see ``_mv_common.ffmpeg_full_candidates``), ``QUIRK_BLENDER`` (the only Blender checked), ``QUIRK_KOKORO_BASE_URL``
 (where the Kokoro model files are downloaded from).
 """
 from __future__ import annotations
@@ -40,6 +41,7 @@ from _mv_common import (  # noqa: E402
     SCRUB_ENV,
     cache_root,
     emit,
+    ffmpeg_full_candidates,
     run,
     ssl_context,
     venv_python,
@@ -53,7 +55,6 @@ VENV_MODULES = ("kokoro_onnx", "soundfile", "faster_whisper", "numpy")
 KOKORO_PIP_PACKAGES = ("kokoro-onnx==0.6.1", "soundfile", "faster-whisper", "numpy")
 KOKORO_MODEL_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
 KOKORO_BASE_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
-FFMPEG_FULL = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
 BLENDER_APP = "/Applications/Blender.app/Contents/MacOS/Blender"
 BLENDER_DOWNLOAD = "download Blender 4.2 or newer from https://www.blender.org/download/"
 INSTALL_TTS_FIX = "doctor.py install --what tts --yes"
@@ -172,7 +173,8 @@ def check_ffmpeg_subtitles() -> dict:
     if override:
         candidates = [override]
     else:
-        candidates = [c for c in (shutil.which("ffmpeg"), FFMPEG_FULL) if c]
+        on_path = shutil.which("ffmpeg")
+        candidates = [str(c) for c in ffmpeg_full_candidates()] + ([on_path] if on_path else [])
     for binary in candidates:
         if _has_subtitles_filter(binary):
             return _entry("ffmpeg_subtitles", True, "present", path=binary)

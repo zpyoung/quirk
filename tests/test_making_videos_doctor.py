@@ -82,6 +82,7 @@ def env(tmp_path: Path) -> dict:
         "QUIRK_VIDEO_CACHE": str(tmp_path / "cache"),
         "QUIRK_PLATFORM": "darwin",
         "QUIRK_FFMPEG": str(bin_dir / "ffmpeg"),
+        "QUIRK_FFMPEG_FULL_PATHS": "",
         "QUIRK_BLENDER": str(tmp_path / "no-blender"),
         "FAKE_LOG": str(tmp_path / "tools.log"),
     }
@@ -184,6 +185,39 @@ def test_check_ffmpeg_without_subtitles_filter_points_at_ffmpeg_full(env):
     assert sub["ok"] is False
     assert sub["fix"] == "brew install ffmpeg-full"
     assert tool(out, "ffmpeg")["ok"] is True
+
+
+def _prefer_ffmpeg_full(env: dict, tmp_path: Path) -> Path:
+    prefix = tmp_path / "cellar" / "ffmpeg-full"
+    full = write_stub(prefix / "bin" / "ffmpeg", ffmpeg_body(FILTERS_WITH))
+    write_stub(bin_dir(env) / "ffmpeg", ffmpeg_body(FILTERS_WITHOUT))
+    del env["QUIRK_FFMPEG"]
+    return full
+
+
+def test_captions_find_ffmpeg_full_through_brew_prefix(env, tmp_path):
+    full = _prefer_ffmpeg_full(env, tmp_path)
+    write_stub(tmp_path / "shim" / "brew", f"print({str(full.parent.parent)!r})\n")
+    env["PATH"] = f"{env['PATH']}:{tmp_path / 'shim'}"
+    code, out = run_doctor("check", "--need", "captions", env=env)
+    assert code == 0 and out["ok"] is True
+    sub = tool(out, "ffmpeg_subtitles")
+    assert sub["ok"] is True and sub["path"] == str(full)
+
+
+def test_captions_find_ffmpeg_full_at_a_fixed_prefix(env, tmp_path):
+    full = _prefer_ffmpeg_full(env, tmp_path)
+    env["QUIRK_FFMPEG_FULL_PATHS"] = f"{tmp_path / 'missing'}:{full}"
+    code, out = run_doctor("check", "--need", "captions", env=env)
+    assert code == 0 and out["ok"] is True
+    assert tool(out, "ffmpeg_subtitles")["path"] == str(full)
+
+
+def test_captions_without_any_ffmpeg_full_still_fail(env, tmp_path):
+    _prefer_ffmpeg_full(env, tmp_path)
+    code, out = run_doctor("check", "--need", "captions", env=env)
+    assert out["ok"] is False
+    assert tool(out, "ffmpeg_subtitles")["ok"] is False
 
 
 def test_check_non_darwin_adds_unsupported_platform_entry(env):

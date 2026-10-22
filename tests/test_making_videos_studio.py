@@ -379,3 +379,65 @@ def test_ssl_context_without_any_bundle_still_verifies(clean_tls_env, monkeypatc
     ctx = common.ssl_context()
     assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
     assert ctx.cert_store_stats()["x509_ca"] == 0
+
+
+def _fake_brew(directory: Path, prefix: Path, log: "Path | None" = None, exit_code: int = 0) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    brew = directory / "brew"
+    record = f'echo "$@" >> "{log}"\n' if log else ""
+    brew.write_text(f'#!/bin/sh\n{record}echo "{prefix}"\nexit {exit_code}\n')
+    brew.chmod(0o755)
+
+
+def _fake_ffmpeg_at(prefix: Path) -> Path:
+    binary = prefix / "bin" / "ffmpeg"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    return binary
+
+
+def test_ffmpeg_full_candidates_follow_the_fixed_path_order(tmp_path, monkeypatch):
+    common = _common()
+    arm = _fake_ffmpeg_at(tmp_path / "arm")
+    intel = _fake_ffmpeg_at(tmp_path / "intel")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("QUIRK_FFMPEG_FULL_PATHS", f"{arm}:{intel}")
+    assert common.ffmpeg_full_candidates() == [arm, intel]
+    monkeypatch.setenv("QUIRK_FFMPEG_FULL_PATHS", f"{tmp_path / 'missing'}:{intel}")
+    assert common.ffmpeg_full_candidates() == [intel]
+
+
+def test_ffmpeg_full_candidates_use_the_brew_prefix_when_no_fixed_path_exists(tmp_path, monkeypatch):
+    common = _common()
+    binary = _fake_ffmpeg_at(tmp_path / "cellar" / "ffmpeg-full")
+    log = tmp_path / "brew.log"
+    _fake_brew(tmp_path / "shim", tmp_path / "cellar" / "ffmpeg-full", log)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'shim'}:/usr/bin:/bin")
+    monkeypatch.setenv("QUIRK_FFMPEG_FULL_PATHS", "")
+    assert common.ffmpeg_full_candidates() == [binary]
+    assert log.read_text().split() == ["--prefix", "ffmpeg-full"]
+
+
+def test_ffmpeg_full_candidates_skip_brew_when_a_fixed_path_exists(tmp_path, monkeypatch):
+    common = _common()
+    binary = _fake_ffmpeg_at(tmp_path / "intel")
+    log = tmp_path / "brew.log"
+    _fake_brew(tmp_path / "shim", tmp_path / "elsewhere", log)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'shim'}:/usr/bin:/bin")
+    monkeypatch.setenv("QUIRK_FFMPEG_FULL_PATHS", str(binary))
+    assert common.ffmpeg_full_candidates() == [binary]
+    assert not log.exists()
+
+
+def test_ffmpeg_full_candidates_ignore_brew_failures(tmp_path, monkeypatch):
+    common = _common()
+    monkeypatch.setenv("QUIRK_FFMPEG_FULL_PATHS", "")
+    monkeypatch.setenv("PATH", str(tmp_path / "no-brew"))
+    assert common.ffmpeg_full_candidates() == []
+    _fake_brew(tmp_path / "shim", tmp_path / "not-installed")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'shim'}:/usr/bin:/bin")
+    assert common.ffmpeg_full_candidates() == []
+    _fake_brew(tmp_path / "bad", _fake_ffmpeg_at(tmp_path / "x").parent.parent, exit_code=1)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bad'}:/usr/bin:/bin")
+    assert common.ffmpeg_full_candidates() == []
