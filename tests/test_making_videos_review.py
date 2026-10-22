@@ -325,14 +325,17 @@ def _runs_project(tmp_path: Path, runs: dict) -> Path:
     return proj
 
 
-def _run(passed: bool, attempt: int, checks: list) -> dict:
-    return {"attempts": [], "attempt": attempt, "passed": passed, "stop": False, "checks": checks, "frames": {}}
+def _run(passed: bool, attempt: int, checks: list, failed: int = None) -> dict:
+    run = {"attempts": [], "attempt": attempt, "passed": passed, "stop": False, "checks": checks, "frames": {}}
+    if failed is not None:
+        run["failed_attempts"] = failed
+    return run
 
 
 def test_each_mp4_run_shows_its_checks_and_frames(tmp_path: Path, env: dict) -> None:
     proj = _runs_project(tmp_path, {
         "demo-16x9.mp4": _run(True, 1, [_check("fonts", "pass", 2)]),
-        "demo-9x16.mp4": _run(False, 3, [_check("title_safe", "fail", {"collisions": 1}, "text near the edge")]),
+        "demo-9x16.mp4": _run(False, 3, [_check("title_safe", "fail", {"collisions": 1}, "text near the edge")], failed=2),
     })
     proc = build(proj, env)
     assert proc.returncode == 0, proc.stderr
@@ -342,7 +345,7 @@ def test_each_mp4_run_shows_its_checks_and_frames(tmp_path: Path, env: dict) -> 
     assert re.search(r"<td[^>]*>fonts</td>\s*<td[^>]*>pass</td>", wide)
     assert "title_safe" not in wide
     assert re.search(r"<td[^>]*>title_safe</td>\s*<td[^>]*>fail</td>", tall)
-    assert "attempt 3" in tall and "attempt 1" in wide
+    assert "attempt 3 (2 failed)" in tall and "attempt 1" in wide and "failed)" not in wide
     frames = page[page.index("<h3>Frames</h3>"):]
     wide_frames = frames[frames.index("<h4>demo-16x9.mp4</h4>"): frames.index("<h4>demo-9x16.mp4</h4>")]
     tall_frames = frames[frames.index("<h4>demo-9x16.mp4</h4>"):]

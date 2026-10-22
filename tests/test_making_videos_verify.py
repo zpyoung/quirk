@@ -21,7 +21,11 @@ REAL_FFPROBE = shutil.which("ffprobe")
 needs_ffmpeg = pytest.mark.skipif(not (REAL_FFMPEG and REAL_FFPROBE), reason="ffmpeg/ffprobe not installed")
 
 FAKE_FFMPEG = """#!/bin/sh
+[ -n "$FAKE_LOG" ] && echo "$*" >> "$FAKE_LOG"
 case "$*" in
+*" -filters"*)
+  printf '%s\n' "$FAKE_FILTERS"
+  ;;
 *ebur128*)
   echo "[Parsed_ebur128_0 @ 0x1] t: 1.0 TARGET:-23 LUFS M: -30 S: -30 I: -30.0 LUFS" >&2
   printf '[Parsed_ebur128_0 @ 0x1] Summary:\\n\\n  Integrated loudness:\\n    I:         %s LUFS\\n' "${FAKE_LUFS:--16.0}" >&2
@@ -172,7 +176,7 @@ def test_everything_passes_and_verify_json_is_written(studio):
     assert saved["version"] == "v1" and saved["passed"] is True
     assert set(saved["runs"]) == {"demo-16x9.mp4"}
     run = saved["runs"]["demo-16x9.mp4"]
-    assert set(run) == {"attempts", "attempt", "passed", "stop", "checks", "frames"}
+    assert set(run) == {"attempts", "attempt", "failed_attempts", "passed", "stop", "checks", "frames"}
     assert run["passed"] is True and run["attempt"] == 1 and run["stop"] is False
     assert len(run["attempts"]) == 1
     assert set(run["attempts"][0]) == {"n", "ts", "passed"}
@@ -656,6 +660,24 @@ def test_attempts_accumulate_and_stop_at_three_failures(tmp_path):
     assert [a["n"] for a in saved["runs"]["demo-16x9.mp4"]["attempts"]] == [1, 2, 3]
 
 
+def test_only_failed_attempts_count_toward_the_stop(tmp_path):
+    s = Studio(tmp_path)
+    bad = s.project / "calls.jsonl"
+    seen = []
+    for fails in (False, True, True, False, True):
+        if fails:
+            shutil.copy(FIX / "calls_bad.jsonl", bad)
+        elif bad.exists():
+            bad.unlink()
+        code, out = s.run()
+        assert code == (1 if fails else 0)
+        seen.append((out["attempt"], out["failed_attempts"], out["stop"]))
+    assert seen == [(1, 0, False), (2, 1, False), (3, 2, False), (4, 2, False), (5, 3, True)]
+    run = json.loads((s.vdir / "verify.json").read_text())["runs"]["demo-16x9.mp4"]
+    assert run["attempt"] == 5 and run["failed_attempts"] == 3 and run["stop"] is True
+    assert [a["passed"] for a in run["attempts"]] == [True, False, False, True, False]
+
+
 def test_a_passing_attempt_never_stops(tmp_path):
     s = Studio(tmp_path)
     failed = [{"n": n, "ts": "t", "passed": False} for n in (1, 2, 3)]
@@ -814,6 +836,68 @@ def test_default_beats_file_is_read_from_the_project(studio):
     assert "venv" in check_of(out, "sync")["detail"]
 
 
+def _sync_row() -> dict:
+    return {"id": "label", "via": "silence", "offset_s": 0.0, "offset_frames": 0.0}
+
+
+def test_a_9x16_mp4_reads_its_own_beats_file(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    fake_venv(s, [_sync_row()])
+    beats_file(s.project / "beats.json")
+    sized = beats_file(s.project / "beats-9x16.json", id="tall")
+    audio = FIX / "audio_vo.json"
+    code, out = s.run("--mp4", nine, "--audio-json", "assets/vo.wav=%s" % audio)
+    sync = check_of(out, "sync")
+    assert sync["status"] == "pass", sync
+    assert sync["measured"]["beats_file"] == str(sized)
+    code, out = s.run("--mp4", s.vdir / "demo-16x9.mp4", "--audio-json", "assets/vo.wav=%s" % audio)
+    assert check_of(out, "sync")["measured"]["beats_file"] == str(s.project / "beats.json")
+
+
+def test_a_9x16_mp4_falls_back_to_beats_json(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    fake_venv(s, [_sync_row()])
+    shared = beats_file(s.project / "beats.json")
+    code, out = s.run("--mp4", nine, "--audio-json", "assets/vo.wav=%s" % (FIX / "audio_vo.json"))
+    assert check_of(out, "sync")["measured"]["beats_file"] == str(shared)
+
+
+def test_a_1x1_mp4_reads_beats_1x1(tmp_path):
+    s = Studio(tmp_path)
+    square = add_aspect(s, "1x1")
+    fake_venv(s, [_sync_row()])
+    beats_file(s.project / "beats-9x16.json")
+    sized = beats_file(s.project / "beats-1x1.json")
+    code, out = s.run("--mp4", square, "--audio-json", "assets/vo.wav=%s" % (FIX / "audio_vo.json"))
+    assert check_of(out, "sync")["measured"]["beats_file"] == str(sized)
+
+
+def test_an_explicit_beats_flag_beats_the_per_size_file(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    fake_venv(s, [_sync_row()])
+    beats_file(s.project / "beats-9x16.json")
+    explicit = beats_file(tmp_path / "mine.json")
+    code, out = s.run("--mp4", nine, "--beats", explicit, "--audio-json", "assets/vo.wav=%s" % (FIX / "audio_vo.json"))
+    assert check_of(out, "sync")["measured"]["beats_file"] == str(explicit)
+
+
+def test_a_narrated_9x16_mp4_without_any_beats_file_names_the_file_to_create(narrated):
+    nine = add_aspect(narrated, "9x16")
+    code, out = narrated.run("--mp4", nine)
+    sync = check_of(out, "sync")
+    assert code == 1 and sync["status"] == "fail"
+    assert "beats-9x16.json" in sync["detail"]
+
+
+def test_a_silent_9x16_mp4_skips_sync_without_beats(studio):
+    nine = add_aspect(studio, "9x16")
+    code, out = studio.run("--mp4", nine)
+    assert check_of(out, "sync")["status"] == "skip"
+
+
 def test_malformed_beats_is_a_usage_error(studio):
     path = write_json(studio.tmp / "beats.json", {"not": "a list"})
     code, out = studio.run("--beats", path)
@@ -824,6 +908,45 @@ def test_color_beat_without_color_is_a_usage_error(studio):
     beats = beats_file(studio.tmp / "beats.json", detector="color", color=None)
     code, out = studio.run("--beats", beats)
     assert code == 2 and "color" in out["error"]
+
+
+# contact sheet ---------------------------------------------------------------------------------
+
+def _ffmpeg_log(s: Studio, args, drawtext: bool) -> "list[str]":
+    log = s.tmp / "ffmpeg.log"
+    filters = " T.. drawtext V->V Draw text on top of video frames." if drawtext else " ... scale V->V Scale."
+    code, out = s.run(*args, env=s.env(FAKE_LOG=str(log), FAKE_FILTERS=filters))
+    assert code == 0, out
+    return log.read_text().splitlines()
+
+
+def test_the_sheet_tiles_the_at_stills_and_labels_them_with_drawtext(studio):
+    lines = _ffmpeg_log(studio, ("--at", "0.5,2,5.5"), drawtext=True)
+    tiles = [ln for ln in lines if "tile=" in ln]
+    assert len(tiles) == 1 and "tile=3x1" in tiles[0]
+    labels = [ln for ln in lines if "drawtext=" in ln]
+    assert len(labels) == 3
+    assert [("%.2fs" % t) in ln for ln, t in zip(labels, (0.5, 2.0, 5.5))] == [True] * 3
+    assert len([ln for ln in lines if "-frames:v 1" in ln and "-ss" in ln]) == 3
+
+
+def test_the_at_sheet_skips_labels_when_ffmpeg_lacks_drawtext(studio):
+    lines = _ffmpeg_log(studio, ("--at", "0.5,2"), drawtext=False)
+    assert not [ln for ln in lines if "drawtext=" in ln]
+    assert any("tile=2x1" in ln for ln in lines)
+    assert (studio.vdir / "frames" / "demo-16x9" / "sheet.png").is_file()
+
+
+def test_the_at_sheet_wraps_after_four_columns(studio):
+    lines = _ffmpeg_log(studio, ("--at", "0.5,1,1.5,2,2.5,3"), drawtext=False)
+    assert any("tile=4x2" in ln for ln in lines)
+
+
+def test_the_default_sheet_is_twelve_evenly_spaced_frames(studio):
+    lines = _ffmpeg_log(studio, (), drawtext=True)
+    assert any("tile=4x3" in ln for ln in lines)
+    assert not [ln for ln in lines if "drawtext=" in ln]
+    assert len([ln for ln in lines if "-ss" in ln]) == 12 + 6
 
 
 # real ffmpeg -----------------------------------------------------------------------------------
@@ -876,7 +999,7 @@ def test_contact_sheet_and_stills_decode_from_the_real_mp4(tmp_path, tone_videos
         [REAL_FFPROBE, "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(sheet)],
         capture_output=True, text=True,
     )
-    assert probe.stdout.strip() == "1920,810"
+    assert probe.stdout.strip() == "1440,270"
     assert len(out["frames"]["stills"]) == 3
     assert all(Path(p).stat().st_size > 0 for p in out["frames"]["stills"])
 

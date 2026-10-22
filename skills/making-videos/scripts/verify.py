@@ -7,6 +7,12 @@ render_log), HyperFrames ``check --json`` output (contrast, title-safe), the MP4
 
 ``verify.json`` keeps one run per MP4 filename under ``runs`` (its own attempts, stop flag, checks and
 frames in ``<vN>/frames/<mp4 stem>/``); its top-level ``passed`` is true only when every run passed.
+Every run is recorded as ``{n, ts, passed}`` and ``attempt`` is their total, but the stop rule counts
+failures only: ``failed_attempts`` is how many recorded runs failed, and ``stop`` is true when that reaches
+three on a run that itself failed, so a passing run never moves an MP4 toward the stop.
+
+Beats are per render size: without ``--beats``, ``<project>/beats-9x16.json`` or ``beats-1x1.json`` is used
+for an MP4 named ``*-9x16.mp4`` or ``*-1x1.mp4`` when that file exists, otherwise ``<project>/beats.json``.
 
 Prints exactly one JSON object to stdout (this run's result plus ``mp4``); diagnostics go to stderr.
 Exit codes: 0 every check passed or was skipped; 1 a check failed, or the MP4 is missing
@@ -652,6 +658,19 @@ def load_beats(path: Path) -> "list[dict]":
     return beats
 
 
+def default_beats_path(project: Path, mp4: Path) -> "tuple[Optional[Path], str]":
+    """The beats file for ``mp4`` when ``--beats`` is absent, and the file a narrated video should create."""
+    match = _ASPECT_MP4.search(mp4.name)
+    if match:
+        sized = project / ("beats-%s.json" % match.group(1).lower())
+        if sized.is_file():
+            return sized, sized.name
+        shared = project / "beats.json"
+        return (shared if shared.is_file() else None), sized.name
+    shared = project / "beats.json"
+    return (shared if shared.is_file() else None), shared.name
+
+
 def parse_audio_args(values: "list[str]") -> "dict[str, Path]":
     mapping = {}
     for value in values:
@@ -700,24 +719,28 @@ def collect_audio(project: Path, beats: "list[dict]", supplied: "dict[str, Path]
 
 
 def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]"], supplied: "dict[str, Path]",
-               narrated: bool = False) -> dict:
-    """Beat-to-word offsets. A narrated video cannot skip: missing beats or tooling fails it."""
+               narrated: bool = False, beats_file: Optional[Path] = None, create: str = "beats.json") -> dict:
+    """Beat-to-word offsets. A narrated video cannot skip: missing beats or tooling fails it.
+
+    ``beats_file`` is the file ``beats`` came from; ``create`` names the file a narrated video is missing.
+    """
     threshold = {"offset_frames_max": 1}
     unavailable = "fail" if narrated else "skip"
+    used = {"beats_file": str(beats_file)} if beats_file else None
     if not beats:
         if narrated:
-            return make_check("sync", "fail", None, threshold, "narrated videos need beats.json (see audio.md)")
-        return make_check("sync", "skip", None, threshold, "no beats.json, so there are no timed beats to measure")
+            return make_check("sync", "fail", None, threshold, "narrated videos need %s (see audio.md)" % create)
+        return make_check("sync", "skip", None, threshold, "no %s, so there are no timed beats to measure" % create)
     py = venv_python()
     if not py.is_file():
         return make_check(
-            "sync", unavailable, None, threshold,
+            "sync", unavailable, used, threshold,
             "venv python not found at %s; run `python3 %s check --need narration` to see the fix"
             % (py, SCRIPTS_DIR / "doctor.py"),
         )
     items, error, tool_missing = collect_audio(project, beats, supplied)
     if error:
-        return make_check("sync", unavailable if tool_missing else "fail", None, threshold, error)
+        return make_check("sync", unavailable if tool_missing else "fail", used, threshold, error)
     request = {
         "mp4": str(mp4), "fps": info["fps"], "width": info["width"], "height": info["height"],
         "audio": items, "beats": [dict(b, clip_key=b["clip"]) for b in beats],
@@ -726,15 +749,15 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
         proc = subprocess.run([str(py), str(WORKER_PY)], input=json.dumps(request), capture_output=True, text=True, timeout=900,
                               env=scrubbed_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return make_check("sync", "fail", None, threshold, "media_worker did not run: %s" % exc)
+        return make_check("sync", "fail", used, threshold, "media_worker did not run: %s" % exc)
     try:
         report = json.loads(proc.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError):
-        return make_check("sync", "fail", None, threshold, "media_worker printed no JSON: %s" % proc.stderr.strip()[-200:])
+        return make_check("sync", "fail", used, threshold, "media_worker printed no JSON: %s" % proc.stderr.strip()[-200:])
     if proc.returncode == EXIT_MISSING_TOOL:
-        return make_check("sync", unavailable, None, threshold, "media_worker needs numpy in the venv: %s" % report.get("error"))
+        return make_check("sync", unavailable, used, threshold, "media_worker needs numpy in the venv: %s" % report.get("error"))
     if proc.returncode != 0 or "beats" not in report:
-        return make_check("sync", "fail", None, threshold, "media_worker failed: %s" % report.get("error", proc.stderr.strip()[-200:]))
+        return make_check("sync", "fail", used, threshold, "media_worker failed: %s" % report.get("error", proc.stderr.strip()[-200:]))
     rows = report["beats"]
     problems = []
     flagged = []
@@ -753,6 +776,7 @@ def check_sync(project: Path, mp4: Path, info: dict, beats: Optional["list[dict]
     if flagged:
         detail += "; flagged (no audio onset near the expected time, expected time used): %s" % ", ".join(flagged)
     measured = {
+        "beats_file": str(beats_file) if beats_file else None,
         "worst_frames": round(worst, 2),
         "beats": [
             dict({k: r.get(k) for k in ("id", "via")},
@@ -774,8 +798,42 @@ def _grab(mp4: Path, at: float, out: Path) -> None:
         raise RuntimeError("ffmpeg could not grab a frame at %.3f s: %s" % (at, proc.stderr.strip()[-200:]))
 
 
+def _has_drawtext() -> bool:
+    proc = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-filters"], capture_output=True, text=True, env=scrubbed_env())
+    return proc.returncode == 0 and re.search(r"\bdrawtext\b", proc.stdout) is not None
+
+
+def _label(src: Path, dst: Path, seconds: float) -> None:
+    """Copy ``src`` to ``dst`` with its time burnt in; the plain frame when drawtext fails."""
+    proc = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(src), "-vf",
+         "drawtext=text='%.2fs':x=12:y=12:fontsize=h/12:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6" % seconds,
+         "-frames:v", "1", str(dst)],
+        capture_output=True, text=True, env=scrubbed_env(),
+    )
+    if proc.returncode != 0 or not dst.is_file():
+        shutil.copyfile(src, dst)
+
+
+def _tile(work: Path, count: int, sheet: Path) -> None:
+    columns = min(SHEET_COLUMNS, count)
+    rows = -(-count // columns)
+    proc = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-framerate", "1", "-i", str(work / "s%02d.png"),
+         "-vf", "scale=%d:-1,tile=%dx%d" % (SHEET_TILE_WIDTH, columns, rows),
+         "-frames:v", "1", str(sheet)],
+        capture_output=True, text=True, env=scrubbed_env(),
+    )
+    if proc.returncode != 0 or not sheet.is_file():
+        raise RuntimeError("ffmpeg could not tile the contact sheet: %s" % proc.stderr.strip()[-200:])
+
+
 def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]") -> dict:
-    """Contact sheet and stills decoded from the MP4 into ``<vN>/frames/<mp4 stem>/``."""
+    """Contact sheet and stills decoded from the MP4 into ``<vN>/frames/<mp4 stem>/``.
+
+    With ``at`` the sheet tiles those stills in order, labelled with their times when ffmpeg has drawtext;
+    otherwise it tiles evenly spaced frames.
+    """
     frames = vdir / "frames" / mp4.stem
     frames.mkdir(parents=True, exist_ok=True)
     for old in frames.iterdir():
@@ -786,29 +844,33 @@ def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]
     def clamp(t: float) -> float:
         return min(max(t, 0.0), last)
 
-    tiles = SHEET_COLUMNS * SHEET_ROWS
+    sheet = frames / "sheet.png"
     work = frames / ".sheet-tmp"
     work.mkdir(exist_ok=True)
     try:
-        for i in range(tiles):
-            _grab(mp4, clamp((i + 0.5) * info["duration"] / tiles), work / ("s%02d.png" % i))
-        sheet = frames / "sheet.png"
-        proc = subprocess.run(
-            ["ffmpeg", "-nostdin", "-v", "error", "-y", "-framerate", "1", "-i", str(work / "s%02d.png"),
-             "-vf", "scale=%d:-1,tile=%dx%d" % (SHEET_TILE_WIDTH, SHEET_COLUMNS, SHEET_ROWS),
-             "-frames:v", "1", str(sheet)],
-            capture_output=True, text=True, env=scrubbed_env(),
-        )
-        if proc.returncode != 0 or not sheet.is_file():
-            raise RuntimeError("ffmpeg could not tile the contact sheet: %s" % proc.stderr.strip()[-200:])
+        if at:
+            stills = []
+            labels = _has_drawtext()
+            for n, t in enumerate(at, start=1):
+                out = frames / ("still-%02d-%.2fs.png" % (n, clamp(t)))
+                _grab(mp4, clamp(t), out)
+                stills.append(str(out))
+                tile = work / ("s%02d.png" % (n - 1))
+                _label(out, tile, clamp(t)) if labels else shutil.copyfile(out, tile)
+            _tile(work, len(at), sheet)
+        else:
+            tiles = SHEET_COLUMNS * SHEET_ROWS
+            for i in range(tiles):
+                _grab(mp4, clamp((i + 0.5) * info["duration"] / tiles), work / ("s%02d.png" % i))
+            _tile(work, tiles, sheet)
+            stills = []
+            for n in range(DEFAULT_STILLS):
+                t = clamp((n + 0.5) * info["duration"] / DEFAULT_STILLS)
+                out = frames / ("still-%02d-%.2fs.png" % (n + 1, t))
+                _grab(mp4, t, out)
+                stills.append(str(out))
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    times = at if at else [(i + 0.5) * info["duration"] / DEFAULT_STILLS for i in range(DEFAULT_STILLS)]
-    stills = []
-    for n, t in enumerate(times, start=1):
-        out = frames / ("still-%02d-%.2fs.png" % (n, clamp(t)))
-        _grab(mp4, clamp(t), out)
-        stills.append(str(out))
     return {"sheet": str(sheet), "stills": stills}
 
 
@@ -826,7 +888,7 @@ def read_runs(path: Path, vdir: Path) -> "dict[str, dict]":
         return {name: run for name, run in data["runs"].items() if isinstance(run, dict)}
     mp4s = sorted(vdir.glob("*.mp4"))
     if isinstance(data.get("attempts"), list) and len(mp4s) == 1:
-        keys = ("attempts", "attempt", "passed", "stop", "checks", "frames")
+        keys = ("attempts", "attempt", "failed_attempts", "passed", "stop", "checks", "frames")
         return {mp4s[0].name: {k: data[k] for k in keys if k in data}}
     return {}
 
@@ -849,7 +911,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", required=True, help="version folder name, such as v1")
     parser.add_argument("--mp4", help="the render to check (default: the only *.mp4 in the version folder); "
                         "a *-9x16.mp4 or *-1x1.mp4 also needs the matching scenes-9x16/ or scenes-1x1/ folder")
-    parser.add_argument("--beats", help="beats.json (default: <project>/beats.json when present)")
+    parser.add_argument("--beats", help="beats file (default: <project>/beats-9x16.json or beats-1x1.json for an "
+                        "MP4 of that size when present, else <project>/beats.json)")
     parser.add_argument("--check-json", action="append", default=[], metavar="[BAND=]FILE",
                         help="hf.py check --json output; BAND is top|bottom|left|right for a --caption-zone run")
     parser.add_argument("--render-log", help="render log (default: <project>/<version>/render.log)")
@@ -886,8 +949,11 @@ def main(argv: Optional["list[str]"] = None) -> int:
 
     check_docs = parse_check_args(args.check_json)
     supplied = parse_audio_args(args.audio_json)
-    beats_path = Path(args.beats) if args.beats else project / "beats.json"
-    beats = load_beats(beats_path) if args.beats or beats_path.is_file() else None
+    if args.beats:
+        beats_path, create = Path(args.beats), Path(args.beats).name
+    else:
+        beats_path, create = default_beats_path(project, mp4)
+    beats = load_beats(beats_path) if beats_path is not None else None
     at = parse_at(args.at) if args.at else None
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -905,7 +971,7 @@ def main(argv: Optional["list[str]"] = None) -> int:
             check_contrast(project, args.version, check_docs, scenes),
             check_title_safe(project, args.version, check_docs, scenes),
             check_loudness(mp4, narrated),
-            check_sync(project, mp4, info, beats, supplied, narrated),
+            check_sync(project, mp4, info, beats, supplied, narrated, beats_path, create),
             check_blender(project),
             check_outside_calls(project, brief),
         ]
@@ -924,9 +990,11 @@ def main(argv: Optional["list[str]"] = None) -> int:
         "passed": passed,
     })
     attempt = len(attempts)
-    stop = attempt >= MAX_ATTEMPTS and not passed
+    failed_attempts = sum(1 for a in attempts if not a.get("passed"))
+    stop = failed_attempts >= MAX_ATTEMPTS and not passed
     runs[mp4.name] = {
-        "attempts": attempts, "attempt": attempt, "passed": passed, "stop": stop, "checks": checks, "frames": frames,
+        "attempts": attempts, "attempt": attempt, "failed_attempts": failed_attempts, "passed": passed, "stop": stop,
+        "checks": checks, "frames": frames,
     }
     document = {
         "version": args.version,
@@ -935,8 +1003,8 @@ def main(argv: Optional["list[str]"] = None) -> int:
     }
     verify_json.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     emit({
-        "version": args.version, "mp4": mp4.name, "attempt": attempt, "passed": passed, "stop": stop,
-        "checks": checks, "frames": frames,
+        "version": args.version, "mp4": mp4.name, "attempt": attempt, "failed_attempts": failed_attempts,
+        "passed": passed, "stop": stop, "checks": checks, "frames": frames,
     }, EXIT_OK if passed else EXIT_FAILED)
 
 
