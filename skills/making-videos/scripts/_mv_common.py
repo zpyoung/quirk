@@ -59,6 +59,20 @@ def emit(obj: dict, code: int = 0) -> NoReturn:
     raise SystemExit(code)
 
 
+def scrubbed_env(extra: Optional[dict] = None) -> dict:
+    """A copy of ``os.environ`` plus ``extra`` with every ``SCRUB_ENV`` variable removed.
+
+    Every child process the skill launches gets this environment, so no Gemini or provider key
+    reaches a tool that has no use for it.
+    """
+    env = dict(os.environ)
+    if extra:
+        env.update(extra)
+    for name in SCRUB_ENV:
+        env.pop(name, None)
+    return env
+
+
 def run(
     argv: "list[str]",
     env: Optional[dict] = None,
@@ -66,12 +80,15 @@ def run(
 ) -> "subprocess.CompletedProcess[str]":
     """Run ``argv`` capturing text output; never raises on a non-zero exit.
 
+    The child never sees a ``SCRUB_ENV`` variable: ``env`` defaults to the current environment and
+    any ``SCRUB_ENV`` key is dropped from it either way.
+
     Raises ``subprocess.TimeoutExpired`` on timeout and ``FileNotFoundError`` when
     ``argv[0]`` is missing, so callers can map them to exit 1 and exit 3.
     """
     return subprocess.run(
         argv,
-        env=env,
+        env=scrubbed_env() if env is None else {k: v for k, v in env.items() if k not in SCRUB_ENV},
         timeout=timeout,
         capture_output=True,
         text=True,

@@ -14,7 +14,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _mv_common import scrubbed_env  # noqa: E402
 
 try:
     import numpy as np
@@ -110,7 +115,7 @@ def decode_window(mp4: str, first_index: int, count: int, fps: float, width: int
         "-frames:v", str(count), "-vf", "scale=%d:%d" % (width, height),
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ]
-    proc = subprocess.run(argv, capture_output=True)
+    proc = subprocess.run(argv, capture_output=True, env=scrubbed_env())
     if proc.returncode != 0:
         raise RuntimeError("ffmpeg failed decoding frames: %s" % proc.stderr.decode("utf-8", "replace")[-300:])
     raw = np.frombuffer(proc.stdout, np.uint8)
@@ -148,8 +153,8 @@ def analyse(request: dict) -> dict:
             "via": via,
             "flagged": flagged,
             "seen_s": None if seen is None else round(seen, 4),
-            "offset_s": None if offset is None else round(offset, 4),
-            "offset_frames": None if offset is None else round(offset * fps, 2),
+            "offset_s": offset,
+            "offset_frames": None if offset is None else offset * fps,
         })
     return {"fps": fps, "beats": results}
 

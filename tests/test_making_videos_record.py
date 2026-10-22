@@ -32,7 +32,8 @@ print(webm)
 FAKE_FFMPEG = """#!{python}
 import json, os, sys
 with open(os.environ["FAKE_LOG"], "a") as fh:
-    fh.write(json.dumps({{"tool": "ffmpeg", "argv": sys.argv[1:]}}) + "\\n")
+    fh.write(json.dumps({{"tool": "ffmpeg", "argv": sys.argv[1:],
+        "leaked": [k for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY") if k in os.environ]}}) + "\\n")
 if os.environ.get("FAKE_FFMPEG_FAIL"):
     sys.stderr.write("Conversion failed!\\n")
     sys.exit(1)
@@ -42,7 +43,8 @@ open(sys.argv[-1], "wb").write(b"mp4")
 FAKE_FFPROBE = """#!{python}
 import json, os, sys
 with open(os.environ["FAKE_LOG"], "a") as fh:
-    fh.write(json.dumps({{"tool": "ffprobe", "argv": sys.argv[1:]}}) + "\\n")
+    fh.write(json.dumps({{"tool": "ffprobe", "argv": sys.argv[1:],
+        "leaked": [k for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY") if k in os.environ]}}) + "\\n")
 print("12.3456")
 """
 
@@ -313,6 +315,15 @@ def test_child_environment_is_scrubbed_of_keys(project, env, tmp_path):
     record(project, write_steps(tmp_path), env)
     (node_call,) = fake_calls(env, "node")
     assert node_call["leaked"] == []
+
+
+def test_conversion_children_are_scrubbed_of_keys(project, env, tmp_path):
+    install_playwright(env)
+    record(project, write_steps(tmp_path), env)
+    (ffmpeg_call,) = fake_calls(env, "ffmpeg")
+    (ffprobe_call,) = fake_calls(env, "ffprobe")
+    assert ffmpeg_call["leaked"] == []
+    assert ffprobe_call["leaked"] == []
 
 
 def test_missing_project_directory_exits_1(tmp_path, env):

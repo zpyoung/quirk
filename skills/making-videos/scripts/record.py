@@ -42,11 +42,11 @@ from _mv_common import (  # noqa: E402
     EXIT_MISSING_TOOL,
     EXIT_USAGE,
     PLAYWRIGHT_VERSION,
-    SCRUB_ENV,
     cache_root,
     emit,
     log_call,
     run,
+    scrubbed_env,
 )
 
 ACTIONS = ("goto", "click", "fill", "wait", "scroll")
@@ -236,10 +236,8 @@ def _check_playwright() -> Path:
 
 
 def _child_env(pkg: Path) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV}
-    existing = env.get("NODE_PATH")
-    env["NODE_PATH"] = str(pkg.parent) + (os.pathsep + existing if existing else "")
-    return env
+    existing = os.environ.get("NODE_PATH")
+    return scrubbed_env({"NODE_PATH": str(pkg.parent) + (os.pathsep + existing if existing else "")})
 
 
 def render_script(url: str, size: "tuple[int, int]", fps: int, steps: "list[dict]",
