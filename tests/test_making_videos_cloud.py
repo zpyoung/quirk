@@ -8,6 +8,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._reply(200, BINARY, "application/octet-stream")
         elif route == "/long":
             self._reply(200, b"x" * 5000, "text/plain")
+        elif route == "/huge-error":
+            self._reply(500, b"e" * 200_000, "text/plain")
+        elif route == "/stream":
+            self._stream(b"z" * 8192, 40, declare=False)
+        elif route == "/declared":
+            self._stream(b"z" * 8192, 40, declare=True)
+        elif route == "/drip":
+            self._stream(b"d" * 10, 40, delay=0.3, declare=True)
         elif route == "/redir":
             self.send_response(302)
             self.send_header("Location", "https://evil.example.com/steal")
@@ -57,6 +66,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _stream(self, piece: bytes, count: int, declare: bool, delay: float = 0.0) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        if declare:
+            self.send_header("Content-Length", str(len(piece) * count))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for _ in range(count):
+                self.wfile.write(piece)
+                self.wfile.flush()
+                if delay:
+                    time.sleep(delay)
+        except OSError:
+            pass
+        self.close_connection = True
 
     do_GET = do_POST = _serve
 
@@ -291,6 +317,60 @@ def test_http_error_returns_status_exit_1_and_is_logged(server, project, env, tm
     (record,) = calls(project)
     assert record["status"] == 500
     assert_key_absent(proc, project)
+
+
+@pytest.mark.parametrize("route", ["/stream", "/declared"])
+def test_body_over_max_bytes_aborts_and_deletes_the_partial_file(server, project, env, tmp_path, route):
+    dest = tmp_path / "big.bin"
+    proc, out = call(project, "pexels", base_url(server) + route, env, "--out", dest, "--max-bytes", 100_000)
+    assert proc.returncode == 1
+    assert "--max-bytes" in out["error"]
+    assert out["aborted"] == out["error"].split("aborted: ", 1)[1]
+    assert not dest.exists()
+    (record,) = calls(project)
+    assert "--max-bytes" in record["aborted"]
+    assert record["bytes"] == out["bytes"]
+    if route == "/stream":
+        assert 100_000 < record["bytes"] < 8192 * 40
+    assert_key_absent(proc, project)
+
+
+def test_body_under_max_bytes_is_unaffected(server, project, env, tmp_path):
+    dest = tmp_path / "ok.bin"
+    proc, out = call(project, "openai", base_url(server) + "/bin", env, "--out", dest, "--max-bytes", len(BINARY))
+    assert proc.returncode == 0
+    assert dest.read_bytes() == BINARY
+    assert "aborted" not in calls(project)[0]
+
+
+def test_slow_body_past_timeout_aborts_and_deletes_the_partial_file(server, project, env, tmp_path):
+    dest = tmp_path / "slow.bin"
+    started = time.monotonic()
+    proc, out = call(project, "pexels", base_url(server) + "/drip", env, "--out", dest, "--timeout", 1)
+    assert time.monotonic() - started < 10
+    assert proc.returncode == 1
+    assert "--timeout" in out["aborted"]
+    assert not dest.exists()
+    (record,) = calls(project)
+    assert "--timeout" in record["aborted"]
+    assert 0 < record["bytes"] < 400
+
+
+def test_http_error_body_is_read_only_up_to_64_kib(server, project, env):
+    proc, out = call(project, "openai", base_url(server) + "/huge-error", env)
+    assert proc.returncode == 1
+    assert out["status"] == 500
+    assert out["bytes"] == 64 * 1024
+    assert len(out["preview"]) == 2000
+    (record,) = calls(project)
+    assert record["bytes"] == 64 * 1024
+
+
+@pytest.mark.parametrize("flag,value", [("--max-bytes", "0"), ("--max-bytes", "x"), ("--timeout", "0"), ("--timeout", "-1")])
+def test_nonpositive_limits_are_usage_errors(server, project, env, flag, value):
+    proc, out = call(project, "openai", base_url(server) + "/bin", env, flag, value)
+    assert proc.returncode == 2
+    assert calls(project) == []
 
 
 def test_connection_failure_is_logged_with_status_zero(project, env):
