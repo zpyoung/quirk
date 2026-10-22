@@ -7,9 +7,10 @@ characters when ``--out`` is not given, and an ``error`` key on failure). ``--js
 or inline JSON sent as application/json. Diagnostics go to stderr.
 
 A response body larger than ``--max-bytes`` (default 2 GiB) or still arriving after ``--timeout``
-seconds in total (default 300) aborts the call: a partial ``--out`` file is deleted, the log record
-gains an ``aborted`` reason and the bytes read so far, and the exit code is 1. An HTTP error body
-is read only up to 64 KiB.
+seconds in total (default 300) aborts the call: the log record gains an ``aborted`` reason and the
+bytes read so far, and the exit code is 1. The body streams into a temporary file beside ``--out``
+that replaces it only after a complete 2xx download, so a failed call leaves an existing ``--out``
+untouched. An HTTP error body is read only up to 64 KiB and within the same ``--timeout``.
 
 Exit codes: 0 ok; 1 refused or failed (provider not in the brief's ``cloud_allow``, key env var
 unset, URL scheme or host not allowed for the provider, redirect to a disallowed host, HTTP error
@@ -35,6 +36,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -236,6 +238,28 @@ def _fail(message: str, key: str = "", **extra: object) -> NoReturn:
     emit({"error": message, **extra}, EXIT_FAILED)
 
 
+def _read_error_body(exc: urllib.error.HTTPError, deadline: float) -> "tuple[bytes, bool]":
+    """Read at most ``ERROR_BODY_CAP`` bytes of an HTTP error body, stopping at ``deadline``.
+
+    Returns the bytes read and whether the deadline (or a socket timeout) cut the read short.
+    """
+    data = b""
+    read = getattr(exc, "read1", exc.read)
+    try:
+        while len(data) < ERROR_BODY_CAP:
+            if time.monotonic() > deadline:
+                return data, True
+            chunk = read(min(CHUNK, ERROR_BODY_CAP - len(data))) or b""
+            if not chunk:
+                break
+            data += chunk
+    except (socket.timeout, TimeoutError):
+        return data, True
+    except OSError:
+        pass
+    return data, False
+
+
 def _cmd_call(args: argparse.Namespace) -> None:
     provider = args.provider
     project = Path(args.project)
@@ -308,6 +332,7 @@ def _cmd_call(args: argparse.Namespace) -> None:
             total = 0
             head = b""
             sink = None
+            tmp_path: Optional[Path] = None
             try:
                 declared = resp.headers.get("Content-Length", "")
                 if declared.isdigit() and int(declared) > args.max_bytes:
@@ -315,7 +340,10 @@ def _cmd_call(args: argparse.Namespace) -> None:
                                    status, 0)
                 if out_path is not None:
                     out_path.parent.mkdir(parents=True, exist_ok=True)
-                    sink = open(out_path, "wb")
+                    fd, tmp_name = tempfile.mkstemp(dir=str(out_path.parent), prefix=f".{out_path.name}.",
+                                                    suffix=".part")
+                    tmp_path = Path(tmp_name)
+                    sink = os.fdopen(fd, "wb")
                 while True:
                     try:
                         chunk = resp.read1(CHUNK)
@@ -332,20 +360,27 @@ def _cmd_call(args: argparse.Namespace) -> None:
                         head += chunk
                     if time.monotonic() > deadline:
                         raise _Aborted(f"response body exceeded --timeout {args.timeout:g}s", status, total)
+                if sink is not None:
+                    sink.close()
+                    sink = None
+                    os.replace(tmp_path, out_path)
+                    tmp_path = None
             finally:
                 if sink is not None:
                     sink.close()
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
     except _Aborted as exc:
-        if out_path is not None:
-            out_path.unlink(missing_ok=True)
         finish(exc.status, exc.nbytes, exc.reason)
         _fail(f"{provider} response aborted: {exc.reason}", key, status=exc.status, out=None,
               bytes=exc.nbytes, aborted=exc.reason)
     except urllib.error.HTTPError as exc:
-        data = exc.read(ERROR_BODY_CAP) or b""
-        finish(exc.code, len(data))
+        data, timed_out = _read_error_body(exc, deadline)
+        reason = f"error body exceeded --timeout {args.timeout:g}s" if timed_out else None
+        finish(exc.code, len(data), reason)
+        extra = {"aborted": reason} if reason else {}
         _fail(f"HTTP {exc.code} from {provider}", key, status=exc.code, out=None,
-              bytes=len(data), preview=_preview(data, key))
+              bytes=len(data), preview=_preview(data, key), **extra)
     except _Refused as exc:
         finish(exc.status, 0)
         _fail(str(exc), key)

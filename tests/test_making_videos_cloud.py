@@ -52,6 +52,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._stream(b"z" * 8192, 40, declare=True)
         elif route == "/drip":
             self._stream(b"d" * 10, 40, delay=0.3, declare=True)
+        elif route == "/drip-error":
+            self._stream(b"e" * 10, 40, delay=0.3, declare=True, status=500)
         elif route == "/redir":
             self.send_response(302)
             self.send_header("Location", "https://evil.example.com/steal")
@@ -67,8 +69,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _stream(self, piece: bytes, count: int, declare: bool, delay: float = 0.0) -> None:
-        self.send_response(200)
+    def _stream(self, piece: bytes, count: int, declare: bool, delay: float = 0.0, status: int = 200) -> None:
+        self.send_response(status)
         self.send_header("Content-Type", "application/octet-stream")
         if declare:
             self.send_header("Content-Length", str(len(piece) * count))
@@ -335,6 +337,43 @@ def test_body_over_max_bytes_aborts_and_deletes_the_partial_file(server, project
     assert_key_absent(proc, project)
 
 
+def _leftovers(directory: Path, keep: Path) -> list:
+    return [p.name for p in directory.iterdir() if p != keep]
+
+
+@pytest.mark.parametrize(
+    "route,extra",
+    [
+        ("/long", ["--max-bytes", 100]),
+        ("/declared", ["--max-bytes", 100_000]),
+        ("/stream", ["--max-bytes", 100_000]),
+        ("/drip", ["--timeout", 1]),
+        ("/boom", []),
+    ],
+)
+def test_failed_download_leaves_an_existing_out_file_untouched(server, project, env, tmp_path, route, extra):
+    outdir = tmp_path / "assets"
+    outdir.mkdir()
+    dest = outdir / "existing.bin"
+    dest.write_bytes(b"original bytes")
+    proc, _ = call(project, "pexels", base_url(server) + route, env, "--out", dest, *extra)
+    assert proc.returncode == 1
+    assert dest.read_bytes() == b"original bytes"
+    assert _leftovers(outdir, dest) == []
+
+
+def test_successful_download_replaces_an_existing_out_file_without_leftovers(server, project, env, tmp_path):
+    outdir = tmp_path / "assets"
+    outdir.mkdir()
+    dest = outdir / "existing.bin"
+    dest.write_bytes(b"original bytes")
+    proc, out = call(project, "openai", base_url(server) + "/bin", env, "--out", dest)
+    assert proc.returncode == 0
+    assert dest.read_bytes() == BINARY
+    assert out["bytes"] == len(BINARY)
+    assert _leftovers(outdir, dest) == []
+
+
 def test_body_under_max_bytes_is_unaffected(server, project, env, tmp_path):
     dest = tmp_path / "ok.bin"
     proc, out = call(project, "openai", base_url(server) + "/bin", env, "--out", dest, "--max-bytes", len(BINARY))
@@ -364,6 +403,19 @@ def test_http_error_body_is_read_only_up_to_64_kib(server, project, env):
     assert len(out["preview"]) == 2000
     (record,) = calls(project)
     assert record["bytes"] == 64 * 1024
+
+
+def test_trickling_http_error_body_is_cut_off_at_the_timeout(server, project, env):
+    started = time.monotonic()
+    proc, out = call(project, "openai", base_url(server) + "/drip-error", env, "--timeout", 1)
+    assert time.monotonic() - started < 8
+    assert proc.returncode == 1
+    assert out["status"] == 500
+    assert "--timeout" in out["aborted"]
+    assert 0 < out["bytes"] < 400
+    (record,) = calls(project)
+    assert record["status"] == 500
+    assert "--timeout" in record["aborted"]
 
 
 @pytest.mark.parametrize("flag,value", [("--max-bytes", "0"), ("--max-bytes", "x"), ("--timeout", "0"), ("--timeout", "-1")])
