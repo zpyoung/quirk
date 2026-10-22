@@ -30,7 +30,7 @@ skills/making-videos/
   scripts/voice.py             launcher for TTS/alignment in the cache venv          (stdlib)
   scripts/voice_worker.py      Kokoro + faster-whisper; runs only inside the venv    (venv deps)
   scripts/blender_render.py    headless Blender runner + guard                       (stdlib)
-  scripts/bl_guard.py          imported inside Blender to report scene facts         (bpy)
+  scripts/bl_guard.py          runs inside Blender as a second --python script      (bpy)
   scripts/cloud.py             the only path to a cloud API; allowlist + call log    (stdlib)
   scripts/record.py            Playwright web-app recording → MP4                    (stdlib)
   scripts/verify.py            strict verify, writes verify.json                     (stdlib)
@@ -298,7 +298,7 @@ in `test_making_videos_skill.py`.
 | `references/motion.md` | general motion principles and software-video specifics from `research/craft.md`; seek-safe GSAP rules from the trials: never `play()`, no nested `add()` of scene timelines, `fromTo` not `from`, no `repeat: -1`, no ScrollTrigger, `immediateRender: false` on stacked tweens †, `gsap.set` not `tl.set(…, 0)` |
 | `references/hyperframes.md` | wrapper recipes for init/lint/check/snapshot/render/capture/audio; inline the `:root` font tokens, never a linked stylesheet † ; `--describe false` †; `HYPERFRAMES_NO_TELEMETRY` †; frames for review come from the MP4; the macOS screenshot-capture fallback warning |
 | `references/audio.md` | narration build order (voice first, visuals timed to measured onsets); Kokoro + alignment via `voice.py`; loudness target −16 LUFS, true peak ≤ −1 dBTP †; music only from a user file or the stock opt-in, at least 20 dB under narration †; captions: burned for 9:16/1:1, `.srt` for 16:9 † |
-| `references/3d.md` | `blender_render.py` usage; `--python-exit-code` †; .blend before `--python`; `bl_guard.py` preamble; TTF/OTF fonts; sRGB→linear for brand colours; Standard view transform; ease text to face camera (mirrored-text trap); fallback to 2D when Blender is missing (SC-3) |
+| `references/3d.md` | `blender_render.py` usage; `--python-exit-code` †; .blend before `--python`; the guard runs automatically after the author's script, which must tolerate extra args via `parse_known_args`; TTF/OTF fonts; sRGB→linear for brand colours; Standard view transform; ease text to face camera (mirrored-text trap); fallback to 2D when Blender is missing (SC-3) |
 | `references/review.md` | verify checks and their sources (logic amendment 2026-10-22); review page; stop 2; notes → new version, old versions kept (SC-6) †; 3-attempt cap (SC-5) |
 | `references/cloud.md` | local by default; a provider runs only when the brief names it (SC-4) †; a key in the environment is never permission †; providers, endpoints, auth headers and licence/attribution rules from `research/toolchain.md`; Gemini frame review not offered |
 | `references/long-form.md` | over about 60 s: lock the scene kit first, subagents compose only from the kit, verify runs on the assembled MP4 (SC-9) † |
