@@ -435,6 +435,11 @@ class _LayerColl:
         self.collection, self.children, self.exclude = collection, list(children), exclude
 
 
+class _ViewLayer:
+    def __init__(self, layer_collection, use=True):
+        self.layer_collection, self.use = layer_collection, use
+
+
 class _Text:
     def __init__(self, name, rows, collections=(), hidden_on=()):
         self.type, self.name = "FONT", name
@@ -445,10 +450,13 @@ class _Text:
 
 
 class _Scene:
-    def __init__(self, texts, layer_collection=None):
+    def __init__(self, texts, layer_collection=None, extra_layers=()):
         self.objects = texts
         self.camera = type("Cam", (), {"matrix_world": _Matrix(IDENTITY, (0, 0, 5))})()
-        self.view_layers = [type("VL", (), {"layer_collection": layer_collection})()] if layer_collection else []
+        layers = [layer_collection, *extra_layers] if layer_collection else []
+        self.view_layers = [
+            lc if isinstance(lc, _ViewLayer) else _ViewLayer(lc) for lc in layers
+        ]
         self.collections = []
 
     def frame_set(self, frame):
@@ -521,6 +529,27 @@ def test_text_visible_via_any_of_its_collections(guard):
     layer = _LayerColl(_Coll("Scene Collection"), [_LayerColl(hidden), _LayerColl(shown)])
     title = _Text("Title", FLIPPED, collections=[hidden, shown])
     assert guard._inspect_text(_Scene([title], layer), 1, 1) == (["Title"], [1], [])
+
+
+def _two_layer_scene(first, second, collection):
+    title = _Text("Title", FLIPPED, collections=[collection])
+    return _Scene([title], first, extra_layers=[second])
+
+
+def test_text_excluded_in_first_layer_but_visible_in_enabled_second_is_caught(guard):
+    sub = _Coll("Sub")
+    excluded = _ViewLayer(_LayerColl(_Coll("Scene Collection"), [_LayerColl(sub, exclude=True)]))
+    included = _ViewLayer(_LayerColl(_Coll("Scene Collection"), [_LayerColl(sub)]))
+    scene = _two_layer_scene(excluded, included, sub)
+    assert guard._inspect_text(scene, 1, 1) == (["Title"], [1], [])
+
+
+def test_text_visible_only_in_disabled_layer_is_skipped(guard):
+    sub = _Coll("Sub")
+    excluded = _ViewLayer(_LayerColl(_Coll("Scene Collection"), [_LayerColl(sub, exclude=True)]))
+    disabled = _ViewLayer(_LayerColl(_Coll("Scene Collection"), [_LayerColl(sub)]), use=False)
+    scene = _two_layer_scene(excluded, disabled, sub)
+    assert guard._inspect_text(scene, 1, 1) == ([], [], [])
 
 
 def test_visible_text_without_camera_raises(guard):

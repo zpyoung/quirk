@@ -109,27 +109,39 @@ def render_visible(object_hidden: bool, collection_visible: Sequence[bool]) -> b
     return not collection_visible or any(collection_visible)
 
 
-def _collection_render_state(scene) -> dict:
-    """Map collection name to whether it renders, honouring ``hide_render`` and view-layer exclusion on itself and every ancestor."""
-    states: dict = {}
+def _collection_render_states(scene) -> list:
+    """One collection-name to renders map per view layer enabled for rendering, honouring ``hide_render`` and view-layer exclusion on each collection and its ancestors.
+
+    A scene without view layers yields a single empty map, so only an object's own flag counts.
+    """
     layers = getattr(scene, "view_layers", None)
     if not layers:
-        return states
+        return [{}]
+    maps = []
+    for layer in layers:
+        if not getattr(layer, "use", True):
+            continue
+        states: dict = {}
 
-    def walk(layer_collection, parent_ok: bool) -> None:
-        collection = layer_collection.collection
-        ok = parent_ok and not layer_collection.exclude and not collection.hide_render
-        states[collection.name] = ok
-        for child in layer_collection.children:
-            walk(child, ok)
+        def walk(layer_collection, parent_ok: bool) -> None:
+            collection = layer_collection.collection
+            ok = parent_ok and not layer_collection.exclude and not collection.hide_render
+            states[collection.name] = ok
+            for child in layer_collection.children:
+                walk(child, ok)
 
-    walk(layers[0].layer_collection, True)
-    return states
+        walk(layer.layer_collection, True)
+        maps.append(states)
+    return maps
 
 
-def _object_renders(obj, states: dict) -> bool:
-    flags = [states[c.name] for c in getattr(obj, "users_collection", ()) if c.name in states]
-    return render_visible(bool(obj.hide_render), flags)
+def _object_renders(obj, state_maps: list) -> bool:
+    """True when the object renders in at least one of the per-view-layer ``state_maps``."""
+    for states in state_maps:
+        flags = [states[c.name] for c in getattr(obj, "users_collection", ()) if c.name in states]
+        if render_visible(bool(obj.hide_render), flags):
+            return True
+    return False
 
 
 def _inspect_text(scene, first: int, last: int) -> Tuple[list, list, list]:
@@ -139,7 +151,7 @@ def _inspect_text(scene, first: int, last: int) -> Tuple[list, list, list]:
         return seen, mirrored, edge_on
     for frame in range(first, last + 1):
         scene.frame_set(frame)
-        states = _collection_render_state(scene)
+        states = _collection_render_states(scene)
         visible = [o for o in texts if _object_renders(o, states)]
         if not visible:
             continue
