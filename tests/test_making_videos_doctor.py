@@ -294,6 +294,14 @@ def test_record_need_checks_the_pinned_playwright_version(env, tmp_path):
     pkg.write_text(json.dumps({"version": common.PLAYWRIGHT_VERSION}))
     _, out = run_doctor("check", "--need", "record", env=env)
     assert tool(out, "playwright")["ok"] is True
+    chromium = tool(out, "playwright_chromium")
+    assert chromium["ok"] is False
+    assert chromium["fix"] == "doctor.py install --what playwright --yes"
+    assert out["ok"] is False
+
+    (tmp_path / "cache" / "ms-playwright" / "chromium-1234").mkdir(parents=True)
+    _, out = run_doctor("check", "--need", "record", env=env)
+    assert tool(out, "playwright_chromium")["ok"] is True
     assert out["ok"] is True
 
 
@@ -378,6 +386,22 @@ def test_install_playwright_runs_pnpm_add_then_install_chromium(env, tmp_path):
         ["pnpm", "--dir", str(node_dir), "exec", "playwright", "install", "chromium"],
     ]
     assert out["path"] == str(node_dir)
+
+
+def test_install_playwright_sends_browsers_into_the_cache(env, tmp_path):
+    write_stub(
+        bin_dir(env) / "pnpm",
+        "open(os.environ['FAKE_LOG'] + '.pw', 'a').write("
+        "json.dumps([args[-2:], os.environ.get('PLAYWRIGHT_BROWSERS_PATH')]) + '\\n')\n",
+    )
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(tmp_path / "elsewhere")
+    code, out = run_doctor("install", "--what", "playwright", "--yes", env=env)
+    assert code == 0, out
+    seen = [json.loads(l) for l in Path(env["FAKE_LOG"] + ".pw").read_text().splitlines()]
+    expected = str(tmp_path / "cache" / "ms-playwright")
+    installs = [b for a, b in seen if a == ["install", "chromium"]]
+    assert installs == [expected]
+    assert out["browsers"] == expected
 
 
 def test_install_playwright_without_pnpm_exits_3(env):

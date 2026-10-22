@@ -87,7 +87,7 @@ practitioner range:
 ## Record a running web app
 
 To show a flow in an app that is running at a URL, record it with Playwright. Check the prerequisites
-first:
+first (the install keeps Playwright and its Chromium under the skill cache, `ms-playwright/`, not in `~/Library/Caches`):
 
 ```bash
 python3 "$SKILL_DIR/scripts/doctor.py" check --need record
