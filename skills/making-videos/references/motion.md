@@ -66,6 +66,14 @@ object (card, cursor, highlight ring, logo) either lives in the root composition
 starts scene B at the same position and size. If nothing is shared, the new content enters from a direction
 that makes a new focal point.
 
+### Scene transitions
+
+Pick one transition role per project, so no scene invents its own, and never leave bare ground between scenes.
+
+- Hard cut: the outgoing scene ends on its last frame and the incoming one starts on the next, with no exit tween. Use it when the beat changes sharply or the scenes share nothing.
+- Overlap: the incoming scene's host starts 0.25 s before the outgoing host ends, so the outgoing exit (0.25 s, `power2.in`) and the incoming enter (0.3 to 0.4 s, `expo.out`) run together. Start the first incoming tween at the overlap start, not after the exit. Give an overlapping scene root no opaque background, because an opaque incoming layer hides the outgoing one at once and `check` reports `text_occluded`; the ground comes from `index.html`.
+- An exit that ends before the next enter begins leaves the ground bare for the gap, even a 0.05 s one, which shows as a flash. Either overlap the two, or drop the exit and cut.
+
 ### Avoiding a slideshow
 
 No source defines this; the list is a synthesis of the sources above.

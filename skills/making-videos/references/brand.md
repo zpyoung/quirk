@@ -71,7 +71,7 @@ brand, so re-save a confirmed brand with `--confirm`.
 Do this when `studio.py brand show --product P` prints `"brand": null`, or a brand with `confirmed: false`
 (a draft whose storyboard was never approved).
 
-1. **Colors.** Find CSS custom properties first: grep `--[a-z-]+:` in `:root` blocks of `site.css`,
+1. **Colors.** If the product has no site, CSS or design system, skip the search: propose a palette (ground, ink, accent) and a display and mono type pair that suit it, write them into the draft, and mark them as proposed in what you show. Ask at stop 1 whether to keep them. Otherwise find CSS custom properties first: grep `--[a-z-]+:` in `:root` blocks of `site.css`,
    `tokens.css`, `globals.css`, and theme or Tailwind config files. Keep the product's own token names and
    map them to roles: ground (background), ink (text), muted, rule, accent. Use a color from a screenshot
    only when no token exists.
@@ -87,7 +87,7 @@ Do this when `studio.py brand show --product P` prints `"brand": null`, or a bra
    list are the safe picks for narration.
 6. Write the draft to `$PROJECT/brand.draft.json`, then save it unconfirmed:
    `studio.py brand save --product P --file "$PROJECT/brand.draft.json"`.
-7. Show the draft beside the storyboard at stop 1: swatches with names and hex values, font families and
+7. Show the draft beside the storyboard at stop 1: swatches with names and hex values (labelled "proposed" where you chose them), font families and
    whether files were found, the logo or its absence, and the voice. Apply the user's edits to the
    draft and save it again (still unconfirmed).
 8. When the user approves the storyboard, save with confirmation:
