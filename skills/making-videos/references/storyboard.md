@@ -1,7 +1,7 @@
 # Storyboard: script, scene list, style frames, scene kit
 
 The storyboard is stop 1. Write it, show it to the user with the draft brand if the brand is new, and
-build nothing until the user approves it. Scope limits (over 3 min, avatars, publishing, editing user
+build nothing until the user approves it. With narration on, you may synthesize and align the voice before this stop so the scene times are measured; see Narration pace and word budget. Scope limits (over 3 min, avatars, publishing, editing user
 footage) are handled before this phase; see [SKILL.md](../SKILL.md).
 
 Contents:
@@ -57,22 +57,24 @@ conventions from video-platform guidance and subtitle standards, not laws; the s
 
 ### Narration pace and word budget
 
-A common default is 150 words per minute (2.5 words per second). Narrated MOOC videos averaged 156 wpm
+A common default is 150 words per minute (2.5 words per second). Kokoro `af_heart` measured about 2.8 words per second (about 168 wpm) in a real run: 217 words spoke in 77.6 s. Budget Kokoro at 2.8 words per second, not 150 wpm. Narrated MOOC videos averaged 156 wpm
 ([Guo et al., L@S 2014](https://up.csail.mit.edu/other-pubs/las2014-pguo-engagement.pdf)), and explainer
 guides cite about 150 words for 60 s. These are listening rates for speech; do not apply the 160-180 wpm
 subtitle limits to narration.
 
-| Length | Words at 150 wpm |
-|---|---|
-| 15 s | about 37 |
-| 30 s | about 75 |
-| 60 s | about 150 |
-| 90 s | about 225 |
-| 180 s | about 450 |
+| Length | Words at 150 wpm | Words at Kokoro's measured 2.8 words/s |
+|---|---|---|
+| 15 s | about 37 | about 42 |
+| 30 s | about 75 | about 84 |
+| 60 s | about 150 | about 168 |
+| 90 s | about 225 | about 252 |
+| 180 s | about 450 | about 504 |
 
 Subtract about 10% when silent beats carry part of the scene. Pauses cost time: three deliberate pauses
 turned a 150-word script into about 70 s in one vendor test. After Kokoro speaks the lines, the measured
-length is the truth; adjust the script, not the speed.
+length is the truth; adjust the script, not the speed. You may run `voice.py say` and `voice.py align` before stop 1
+(see [audio.md](audio.md)) and write the measured word starts into the scene table, so the budget check at the end is
+against real timings. If you do not, the times are estimates and the build step replaces them with measured ones.
 
 Adults read silently faster than people speak (238 wpm for non-fiction, [Brysbaert 2019](https://www.sciencedirect.com/science/article/abs/pii/S0749596X19300786)),
 so text that repeats the narration is read ahead of the voice. Use on-screen text for labels and keywords,
@@ -136,7 +138,7 @@ region, and enlarge type. Recommended assets are separate per aspect on [Google'
 
 Vertical safe zones on 1080x1920 vary by platform, and no platform publishes an organic spec. Use one
 conservative envelope for critical text and faces: keep 288 px clear at the top, 672 px at the bottom,
-120 px on the left and 192 px on the right. That leaves a safe box of 768 x 960 px (x 120-888, y 288-1248).
+120 px on the left and 192 px on the right. That leaves a safe box of 768 x 960 px (x 120-888, y 288-1248). When captions are burned, they occupy roughly y 1150-1250, so keep content above about y 1100 of 1920; the box then ends at 1100. Without captions the box above stands.
 It is the largest margin per edge across Meta Reels, TikTok In-Feed and YouTube figures, read from
 third-party measurements ([Solid Labs](https://www.solidlabs.com/social-safe-zones),
 [AdCheckLab](https://adchecklab.com/articles/instagram-reels-safe-zone-template)). If the user delivers only

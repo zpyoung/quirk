@@ -142,6 +142,17 @@ Run in this order: lint, check, snapshot while building, then render, then verif
    done
    ```
 
+   For a 9:16 or 1:1 cut, run the same loop on its own folder and write aspect-suffixed files, because the JSONs describe the scenes folder they were generated from. Pass them to verify with the same band labels (`--check-json top="$V/check-top-9x16.json"`):
+
+   ```bash
+   for spec in "top|x0=0;y0=0;x1=1;y1=.05" "bottom|x0=0;y0=.95;x1=1;y1=1" \
+               "left|x0=0;y0=0;x1=.05;y1=1" "right|x0=.95;y0=0;x1=1;y1=1"; do
+     band="${spec%%|*}"; zone="${spec#*|}"
+     python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- check --json \
+       --caption-zone "${zone};severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1" "$P/scenes-9x16" > "$V/check-${band}-9x16.json"
+   done
+   ```
+
    The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film (text that sits in a band from 2 to 3 s of a 6 s film passes), so keep the `seek=` list: it samples eleven instants across the film as fractions of its duration.
    Read the result, not the exit code. `check --json` exits 1 on any error, and the evidence is in `layout.findings` and `contrast.findings` in the JSON; a clean run has both arrays empty (and the file is much smaller). Findings seen in the trials:
 
@@ -169,7 +180,7 @@ Run in this order: lint, check, snapshot while building, then render, then verif
 
    - Quality: `draft` while iterating, `delivery` for the version you verify. `looks` is the default (CRF 16).
    - Workers: use `--workers 2`; each worker is a separate Chrome (about 256 MB). The trials ran 10 s films in 9 to 17 s.
-   - Name MP4s `<slug>-16x9.mp4`, `-9x16.mp4`, `-1x1.mp4`. `verify.py` takes the only MP4 in the version folder, so keep one per verify run or pass `--mp4`.
+   - Name MP4s `<slug>-16x9.mp4`, `-9x16.mp4`, `-1x1.mp4`. `verify.py` takes the only MP4 in the version folder, so keep one per verify run or pass `--mp4`. Beats are per aspect too (`beats.json`, `beats-9x16.json`, `beats-1x1.json`), and verify picks the file by the MP4's name. In a captioned 9:16 or 1:1 cut, keep beat regions out of the caption band (below about y 1130 of 1920 in 9:16), or the `sync` detector fires on the burned caption instead of your element ([review.md](review.md#preparing-verifys-inputs)).
    - Afterwards confirm the file is non-empty and `ffprobe` duration equals the root `data-duration`.
 
 5. Capture a URL as a source, never as the final scenes. Run it from the assets folder so the output lands there; it needs direct internet and ignores proxies.

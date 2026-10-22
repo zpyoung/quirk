@@ -22,7 +22,7 @@ Contents:
 4. If `stop` is true, do not rebuild. Go to the review page with the failures flagged.
 5. When verify passes, do your visual pass, build the page and stop.
 
-Each verify run adds one attempt to that MP4's run in `$V/verify.json`. After 3 failed verify attempts on one MP4, verify sets `"stop": true` for it: stop looping and show the user the failing render with the failing checks flagged. A new version starts its own count.
+Only failed verify runs count toward the stop. After 3 failed verify attempts on one MP4, verify sets `"stop": true` for it: stop looping and show the user the failing render with the failing checks flagged. A passing re-run (for example after a layout fix you chose to make) is free and does not add an attempt, so never copy a project to a scratch folder to verify there and dodge the counter. A new version starts its own count.
 
 ## Preparing verify's inputs
 
@@ -32,19 +32,19 @@ Regenerate all of these after every fix. A stale file from an earlier attempt ma
 |---|---|---|
 | MP4 | `hf.py ... render --output "$V/<slug>-16x9.mp4"`; verify takes the only `*.mp4` in `$V`. A 9:16 or 1:1 render is `<slug>-9x16.mp4` or `-1x1.mp4`, rendered from `scenes-9x16/` or `scenes-1x1/` | everything |
 | Render log | the same render with `> "$V/render.log" 2>&1` | fonts |
-| Check JSONs with band labels | four `hf.py ... check --json --caption-zone "<band>;severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"` runs, one per edge band, saved as `$V/check-<band>.json`; the `seek=` list samples the whole film, because the default samples only its last instant (exact commands in [hyperframes.md](hyperframes.md#recipes)) | contrast, title-safe |
-| `beats.json` | written when narration is on; see below. A narrated video fails `sync` without it | sync |
+| Check JSONs with band labels | for each aspect cut, four `hf.py ... check --json --caption-zone "<band>;severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"` runs, one per edge band, saved as `$V/check-<band>.json` (`check-<band>-9x16.json` for the 9:16 cut, generated from `scenes-9x16/`; same for 1:1); the `seek=` list samples the whole film, because the default samples only its last instant (exact commands in [hyperframes.md](hyperframes.md#recipes)) | contrast, title-safe |
+| Beats file | written when narration is on; see below. One per aspect: `beats.json` for 16:9, `beats-9x16.json`, `beats-1x1.json`. Verify picks the file by the MP4's name. A narrated video fails `sync` without it | sync |
 | Audio JSON | verify runs `hf.py audio` itself for each beat clip; to supply your own, save `hf.py ... audio CLIP --only loudness,onsets,silence,envelope --hop-ms 10 --json` and pass `--audio-json CLIP=FILE` | sync |
 
-`beats.json` is a list of the on-screen changes that must land on a spoken word. Write it at `$P/beats.json` while building the visuals:
+The beats file is a list of the on-screen changes that must land on a spoken word. Write `$P/beats.json` while building the 16:9 visuals, and `$P/beats-9x16.json` and `$P/beats-1x1.json` for those cuts. Regions are pixels of the render being verified, so a 9:16 file cannot reuse 16:9 regions. Each entry:
 
 ```json
-[{ "id": "ship-node", "word": "ship", "clip": "assets/voice/a.wav", "expected_s": 1.3,
+[{ "id": "ship-node", "word": "ship", "clip": "assets/voice/a.wav", "clip_start_s": 0.0, "expected_s": 1.3,
    "region": [820, 400, 280, 160], "baseline_s": 1.0, "detector": "changed", "color": null }]
 ```
 
-- `clip` is the narration file that holds the word; `expected_s` is where the word should fall on the timeline.
-- `region` is `[x, y, w, h]` in pixels of the rendered frame, around the element that changes.
+- `clip` is the narration file that holds the word; `clip_start_s` is where that clip starts on the timeline; `expected_s` is where the word should fall on the timeline.
+- `region` is `[x, y, w, h]` in pixels of the rendered frame, around the element that changes. In a captioned 9:16 or 1:1 cut, keep every region out of the caption band (below about y 1130 of 1920 in 9:16): the `changed` detector fires on the burned caption appearing and reports a constant offset that no tween shift fixes.
 - `baseline_s` is a time before the beat when the region is still in its old state. The beat's moment is the first frame after it where the region changes.
 - `detector` is `changed` (pixels in the region change) or `color` (the region shifts toward `color`, a `#rrggbb`).
 
@@ -58,8 +58,10 @@ python3 "$SKILL_DIR/scripts/verify.py" --project "$P" --version v1 \
   --beats "$P/beats.json" --at 1.5,4.2,7.0
 ```
 
-- `--beats` is optional: verify uses `$P/beats.json` when it exists. Omit it for a silent video.
-- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its entrances finish (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. When scenes overlap for the whole film, scene ends do not apply: pick the moments after each major move lands, and look at the animation to find them. The default is six evenly spaced stills.
+For a 9:16 cut, pass its own check JSONs and beats, for example `--check-json top="$V/check-top-9x16.json"` and `--beats "$P/beats-9x16.json"`; with `--mp4` naming a `-9x16.mp4`, verify picks `beats-9x16.json` itself when `--beats` is omitted.
+
+- `--beats` is optional: verify uses the beats file for the MP4's aspect (`beats.json`, `beats-9x16.json` or `beats-1x1.json`) when it exists. Omit it for a silent video.
+- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its last entrance finishes (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. The contact sheet is built from these `--at` stills, so a badly chosen instant shows an empty or half-entered card in both the sheet and the stills. When scenes overlap for the whole film, scene ends do not apply: pick the moments after each major move lands, and look at the animation to find them. The default is six evenly spaced stills.
 - With several MP4s in `$V` (for example 16:9 and 9:16), verify refuses with exit 2. Pass `--mp4` and run once per file; for the second aspect, regenerate the check JSONs from its own `scenes-9x16/` folder. Each MP4 has its own run in `verify.json`, with its own attempt count and stop flag, so a 9:16 retry does not use up the 16:9 attempts. The printed JSON is the run you just made, plus `mp4`.
 - Exit 0 means no check failed. Exit 1 means a check failed, or the MP4 is missing (`missing_render`). Exit 2 is a usage error such as an unreadable input. Exit 3 means ffmpeg or ffprobe is missing.
 - Verify prints one JSON object. The detail of a failing check names what to run or fix.
@@ -87,9 +89,9 @@ Notes on interpreting results:
 
 ## Reading verify.json
 
-`$V/verify.json` holds `version`, `passed` and `runs`, keyed by MP4 filename. Top-level `passed` is true only when every run passed. Each run holds `attempt`, `passed`, `stop`, `checks`, `frames` and an `attempts` list (`n`, `ts`, `passed`). Each check has `name`, `status` (`pass`, `fail` or `skip`), `measured`, `threshold` and `detail`. `frames.sheet` is the contact sheet and `frames.stills` the stills, all decoded from that MP4 into `$V/frames/<mp4 stem>/`. A `verify.json` from an earlier version of the script has no `runs`; verify reads it as the run for the single MP4 present, and the review page still shows it.
+`$V/verify.json` holds `version`, `passed` and `runs`, keyed by MP4 filename. Top-level `passed` is true only when every run passed. Each run holds `attempt`, `passed`, `stop`, `checks`, `frames` and an `attempts` list (`n`, `ts`, `passed`). Each check has `name`, `status` (`pass`, `fail` or `skip`), `measured`, `threshold` and `detail`. `frames.sheet` is the contact sheet (built from the `--at` stills) and `frames.stills` the stills, all decoded from that MP4 into `$V/frames/<mp4 stem>/`. A `verify.json` from an earlier version of the script has no `runs`; verify reads it as the run for the single MP4 present, and the review page still shows it.
 
-To decide: a run's `passed` false means at least one `fail`; read each failing check's `detail`, fix, and run again. A run's `stop` true means its third attempt also failed.
+To decide: a run's `passed` false means at least one `fail`; read each failing check's `detail`, fix, and run again. A run's `stop` true means its third failed attempt happened; passing runs are not counted.
 
 ## Your own visual pass
 
