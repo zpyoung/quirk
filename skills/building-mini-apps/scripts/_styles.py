@@ -94,6 +94,9 @@ CONTRAST_PAIRS: Tuple[Tuple[str, str, float, Optional[str]], ...] = (
     ("sidebar-primary-foreground", "sidebar-primary", AA_TEXT, None),
     ("sidebar-foreground", "sidebar-accent", AA_TEXT, None),
     ("sidebar-accent-foreground", "sidebar-accent", AA_TEXT, None),
+    ("foreground", "mini-added", AA_TEXT, None),
+    ("foreground", "mini-removed", AA_TEXT, None),
+    ("foreground", "mini-pending", AA_TEXT, None),
     ("ring", "background", AA_UI, None),
     ("sidebar-ring", "sidebar", AA_UI, None),
 )

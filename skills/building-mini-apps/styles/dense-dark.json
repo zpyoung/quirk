@@ -114,6 +114,30 @@
       }
     },
     {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [data-mini=\"cell\"][data-tint=\"added\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-added)",
+        "color": "var(--foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [data-mini=\"cell\"][data-tint=\"removed\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-removed)",
+        "color": "var(--foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [data-mini=\"cell\"][data-tint=\"pending\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-pending)",
+        "color": "var(--foreground)"
+      }
+    },
+    {
       "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [class*=\"text-muted-foreground\"]",
       "mode": "both",
       "declarations": {

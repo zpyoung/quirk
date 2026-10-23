@@ -692,6 +692,14 @@ function GridRow<T extends { id: string; title: string }>({
                 : selected
                   ? "bg-accent"
                   : ""
+        const stagedState =
+          state === "new"
+            ? "added"
+            : removed
+              ? "removed"
+              : row.changedKeys.has(column.key)
+                ? "pending"
+                : undefined
         return (
           <StagedCell
             key={column.key}
@@ -699,6 +707,7 @@ function GridRow<T extends { id: string; title: string }>({
             tip={text}
             isActive={isActive}
             isEditing={isEditing}
+            stagedState={stagedState}
             className={cn(tint, removed && "text-muted-foreground line-through")}
             onSelect={() => onSelectCell(cell)}
             onFocusCell={() => onFocusCell(cell)}
@@ -746,6 +755,7 @@ function StagedCell({
   tip,
   isActive,
   isEditing,
+  stagedState,
   className,
   onSelect,
   onFocusCell,
@@ -756,6 +766,7 @@ function StagedCell({
   tip: string
   isActive: boolean
   isEditing: boolean
+  stagedState?: "added" | "removed" | "pending"
   className?: string
   onSelect(): void
   onFocusCell(): void
@@ -775,6 +786,7 @@ function StagedCell({
         <TableCell
           role="gridcell"
           data-mini="cell"
+          data-tint={stagedState}
           data-row-id={cell.id}
           data-col={cell.col}
           tabIndex={isActive ? 0 : -1}
