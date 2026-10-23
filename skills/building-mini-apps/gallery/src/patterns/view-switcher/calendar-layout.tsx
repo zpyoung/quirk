@@ -217,7 +217,7 @@ export function CalendarLayout(props: CalendarLayoutProps) {
                             key={item.id}
                             layout={props}
                             item={item}
-                            tabStopId={null}
+                            tabStopId={item.id}
                           />
                         ))}
                       </PopoverContent>

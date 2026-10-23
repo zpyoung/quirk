@@ -191,6 +191,7 @@ export function RecordPanel({
       {onDelete ? (
         <div className="shrink-0 border-t p-2">
           <Button
+            ref={deleteRef}
             variant="destructive"
             size="sm"
             onClick={() => setConfirming(true)}
