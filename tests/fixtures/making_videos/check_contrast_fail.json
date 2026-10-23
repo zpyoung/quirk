@@ -1,0 +1,12 @@
+[hyperframes] browserGpuMode probe -> hardware
+{
+  "ok": true,
+  "layout": {"ok": true, "errorCount": 0, "warningCount": 0, "infoCount": 0, "findings": []},
+  "contrast": {
+    "ok": true, "errorCount": 0, "warningCount": 2, "infoCount": 0, "enabled": true,
+    "findings": [
+      {"code": "contrast_aa_failure", "severity": "warning", "message": "Contrast is 1.51:1; WCAG AA requires 3:1.", "text": "test,", "ratio": 1.51, "requiredRatio": 3, "selector": "h1 > span:nth-of-type(5)", "sourceFile": "compositions/track.html", "time": 2.833},
+      {"code": "contrast_aa_failure", "severity": "warning", "message": "Contrast is 2.10:1; WCAG AA requires 4.5:1.", "text": "and", "requiredRatio": 4.5, "selector": "h1 > span:nth-of-type(6)", "sourceFile": "compositions/track.html", "time": 2.9}
+    ]
+  }
+}
