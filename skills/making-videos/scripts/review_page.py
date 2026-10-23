@@ -97,6 +97,7 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 _BULLET = re.compile(r"^\s*[-*+]\s+(.*)$")
 _NUMBERED = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _FENCE = re.compile(r"^\s*```")
+_BLOCKQUOTE = re.compile(r"^\s*>")
 _TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 
 
@@ -151,15 +152,23 @@ def _is_table_start(lines: "list[str]", i: int) -> bool:
     )
 
 
+def _is_table_row(line: str) -> bool:
+    """A pipe line that is not the start of another Markdown block."""
+    return "|" in line and not any(
+        p.match(line) for p in (_HEADING, _FENCE, _BULLET, _NUMBERED, _BLOCKQUOTE)
+    )
+
+
 def _read_table(lines: "list[str]", i: int) -> "tuple[list[str], list[list[str]], int]":
     """Header cells, body rows and the index after the table that starts at ``lines[i]``.
 
-    A body row is any line containing a pipe after the delimiter row; outer pipes are optional.
+    A body row is any line containing a pipe after the delimiter row; outer pipes are optional. A
+    heading, fence, list item, blockquote or blank line ends the table even if it contains a pipe.
     """
     header = _split_row(lines[i])
     i += 2
     rows = []
-    while i < len(lines) and "|" in lines[i]:
+    while i < len(lines) and _is_table_row(lines[i]):
         rows.append(_split_row(lines[i]))
         i += 1
     return header, rows, i
