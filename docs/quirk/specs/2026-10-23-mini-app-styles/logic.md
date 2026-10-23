@@ -2,9 +2,15 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: scripts, gallery, all ten blocks and SKILL.md)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-10-23: SC-4 now says the user's own files stay unchanged, rather than every other file. A
+  switch may add a style's font packages (package.json, lockfile) and rewires `index.css`'s font lines
+  once. Found while writing the tech spec. Approved by the user.
+- 2026-10-23: SC-7 holds focus rings to 3:1 and treats borders and input outlines as decorative.
+  Neutral House's locked values (border 1.27:1, input 1.37:1 in light) could not meet 3:1 without
+  moving the default look. Approved by the user.
 
 Every mini app the skill builds today looks the same, because the skill ships one neutral house style
 and its spec bans copying the studied apps' looks
@@ -143,8 +149,9 @@ existing light/dark toggle.
    - **Given** an existing mini app built with Neutral House, with its own domain edits in the demo
      files
    - **When** the user asks to switch it to Dense Dark
-   - **Then** the style script overwrites only the app's tokens file, installs any font the new style
-     needs, rebuilds, and checks that the dev server starts. Every other file is unchanged.
+   - **Then** the style script overwrites the app's tokens file, installs any font package the new style
+     needs, rewires the stylesheet's font lines if they aren't already, rebuilds, and checks that the dev
+     server starts. Files the user edited, such as the book demo, are unchanged.
    - **Data before:** **books-app***: Neutral House tokens file; edited book demo
    - **Data after:** **books-app**: ✓ Dense Dark tokens file; ✓ book demo unchanged; ✓ builds clean
 
@@ -165,8 +172,8 @@ existing light/dark toggle.
    - **Given** a style's dark muted text is edited to a value below 4.5:1 against its background
    - **When** the style build runs
    - **Then** it fails, naming the style, the mode, the two tokens and the measured ratio. Semi-
-     transparent tokens are measured as blended over the background they sit on. Focus rings and
-     borders that convey state are held to 3:1.
+     transparent tokens are measured as blended over the background they sit on. Focus rings are held
+     to 3:1; borders and input outlines are decorative and not checked.
    - **Details:**
 
      | Style | Mode | Pair | Ratio | Needed |
