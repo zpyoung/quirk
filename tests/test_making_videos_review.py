@@ -549,6 +549,20 @@ def test_scene_table_without_outer_pipes(tmp_path: Path, env: dict) -> None:
     assert "<p>after</p>" in html
 
 
+def test_heading_with_pipe_right_after_a_table_is_not_a_row() -> None:
+    mod = _load_module()
+    table = "Scene | Time | Narration\n--- | --- | ---\ns1 | 0-5 | Hello\n"
+    scenes = mod.parse_scenes(table + "## Style | framing\nUse a wide shot.\n")
+    assert [(s.scene_id, s.start, s.words) for s in scenes] == [("s1", "0", "Hello")]
+
+    scenes = mod.parse_scenes(table.replace("Hello", "Fallback") + "## Script | Voiceover\n1. Spoken words\n")
+    assert [(s.scene_id, s.start, s.words) for s in scenes] == [("s1", "0", "Spoken words")]
+
+    html = mod.render_markdown(table + "## Style | framing\nUse a wide shot.\n")
+    assert html.count("<tr>") == 2 and "<h2>Style | framing</h2>" in html
+    assert "<td>## Style" not in html
+
+
 def _load_module():
     spec = importlib.util.spec_from_file_location("review_page_under_test", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
