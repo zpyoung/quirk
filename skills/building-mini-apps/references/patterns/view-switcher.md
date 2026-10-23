@@ -81,7 +81,7 @@ With `trackUnsaved` on, these actions appear while the active view is unsaved (c
 |--------|------|-------|
 | Save | Writes the active view's query, sort and filters to the stored view and clears the dot | Layout, group and date field already save at once. If the write fails, a toast shows and the changes stay unsaved |
 | Reset (chevron menu) | Drops the unsaved changes and restores the saved query, sort and filters | No confirm; the changes were never saved |
-| Save as new view (chevron menu) | Creates a view named "<name> copy" holding what is on screen, switches to it and opens its name field | The original view goes back to its saved state |
+| Save as new view (chevron menu) | Creates a view named "<name> copy" holding what is on screen, switches to it and opens its name field | The original view goes back to its saved state, unless it was edited while the add was pending; those edits stay as its unsaved changes |
 
 Focus rules:
 
@@ -182,7 +182,7 @@ Behavior the signature does not show:
 - Uncontrolled, the active view id is kept in `localStorage` under `${storageKey}-active` (read and written inside try/catch) so a reload reopens the same tab, falling back to the first view when the id is gone.
 - Search text is shared by all views and is not saved, unless `trackUnsaved` is on: then it is part of the view (`ViewConfig.query`), each view keeps its own, and it is saved with Save.
 - `trackUnsaved` leaves `layout`, `groupBy`, `dateField` and `name` writing straight to the view. Only `query`, `sort` and `filters` become a draft, held in component state by view id (`view-draft.ts`). A view is unsaved when its draft differs from the stored copy; `applyView` runs on the draft merged over the stored view.
-- Save writes the draft with one `update`; the draft is dropped only when that write succeeds and nothing was edited meanwhile. Save as new view adds a copy of the merged view, drops the original's draft and switches to the copy.
+- Save writes the draft with one `update`; the draft is dropped only when that write succeeds and nothing was edited meanwhile. Save as new view adds a copy of the merged view, drops the original's draft only if it was not edited while the add was pending, and switches to the copy.
 - Duplicate copies the stored view, not the draft. Deleting a view drops its draft.
 - Board needs `groupBy` naming a select field and calendar needs `dateField` naming a date field; the layout picker preselects the first matching field, and the toolbar select changes it. If no field of that type exists, the tile is disabled with a tooltip saying why.
 - Deleting the only remaining view is not allowed.
