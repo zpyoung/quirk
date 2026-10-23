@@ -171,8 +171,11 @@ CONTRACT: function useCommandCenter(opts: {
   returned item.
 - Refresh: when `onRefresh` is given, call it at mount and every `refreshMs` (default 30 000)
   unless paused; abort the in-flight call on unmount or pause. Success writes each returned patch
-  via `onTileUpdate` and sets `{ state: "live", at: now }`. Failure keeps tiles untouched and sets
-  `{ state: "stale", since: <last success>, error }`. `retry()` runs one refresh now; while one
+  via `onTileUpdate` and sets `{ state: "live", at: now }`. Failure sets
+  `{ state: "stale", since: <last success>, error }` and does not advance the last success. If
+  `onRefresh` rejects, no patch is written and tiles are untouched. If a storage write rejects while
+  patches apply, the patches that persisted stand, a toast reports the write, and nothing is rolled
+  back; no second refresh starts until every write has settled. `retry()` runs one refresh now; while one
   is in flight it does nothing. Pausing after a failure gives `{ state: "paused", at: <last success> }`
   and hides the error banner; resuming refreshes at once.
   Without `onRefresh`, `refresh` is `{ state: "none" }`.

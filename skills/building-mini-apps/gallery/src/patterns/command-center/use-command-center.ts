@@ -285,13 +285,10 @@ export function useCommandCenter(opts: {
       const patches = await onRefresh(controller.signal)
       if (controller.signal.aborted) return
       const at = Date.now()
-      const before = new Map(
-        latest.current.tiles.map((tile) => [tile.id, tile] as const)
-      )
       applying.current = true
-      let outcomes: PromiseSettledResult<void>[]
+      let failure: PromiseRejectedResult | undefined
       try {
-        outcomes = await Promise.allSettled(
+        const outcomes = await Promise.allSettled(
           patches.map((patch) =>
             latest.current.onTileUpdate(patch.id, {
               ...patch,
@@ -299,26 +296,22 @@ export function useCommandCenter(opts: {
             })
           )
         )
-        const failed = outcomes.find((outcome) => outcome.status === "rejected")
-        if (failed) {
-          // put back what the batch did write so tiles never show a mix of two snapshots
-          await Promise.allSettled(
-            patches.flatMap((patch, index) => {
-              const prior = before.get(patch.id)
-              if (outcomes[index].status !== "fulfilled" || !prior) return []
-              const restore: Record<string, unknown> = {}
-              for (const key of [...Object.keys(patch), "updatedAt"]) {
-                if (key !== "id") restore[key] = prior[key as keyof Tile]
-              }
-              return [
-                latest.current.onTileUpdate(patch.id, restore as Partial<Tile>),
-              ]
-            })
-          )
-          throw (failed as PromiseRejectedResult).reason
-        }
+        failure = outcomes.find(
+          (outcome): outcome is PromiseRejectedResult =>
+            outcome.status === "rejected"
+        )
       } finally {
         applying.current = false
+      }
+      if (failure) {
+        reportWrite("apply the refresh", failure.reason)
+        if (controller.signal.aborted) return
+        setRefresh({
+          state: "stale",
+          since: lastSuccess.current,
+          error: toError(failure.reason),
+        })
+        return
       }
       if (controller.signal.aborted) return
       lastSuccess.current = at
