@@ -50,7 +50,8 @@ function RenameField({
 
 /**
  * Indented, collapsible list of items with a roving tab stop. Reports
- * selection intent through `onSelect`; the owner decides what is selected.
+ * selection intent through `onSelect` along with the rows currently visible
+ * (collapsed descendants excluded); the owner decides what is selected.
  * Arrow keys move the selection, left/right fold a row, F2 renames it.
  */
 export function ItemTree<T extends InspectorItem>({
@@ -61,7 +62,11 @@ export function ItemTree<T extends InspectorItem>({
 }: {
   items: T[]
   selectedIds: string[]
-  onSelect: (id: string, mode: "replace" | "range" | "toggle") => void
+  onSelect: (
+    id: string,
+    mode: "replace" | "range" | "toggle",
+    visibleIds: string[]
+  ) => void
   onRename?: (id: string, title: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
@@ -72,6 +77,7 @@ export function ItemTree<T extends InspectorItem>({
   const rowEls = useRef(new Map<string, HTMLElement>())
 
   const rows = useMemo(() => buildRows(items, collapsed), [items, collapsed])
+  const visibleIds = useMemo(() => rows.map((row) => row.item.id), [rows])
   const selected = useMemo(() => new Set(selectedIds), [selectedIds])
   const tabStopId =
     rows.find((row) => row.item.id === focusId)?.item.id ??
@@ -100,7 +106,7 @@ export function ItemTree<T extends InspectorItem>({
       if (event.key === "ArrowUp" || event.key === "ArrowDown") {
         const next = rows[index + (event.key === "ArrowDown" ? 1 : -1)]
         if (!next) return
-        onSelect(next.item.id, "replace")
+        onSelect(next.item.id, "replace", visibleIds)
         rowEls.current.get(next.item.id)?.focus()
       } else if (event.key === "ArrowLeft") {
         if (row.hasChildren && row.expanded) setFolded(id, true)
@@ -152,7 +158,7 @@ export function ItemTree<T extends InspectorItem>({
               data-item-id={item.id}
               tabIndex={item.id === tabStopId ? 0 : -1}
               onFocus={() => setFocusId(item.id)}
-              onClick={(event) => onSelect(item.id, modeOf(event))}
+              onClick={(event) => onSelect(item.id, modeOf(event), visibleIds)}
               onDoubleClick={() => onRename && setRenamingId(item.id)}
               style={{ paddingLeft: 4 + depth * 14 }}
               className={cn(

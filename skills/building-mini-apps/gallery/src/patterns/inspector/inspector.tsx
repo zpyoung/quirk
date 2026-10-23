@@ -152,12 +152,16 @@ function Workspace<T extends InspectorItem>({
     }
   }
 
-  const selectFromTree = (id: string, mode: "replace" | "range" | "toggle") => {
+  const selectFromTree = (
+    id: string,
+    mode: "replace" | "range" | "toggle",
+    visibleIds: string[]
+  ) => {
     if (mode !== "range") return select(id, mode)
-    const from = orderedIds.indexOf(anchorId ?? selectedIds.at(-1) ?? id)
-    const to = orderedIds.indexOf(id)
+    const from = visibleIds.indexOf(anchorId ?? selectedIds.at(-1) ?? id)
+    const to = visibleIds.indexOf(id)
     if (from < 0 || to < 0) return select(id, "replace")
-    setSelection(orderedIds.slice(Math.min(from, to), Math.max(from, to) + 1))
+    setSelection(visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1))
   }
 
   const write = useCallback(
