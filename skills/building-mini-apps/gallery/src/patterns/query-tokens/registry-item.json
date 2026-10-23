@@ -1,0 +1,7 @@
+{
+  "name": "query-tokens",
+  "title": "Query tokens",
+  "description": "Search box where key:value filters become removable chips, with a key and value popover, recent searches, plain-text fallback and an opt-in URL param.",
+  "dependencies": ["lucide-react", "react-hotkeys-hook"],
+  "registryDependencies": ["badge", "button", "kbd"]
+}
