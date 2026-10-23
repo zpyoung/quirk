@@ -152,11 +152,14 @@ def _is_table_start(lines: "list[str]", i: int) -> bool:
 
 
 def _read_table(lines: "list[str]", i: int) -> "tuple[list[str], list[list[str]], int]":
-    """Header cells, body rows and the index after the table that starts at ``lines[i]``."""
+    """Header cells, body rows and the index after the table that starts at ``lines[i]``.
+
+    A body row is any line containing a pipe after the delimiter row; outer pipes are optional.
+    """
     header = _split_row(lines[i])
     i += 2
     rows = []
-    while i < len(lines) and lines[i].strip().startswith("|"):
+    while i < len(lines) and "|" in lines[i]:
         rows.append(_split_row(lines[i]))
         i += 1
     return header, rows, i
@@ -359,17 +362,39 @@ class Version:
         self.srts = sorted(vdir.glob("*.srt"))
         self.labels = _cut_labels(self.mp4s)
         self.verify_problem: Optional[str] = None
+        self.verify_flaws: "list[str]" = []
         self.runs: "list[tuple[Optional[str], dict]]" = []
+        self._unreadable_runs: "set[str]" = set()
         data, reason = _read_json(vdir / "verify.json")
         if reason == "missing":
             self.verify_problem = "no verify.json"
         elif reason or not isinstance(data, dict):
             self.verify_problem = "verify.json %s" % (reason or "is not an object")
+        elif "runs" in data and not isinstance(data["runs"], dict):
+            self.verify_problem = "verify.json runs unreadable"
         elif isinstance(data.get("runs"), dict):
-            self.runs = [(k, v) for k, v in sorted(data["runs"].items()) if isinstance(v, dict)]
+            for key, run in sorted(data["runs"].items()):
+                if isinstance(run, dict):
+                    self.runs.append((key, self._checked_run(key, run)))
+                else:
+                    self._unreadable_runs.add(key)
+                    self.verify_flaws.append("verify.json run for %s unreadable" % key)
         else:
-            self.runs = [(self.mp4s[0].name if len(self.mp4s) == 1 else None, data)]
+            self.runs = [(self.mp4s[0].name if len(self.mp4s) == 1 else None, self._checked_run(None, data))]
         self.note_verdict, self.note_rest = self._read_note()
+
+    def _checked_run(self, key: Optional[str], run: dict) -> dict:
+        """``run`` with a non-list ``checks`` emptied; each malformed part is named in ``verify_flaws``."""
+        where = " for %s" % key if key else ""
+        checks = run.get("checks")
+        if checks is not None and not isinstance(checks, list):
+            self.verify_flaws.append("verify.json checks unreadable%s" % where)
+            run = dict(run, checks=[])
+        for check in run.get("checks") or []:
+            measured = check.get("measured") if isinstance(check, dict) and check.get("name") == "sync" else None
+            if isinstance(measured, dict) and measured.get("beats") is not None and not isinstance(measured["beats"], list):
+                self.verify_flaws.append("verify.json sync beats unreadable%s" % where)
+        return run
 
     def _read_note(self) -> "tuple[Optional[str], Optional[str]]":
         """The first paragraph of ``review-notes.md`` and the rest of it, or ``(None, None)``."""
@@ -410,8 +435,9 @@ class Version:
             return [self.verify_problem]
         keys = {key for key, _ in self.runs}
         if None in keys:
-            return []
-        return ["no verify run for %s" % m.name for m in self.mp4s if m.name not in keys]
+            return list(self.verify_flaws)
+        absent = ["no verify run for %s" % m.name for m in self.mp4s if m.name not in keys | self._unreadable_runs]
+        return self.verify_flaws + absent
 
     def still_gaps(self) -> "list[str]":
         return [g.missing for g in self.frame_groups() if g.missing]
@@ -888,6 +914,16 @@ def _sync_finding(version: Version, words: "dict[str, str]") -> Optional[str]:
     return text
 
 
+def _local_call_failed(rec: dict) -> bool:
+    """hyperframes logs a process exit code (0 is ok); playwright logs an HTTP-style status (2xx is ok)."""
+    status = rec.get("status")
+    if not isinstance(status, int) or isinstance(status, bool):
+        return False
+    if rec.get("provider") == "playwright":
+        return not 200 <= status < 300
+    return status != 0
+
+
 def _calls_finding(project: Path, brief: Any) -> str:
     records, bad = _read_calls(project)
     if not records:
@@ -908,8 +944,8 @@ def _calls_finding(project: Path, brief: Any) -> str:
         blocked = sorted(p for p in by_provider if p not in allowed)
         if blocked:
             text += " Not allowed by the brief: %s." % ", ".join(blocked)
-    odd = [r for r in local if isinstance(r.get("status"), int) and r["status"] != 0]
-    text += " %s exited non-zero." % _plural(len(odd), "local call", "local calls") if odd else ""
+    odd = [r for r in local if _local_call_failed(r)]
+    text += " %s failed." % _plural(len(odd), "local call", "local calls") if odd else ""
     return text
 
 
@@ -1006,6 +1042,8 @@ def _chart(version: Version, words: "dict[str, str]") -> str:
             if bid not in labels:
                 order.append(bid)
                 labels[bid] = _beat_label(words, beat)
+            elif beat.get("via") == "expected":
+                labels[bid] = _beat_label(words, beat)
 
     def offsets(beats: "list[dict]") -> "dict[str, Any]":
         return {str(b.get("id")): b.get("offset_frames") for b in beats}
@@ -1060,7 +1098,7 @@ def render_results(version: Version, project: Path) -> str:
             if isinstance(check, dict) and str(check.get("name")) not in names:
                 names.append(str(check.get("name")))
     if not names:
-        return "<p>verify.json lists no checks.</p>"
+        return "\n".join(part for part in (_missing_line(version.verify_gaps()), "<p>verify.json lists no checks.</p>") if part)
     labels = [version.run_label(key) if key else "Result" for key, _ in version.runs]
     cols = "".join('<th scope="col">%s</th>' % esc(label) for label in labels)
     rows = []
