@@ -167,7 +167,8 @@ export function MiniFull<T extends { id: string; title: string }>({
 
   function selectItem(id: string) {
     setSelectedId(id)
-    const start = getStart(items.find((i) => i.id === id)!)
+    const item = items.find((i) => i.id === id)
+    const start = item && getStart(item)
     if (start) {
       setSelectedDate(startOfDay(start))
       setMonth(startOfMonth(start))
@@ -183,7 +184,8 @@ export function MiniFull<T extends { id: string; title: string }>({
     setSelectedDate(d)
     setMonth(startOfMonth(d))
     setSelectedId((id) => {
-      const start = id ? getStart(items.find((i) => i.id === id)!) : undefined
+      const item = id ? items.find((i) => i.id === id) : undefined
+      const start = item && getStart(item)
       return start && isSameDay(start, d) ? id : undefined
     })
   }
