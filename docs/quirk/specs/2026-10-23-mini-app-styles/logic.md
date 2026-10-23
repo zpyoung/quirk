@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved
 
 **Amendments:** none yet.
 
@@ -127,9 +127,17 @@ existing light/dark toggle.
    - **Given** the user asks for an app that "looks like Things 3 but green"
    - **When** the agent chooses the style
    - **Then** it maps "Things 3" to Airy White as in SC-2 and says so. It doesn't invent an eighth style.
+     For the "but green" part, it tunes the accent in the app's tokens file itself and says so, including
+     that the app no longer matches a shipped style, so a later style switch needs force (SC-5).
    - **Walkthrough:**
      1. The agent finds Things 3 next to Airy White and writes the SC-2 line.
-     2. [ASK: For the "but green" part, should the agent hand-tune the accent in the app's tokens file itself and say so (the app then no longer matches a shipped style, see SC-5), or keep Airy White as shipped and tell the user an accent change is a hand edit they can ask for?]
+     2. The agent scaffolds **tasks-app*** with Airy White.
+     3. The agent changes the accent tokens, light and dark, to a green* and reruns the contrast check on
+        the app's tokens file.
+     4. The agent writes: "Airy White with a green accent. That's now a hand edit, so switching styles
+        later will ask you to confirm."
+   - **Data after:** **tasks-app**: ✓ Airy White tokens with a green accent; ✓ passes AA in light and
+     dark; ✗ matches no shipped style
 
 4. **SC-4: Switching an existing app's style**
    - **Given** an existing mini app built with Neutral House, with its own domain edits in the demo
