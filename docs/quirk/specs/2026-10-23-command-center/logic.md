@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: >3 files across docs, scripts, tests and gallery)
 
 **Amendments:** none yet.
 
