@@ -33,6 +33,7 @@ A pattern is one named interaction. A mini app usually combines two or three. Re
 | view-switcher | Table, board or calendar over the same records; a record opens in a side panel | Notion | [view-switcher](references/patterns/view-switcher.md) |
 | assisted-notes | The user's notes stay primary; generated additions are styled apart and cite their source | Granola | [assisted-notes](references/patterns/assisted-notes.md) |
 | inspector | Navigation tree, canvas, and a properties panel for the selection | Figma | [inspector](references/patterns/inspector.md) |
+| command-center | Status tiles in sections beside a queue of items that need you, to acknowledge, snooze and resolve | Home Assistant, PagerDuty | [command-center](references/patterns/command-center.md) |
 
 Each app has a study note in `references/apps/<app>.md` if a reference points to evidence you need.
 
@@ -54,7 +55,7 @@ Each app has a study note in `references/apps/<app>.md` if a reference points to
 
 ## When no pattern fits
 
-If the request matches none of the ten well (a waveform audio editor, a 3D scene tool), say so. Do not stretch a pattern into a shape it wasn't built for.
+If the request matches none of the patterns well (a waveform audio editor, a 3D scene tool), say so. Do not stretch a pattern into a shape it wasn't built for.
 
 - Offer the base alone: `new_app.py <target_dir>` with no `--patterns` gives the shell, house-style tokens, keyboard layer, browser store with JSON export and import, and empty, loading and error states.
 - List the two or three nearest patterns, each with why it falls short, using the pattern's own When to use.

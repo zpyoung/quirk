@@ -166,6 +166,114 @@
     },
     {
       "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "command-center",
+      "title": "Command center",
+      "description": "Status tiles grouped in sections, with an icon that toggles and a body that opens details, beside a needs-you queue to acknowledge, snooze and resolve, with sparklines and an optional refresh loop.",
+      "dependencies": [
+        "date-fns",
+        "lucide-react",
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "calendar",
+        "collapsible",
+        "dialog",
+        "dropdown-menu",
+        "kbd",
+        "popover",
+        "scroll-area",
+        "textarea",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/command-center/attention-queue.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/attention-queue.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/attention.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/attention.ts"
+        },
+        {
+          "path": "src/patterns/command-center/badge-row.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/badge-row.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/command-center.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/command-center.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/confirm-dialog.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/confirm-dialog.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/demo.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/format.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/format.ts"
+        },
+        {
+          "path": "src/patterns/command-center/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/index.ts"
+        },
+        {
+          "path": "src/patterns/command-center/item-detail.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/item-detail.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/snooze-menu.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/snooze-menu.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/sparkline.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/sparkline.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-board.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-board.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-dialog.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-dialog.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-shared.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-shared.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/types.ts"
+        },
+        {
+          "path": "src/patterns/command-center/use-command-center.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/use-command-center.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
       "name": "doc-collections",
       "title": "Doc collections",
       "description": "A page of text and collection blocks; opening a row shows its properties above a free-text body.",
