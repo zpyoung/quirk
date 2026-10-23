@@ -3,10 +3,13 @@ import {
   CalendarDaysIcon,
   Columns3Icon,
   CopyIcon,
+  CopyPlusIcon,
   EllipsisIcon,
+  ChevronDownIcon,
   ListIcon,
   PencilIcon,
   PlusIcon,
+  RotateCcwIcon,
   Table2Icon,
   Trash2Icon,
 } from "lucide-react"
@@ -156,6 +159,15 @@ function AddViewButton({
   )
 }
 
+/** Unsaved-change tracking for the tabs; leave the prop off for tabs that save as you edit. */
+export interface UnsavedProps {
+  /** Views whose query, sort or filters differ from the saved copy. */
+  ids: ReadonlySet<string>
+  onSave(): void
+  onSaveAsNew(): Promise<boolean>
+  onReset(): void
+}
+
 export interface TabStripProps {
   views: ViewConfig[]
   activeId: string
@@ -167,17 +179,19 @@ export interface TabStripProps {
   onRename(id: string, name: string): void
   onDuplicate(id: string): Promise<boolean>
   onDelete(id: string): void
+  unsaved?: UnsavedProps
 }
 
 /** Named view tabs with a "+" layout picker and a menu for the active tab. */
 export function TabStrip(props: TabStripProps) {
-  const { views, activeId, disabled, fields, onSelect } = props
+  const { views, activeId, disabled, fields, onSelect, unsaved } = props
   const active = views.find((v) => v.id === activeId) ?? views[0]
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const menuSettled = useRef(true)
   const renameWanted = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
+  const dirty = unsaved?.ids.has(active.id) ?? false
   const menuButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -191,6 +205,19 @@ export function TabStrip(props: TabStripProps) {
     if (menuSettled.current) setRenaming(true)
     else renameWanted.current = true
   }
+
+  // the Save group unmounts after Save or Reset, which would drop focus to the body
+  const wasDirty = useRef(false)
+  useEffect(() => {
+    if (wasDirty.current && !dirty) {
+      const focused = document.activeElement
+      if (focused === document.body || focused === null)
+        listRef.current
+          ?.querySelector<HTMLElement>('[role="tab"][data-state="active"]')
+          ?.focus()
+    }
+    wasDirty.current = dirty
+  }, [dirty])
 
   async function created(work: Promise<boolean>) {
     if (await work) requestRename()
@@ -215,6 +242,16 @@ export function TabStrip(props: TabStripProps) {
             >
               {layoutIcon(view.layout)}
               {view.name}
+              {unsaved?.ids.has(view.id) ? (
+                <>
+                  <span
+                    aria-hidden
+                    data-unsaved-dot
+                    className="size-1.5 shrink-0 rounded-full bg-primary"
+                  />
+                  <span className="sr-only">(unsaved changes)</span>
+                </>
+              ) : null}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -231,6 +268,7 @@ export function TabStrip(props: TabStripProps) {
           {views.map((view) => (
             <SelectItem key={view.id} value={view.id}>
               {view.name}
+              {unsaved?.ids.has(view.id) ? " (unsaved)" : ""}
             </SelectItem>
           ))}
         </SelectContent>
@@ -337,6 +375,63 @@ export function TabStrip(props: TabStripProps) {
         disabled={disabled}
         onAdd={(layout) => void created(props.onAdd(layout))}
       />
+
+      {unsaved && dirty ? (
+        <div
+          role="group"
+          aria-label={`Unsaved changes in ${active.name}`}
+          className="flex shrink-0 items-center"
+        >
+          <Button
+            size="xs"
+            disabled={disabled}
+            className="rounded-r-none"
+            onClick={unsaved.onSave}
+          >
+            Save
+          </Button>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (!open) menuSettled.current = false
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon-xs"
+                disabled={disabled}
+                className="rounded-l-none border-l border-primary-foreground/30"
+                aria-label="More ways to save"
+              >
+                <ChevronDownIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(e) => {
+                menuSettled.current = true
+                if (!renameWanted.current) return
+                e.preventDefault()
+                renameWanted.current = false
+                setRenaming(true)
+              }}
+            >
+              <DropdownMenuItem onSelect={unsaved.onReset}>
+                <RotateCcwIcon />
+                Reset
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  menuSettled.current = false
+                  void created(unsaved.onSaveAsNew())
+                }}
+              >
+                <CopyPlusIcon />
+                Save as new view
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={deleting}
