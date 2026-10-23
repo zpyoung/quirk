@@ -19,9 +19,11 @@ from typing import Dict, List, Tuple
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 
 APPS = ("linear", "things", "raycast", "craft", "obsidian",
-        "tableplus", "fantastical", "notion", "granola", "figma")
+        "tableplus", "fantastical", "notion", "granola", "figma",
+        "home-assistant", "pagerduty", "incident-io")
 PATTERNS = ("list-peek", "expand-in-place", "action-palette", "doc-collections", "workspace-panes",
-            "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector")
+            "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector",
+            "command-center")
 
 KINDS: Dict[str, Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = {
     "study": ("apps", APPS, ("Sources", "Observations", "Unseen", "Patterns fed")),
