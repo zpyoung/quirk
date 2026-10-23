@@ -442,6 +442,43 @@ def _wired_block(block: str) -> str:
             "\n  --font-sans-extra: x; --font-sans: var(--mini-font-sans); --color-a: red;\n"
             "  --font-heading: var(--mini-font-heading);\n",
         ),
+        (
+            "\n  --font-sans: Arial /* fallback; system font */; --color-a: red;\n"
+            "  --font-heading: serif;\n",
+            "\n  --font-sans: var(--mini-font-sans); --color-a: red;\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --note: \"example; --font-sans: serif; other\";\n  --font-heading: serif;\n",
+            "\n  --note: \"example; --font-sans: serif; other\";\n"
+            "  --font-heading: var(--mini-font-heading);\n  --font-sans: var(--mini-font-sans);\n",
+        ),
+        (
+            "\n  --label: \"note; --font-sans: fake;\";\n  --font-sans: serif;\n  --font-heading: serif;\n",
+            "\n  --label: \"note; --font-sans: fake;\";\n  --font-sans: var(--mini-font-sans);\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --font-sans /* why; here */ : serif; --color-a: red;\n  --font-heading: serif;\n",
+            "\n  --font-sans /* why; here */ : var(--mini-font-sans); --color-a: red;\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  /* --font-sans: decoy; */ --font-sans: serif;\n  --font-heading: serif;\n",
+            "\n  /* --font-sans: decoy; */ --font-sans: var(--mini-font-sans);\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --note: \"a } b ; c\"; --font-sans: serif;\n  --font-heading: serif;\n",
+            "\n  --note: \"a } b ; c\"; --font-sans: var(--mini-font-sans);\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --note: 'it\\'s; --font-sans: x'; --font-sans: \"a\\\"; b\", serif;\n"
+            "  --font-heading: serif;\n",
+            "\n  --note: 'it\\'s; --font-sans: x'; --font-sans: var(--mini-font-sans);\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
     ],
     ids=[
         "neighbour-after",
@@ -451,12 +488,34 @@ def _wired_block(block: str) -> str:
         "no-semicolon-then-newline",
         "semicolon-inside-quotes-and-parens",
         "similarly-named-property",
+        "semicolon-inside-comment-in-value",
+        "font-name-inside-another-declarations-string",
+        "decoy-string-before-real-declaration",
+        "comment-between-property-and-colon",
+        "font-name-inside-comment",
+        "brace-and-semicolon-inside-string",
+        "escaped-quotes-inside-strings",
     ],
 )
 def test_wire_fonts_replaces_only_the_font_declarations(block: str, expected: str) -> None:
     wired = _wired_block(block)
     assert wired == expected
     assert _wired_block(wired) == wired
+
+
+def test_tokens_step_finds_the_block_end_past_a_brace_inside_a_string(tmp_path: Path) -> None:
+    app = _tokens_app(
+        tmp_path,
+        '@import "tailwindcss";\n\n@theme inline {\n  --note: "}";\n  --font-sans: serif;\n'
+        "  --font-heading: serif;\n}\n",
+    )
+    assert _mini().tokens_step(app) == 0
+    text = _index_css(app).read_text(encoding="utf-8")
+    assert '--note: "}";' in text
+    assert text.count("--font-sans: var(--mini-font-sans);") == 1
+    assert text.count("--font-heading: var(--mini-font-heading);") == 1
+    assert _mini().tokens_step(app) == 0
+    assert _index_css(app).read_text(encoding="utf-8") == text
 
 
 def test_tokens_step_fails_without_a_theme_inline_block(
