@@ -41,6 +41,19 @@ function hourOf(h: number, meridiem: string | undefined): number | undefined {
   return h >= 1 && h <= 6 ? h + 12 : h
 }
 
+/**
+ * Places an end time that reads at or before its start: first as the same day's
+ * afternoon ("9-8"), else as the next morning ("11pm-1am") when that is under
+ * 12 hours. Minutes past 24h land on the following day. Undefined when neither fits.
+ */
+function resolveEarlierEnd(start: number, end: number): number | undefined {
+  const sameDay = end + 12 * 60
+  if (sameDay > start && sameDay <= 24 * 60) return sameDay
+  const nextDay = end + 24 * 60
+  if (end < start && nextDay - start <= 12 * 60) return nextDay
+  return undefined
+}
+
 function claim(masked: string, range: Range): string {
   return masked.slice(0, range.from) + "\u0001".repeat(range.to - range.from) + masked.slice(range.to)
 }
@@ -83,10 +96,9 @@ export function parseEntry(text: string, now: Date = new Date(), tags?: string[]
     const m1 = Number(range[2] ?? 0)
     const m2 = Number(range[5] ?? 0)
     if (h1 !== undefined && h2 !== undefined && m1 < 60 && m2 < 60) {
-      let end: number | undefined = h2 * 60 + m2
       const start = h1 * 60 + m1
-      if (end <= start) end += 12 * 60
-      if (end <= start || end > 24 * 60) end = undefined
+      let end: number | undefined = h2 * 60 + m2
+      if (end <= start) end = resolveEarlierEnd(start, end)
       minutes = { start, end }
       take(rangeOf(range), "when")
     }

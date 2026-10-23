@@ -154,7 +154,10 @@ export function MiniFull<T extends { id: string; title: string }>({
   for (const { start } of dated) marked.set(dayKey(start), (marked.get(dayKey(start)) ?? 0) + 1)
   const upcoming = dated.filter(({ start }) => start >= today).length
   const needle = filter.trim().toLowerCase()
-  const filtered = needle ? items.filter((i) => i.title.toLowerCase().includes(needle)) : items
+  const matchesFilter = (item: T) => !needle || item.title.toLowerCase().includes(needle)
+  const filtered = items.filter(matchesFilter)
+  const visible = dated.filter(({ item }) => matchesFilter(item))
+  const activeId = visible.some(({ item }) => item.id === selectedId) ? selectedId : undefined
 
   function selectDate(d: Date) {
     setSelectedDate(startOfDay(d))
@@ -205,10 +208,10 @@ export function MiniFull<T extends { id: string; title: string }>({
   }
 
   async function removeSelected() {
-    const index = dated.findIndex(({ item }) => item.id === selectedId)
+    const index = visible.findIndex(({ item }) => item.id === activeId)
     if (index < 0 || !onRemove) return
-    const { item } = dated[index]
-    const neighbor = dated[index + 1] ?? dated[index - 1]
+    const { item } = visible[index]
+    const neighbor = visible[index + 1] ?? visible[index - 1]
     try {
       await onRemove(item.id)
     } catch (cause) {
@@ -235,15 +238,15 @@ export function MiniFull<T extends { id: string; title: string }>({
   }
 
   function moveSelection(step: 1 | -1) {
-    if (dated.length === 0) return
-    const index = dated.findIndex(({ item }) => item.id === selectedId)
+    if (visible.length === 0) return
+    const index = visible.findIndex(({ item }) => item.id === activeId)
     let next: number
-    if (index >= 0) next = Math.min(Math.max(index + step, 0), dated.length - 1)
-    else if (step === 1) next = Math.max(dated.findIndex(({ start }) => start >= selectedDate), 0)
-    else next = dated.length - 1
-    const id = dated[next].item.id
+    if (index >= 0) next = Math.min(Math.max(index + step, 0), visible.length - 1)
+    else if (step === 1) next = Math.max(visible.findIndex(({ start }) => start >= selectedDate), 0)
+    else next = visible.length - 1
+    const id = visible[next].item.id
     pendingFocus.current = id
-    if (id === selectedId) {
+    if (id === activeId) {
       panelRef.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`)?.focus()
       return
     }
@@ -283,7 +286,7 @@ export function MiniFull<T extends { id: string; title: string }>({
   })
   useHotkeys("backspace,delete", () => void removeSelected(), {
     preventDefault: true,
-    enabled: selectedId !== undefined && onRemove !== undefined,
+    enabled: activeId !== undefined && onRemove !== undefined,
   })
 
   function listRegion(className?: string): ReactNode {
@@ -307,7 +310,7 @@ export function MiniFull<T extends { id: string; title: string }>({
         getEnd={getEnd}
         getTag={getTag}
         renderRow={renderRow}
-        selectedId={selectedId}
+        selectedId={activeId}
         selectedDate={selectedDate}
         today={now}
         onSelect={selectItem}
@@ -447,7 +450,7 @@ export function MiniFull<T extends { id: string; title: string }>({
                     items={filtered}
                     getStart={getStart}
                     getEnd={getEnd}
-                    selectedId={selectedId}
+                    selectedId={activeId}
                     previewDate={entry.start}
                     today={now}
                     onSelectDate={selectDate}
