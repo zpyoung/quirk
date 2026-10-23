@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Check that a study note or pattern reference has every required section, in order.
+"""Check that a study note, pattern or style reference has every required section, in order.
 
 Usage:
     check_docs.py study <app>
     check_docs.py pattern <pattern>
+    check_docs.py style <style>
 
 Exits 0 when the document is complete, 1 when it is missing or incomplete (each problem is
 printed), and 2 on a usage error.
@@ -16,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from _styles import SLUGS
+
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 
 APPS = ("linear", "things", "raycast", "craft", "obsidian",
@@ -27,6 +30,7 @@ KINDS: Dict[str, Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = {
     "study": ("apps", APPS, ("Sources", "Observations", "Unseen", "Patterns fed")),
     "pattern": ("patterns", PATTERNS, ("When to use", "Anatomy", "Interaction",
                                        "Borrow / Leave out", "Block API", "Sources")),
+    "style": ("styles", SLUGS, ("Character", "When it fits", "Studied from", "Leaves out")),
 }
 
 HEADING_RE = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
