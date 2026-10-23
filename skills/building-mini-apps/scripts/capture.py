@@ -227,8 +227,9 @@ def publish_frames(
     """Move frames into media/, one per whole second, replacing this source's earlier frames.
 
     The previous capture is only touched once every new frame sits in media/ under a temporary
-    name; a failure before that point removes the temporaries and raises CaptureError, leaving
-    the previous frames as they were.
+    name. Old frames are then renamed to backups and the new ones moved into place; any failure
+    restores the backups, removes the temporaries and raises CaptureError, leaving the previous
+    frames as they were.
     """
     chosen = first_per_second(frames)
     finals = {media / frame_name(source_id, seconds): chosen[seconds] for seconds in sorted(chosen)}
@@ -242,16 +243,34 @@ def publish_frames(
         raise CaptureError(f"publishing frames failed, previous capture kept: {exc}") from exc
 
     own_frame = re.compile(rf"^{re.escape(source_id)}-t\d+\.png$")
+    backups = {
+        entry: entry.with_name(f".{entry.name}.bak")
+        for entry in media.iterdir()
+        if own_frame.match(entry.name)
+    }
+    moved_aside: List[Path] = []
+    placed: List[Path] = []
     try:
-        for entry in media.iterdir():
-            if own_frame.match(entry.name) and entry not in finals:
-                entry.unlink()
+        for entry, backup in backups.items():
+            os.replace(entry, backup)
+            moved_aside.append(entry)
         for final, temp in temps.items():
             os.replace(temp, final)
+            placed.append(final)
     except OSError as exc:
         for temp in temps.values():
             temp.unlink(missing_ok=True)
-        raise CaptureError(f"publishing frames failed: {exc}") from exc
+        for final in placed:
+            if final not in backups:
+                final.unlink(missing_ok=True)
+        for entry in moved_aside:
+            try:
+                os.replace(backups[entry], entry)
+            except OSError:
+                pass
+        raise CaptureError(f"publishing frames failed, previous capture restored: {exc}") from exc
+    for backup in backups.values():
+        backup.unlink(missing_ok=True)
     return list(finals)
 
 
