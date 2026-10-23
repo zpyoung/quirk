@@ -136,6 +136,15 @@ export function numberAt(row: AggregateRow, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
 }
 
+/** Largest magnitude a JavaScript Date can hold; a timestamp beyond it cannot be formatted. */
+const MAX_TIME = 8.64e15
+
+/** The row's value when it is a timestamp a Date can represent, otherwise null (a missing time). */
+export function timeAt(row: AggregateRow, key: string): number | null {
+  const value = numberAt(row, key)
+  return value !== null && Math.abs(value) <= MAX_TIME ? value : null
+}
+
 /** Linear interpolation between ranks; `sorted` ascending, `p` from 0 to 1. */
 export function percentile(sorted: number[], p: number): number | null {
   if (sorted.length === 0) return null
@@ -211,6 +220,18 @@ export function groupLabelOf(row: AggregateRow, key: string): string {
   return value === null || value === undefined || value === "" ? NO_VALUE_LABEL : String(value)
 }
 
+/** Group key of the row: "" for a missing value, which no real value can equal, else the value as text. */
+function groupKeyOf(row: AggregateRow, key: string): string {
+  const value = row[key]
+  return value === null || value === undefined ? "" : String(value)
+}
+
+/** Label of a group; a real value spelled like the missing-value label is quoted so the two stay apart. */
+function groupLabelFor(key: string): string {
+  if (key === "") return NO_VALUE_LABEL
+  return key === NO_VALUE_LABEL ? `"${key}"` : key
+}
+
 function compareNullable(a: number | null, b: number | null, dir: SortDir): number {
   if (a === null && b === null) return 0
   if (a === null) return 1
@@ -225,7 +246,7 @@ export function buildGroups<T extends AggregateRow>(
 ): GroupRow<T>[] {
   const buckets = new Map<string, T[]>()
   for (const row of rows) {
-    const key = query.groupBy ? groupLabelOf(row, query.groupBy) : ""
+    const key = query.groupBy ? groupKeyOf(row, query.groupBy) : ""
     const list = buckets.get(key)
     if (list) list.push(row)
     else buckets.set(key, [row])
@@ -233,7 +254,7 @@ export function buildGroups<T extends AggregateRow>(
   const { by, dir } = query.groupSort
   const groups = [...buckets].map(([key, members]) => ({
     key,
-    label: query.groupBy ? key : ALL_ROWS_LABEL,
+    label: query.groupBy ? groupLabelFor(key) : ALL_ROWS_LABEL,
     value: aggregateValue(members, query.visualize),
     count: members.length,
     slot: 0,
@@ -308,16 +329,22 @@ export function resolveInterval(
   return Math.max(DAY, Math.ceil((max - min + 1) / limit / DAY) * DAY)
 }
 
-/** Tick values from zero up to a round maximum at or above `max`. */
-export function niceTicks(max: number, target = 4): number[] {
-  if (!(max > 0) || !Number.isFinite(max)) return [0, 1]
-  const raw = max / target
+/**
+ * Tick values spanning zero: from a round minimum at or below `min` (zero when nothing is negative)
+ * up to a round maximum at or above `max`.
+ */
+export function niceTicks(max: number, target = 4, min = 0): number[] {
+  const top = Number.isFinite(max) ? Math.max(0, max) : 0
+  const bottom = Number.isFinite(min) ? Math.min(0, min) : 0
+  if (top === 0 && bottom === 0) return [0, 1]
+  const raw = (top - bottom) / target
   const magnitude = 10 ** Math.floor(Math.log10(raw))
   const step =
     [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw) ??
     10 * magnitude
-  const count = Math.ceil(max / step - 1e-9)
-  return Array.from({ length: count + 1 }, (_, i) => Number((i * step).toPrecision(12)))
+  const first = Math.floor(bottom / step + 1e-9)
+  const last = Math.ceil(top / step - 1e-9)
+  return Array.from({ length: last - first + 1 }, (_, i) => Number(((first + i) * step).toPrecision(12)))
 }
 
 export type ChartSeries = {
@@ -333,6 +360,8 @@ export type ChartModel = {
   interval: number
   series: ChartSeries[]
   yTicks: number[]
+  /** First and last tick; the axis spans zero and every value. */
+  yMin: number
   yMax: number
   stacked: boolean
   /** Rows that had a valid time and so landed in a bucket. */
@@ -351,12 +380,12 @@ export function buildChart<T extends AggregateRow>(
   schema: FieldSchema,
   groups: GroupRow<T>[] | null
 ): ChartModel | null {
-  const timed = rows.filter((row) => numberAt(row, schema.timeField) !== null)
+  const timed = rows.filter((row) => timeAt(row, schema.timeField) !== null)
   if (timed.length === 0) return null
   let min = Infinity
   let max = -Infinity
   for (const row of timed) {
-    const time = numberAt(row, schema.timeField) as number
+    const time = timeAt(row, schema.timeField) as number
     min = Math.min(min, time)
     max = Math.max(max, time)
   }
@@ -392,7 +421,7 @@ export function buildChart<T extends AggregateRow>(
   const series: ChartSeries[] = sources.map((source) => {
     const perBucket: T[][] = Array.from({ length: count }, () => [])
     for (const row of source.rows) {
-      const time = numberAt(row, schema.timeField)
+      const time = timeAt(row, schema.timeField)
       if (time === null) continue
       perBucket[Math.floor(time / interval) - Math.floor(first / interval)].push(row)
     }
@@ -410,19 +439,32 @@ export function buildChart<T extends AggregateRow>(
 
   const stacked = query.chart === "bar" && series.length > 1 && isAdditive(query.visualize.fn)
   let top = 0
+  let bottom = 0
   for (let i = 0; i < count; i++) {
     if (stacked) {
-      top = Math.max(top, series.reduce((sum, s) => sum + (s.values[i] ?? 0), 0))
+      let above = 0
+      let below = 0
+      for (const s of series) {
+        const value = s.values[i] ?? 0
+        if (value >= 0) above += value
+        else below += value
+      }
+      top = Math.max(top, above)
+      bottom = Math.min(bottom, below)
     } else {
-      for (const s of series) top = Math.max(top, s.values[i] ?? 0)
+      for (const s of series) {
+        top = Math.max(top, s.values[i] ?? 0)
+        bottom = Math.min(bottom, s.values[i] ?? 0)
+      }
     }
   }
-  const yTicks = niceTicks(top)
+  const yTicks = niceTicks(top, 4, bottom)
   return {
     buckets,
     interval,
     series,
     yTicks,
+    yMin: yTicks[0],
     yMax: yTicks[yTicks.length - 1],
     stacked,
     rowCount: timed.length,
@@ -467,7 +509,9 @@ export function formatBucket(time: number, interval: number, withDate: boolean):
   return withDate ? `${DAY_FORMAT.format(date)} ${clock}` : clock
 }
 
+/** "Oct 21 14:05"; a dash for a timestamp a Date cannot represent. */
 export function formatDateTime(time: number): string {
   const date = new Date(time)
+  if (Number.isNaN(date.getTime())) return "—"
   return `${DAY_FORMAT.format(date)} ${CLOCK_FORMAT.format(date)}`
 }

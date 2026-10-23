@@ -156,7 +156,8 @@ export function SeriesChart({
   const plotH = HEIGHT - MARGIN.top - MARGIN.bottom
   const slot = plotW / count
   const x = (i: number) => MARGIN.left + (i + 0.5) * slot
-  const y = (value: number) => MARGIN.top + plotH - (value / model.yMax) * plotH
+  const y = (value: number) =>
+    MARGIN.top + plotH - ((value - model.yMin) / (model.yMax - model.yMin)) * plotH
   const multiDay = model.buckets[count - 1] - model.buckets[0] >= 24 * 3_600_000
   const labelEvery = Math.max(1, Math.ceil(count / Math.max(2, Math.floor(plotW / 96))))
   const bucketLabel = (i: number, withDate: boolean) =>
@@ -176,7 +177,8 @@ export function SeriesChart({
     setCursor(Math.min(count - 1, Math.floor(offset / slot)))
   }
 
-  const stackedBase = new Array(count).fill(0) as number[]
+  const stackedUp = new Array(count).fill(0) as number[]
+  const stackedDown = new Array(count).fill(0) as number[]
 
   return (
     <figure
@@ -264,20 +266,22 @@ export function SeriesChart({
             {query.chart === "bar"
               ? model.series.map((series, seriesIndex) =>
                   series.values.map((value, i) => {
-                    if (value === null || value <= 0) return null
+                    if (value === null || value === 0) return null
                     const k = model.stacked ? 1 : model.series.length
                     const barW = Math.max(1, (slot * 0.8) / k)
                     const left = MARGIN.left + i * slot + slot * 0.1 + (model.stacked ? 0 : seriesIndex * barW)
-                    const base = model.stacked ? stackedBase[i] : 0
-                    const top = y(base + value)
-                    if (model.stacked) stackedBase[i] += value
+                    const stack = value > 0 ? stackedUp : stackedDown
+                    const base = model.stacked ? stack[i] : 0
+                    const end = base + value
+                    if (model.stacked) stack[i] = end
+                    const top = y(Math.max(base, end))
                     return (
                       <rect
                         key={`${series.slot}-${i}`}
                         x={left}
                         y={top}
                         width={Math.max(1, barW - (barW > 3 ? 1 : 0))}
-                        height={Math.max(0, y(base) - top)}
+                        height={Math.max(0, y(Math.min(base, end)) - top)}
                         style={{ fill: slotColor(series.slot) }}
                       />
                     )

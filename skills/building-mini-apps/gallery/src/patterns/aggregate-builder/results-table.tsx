@@ -23,6 +23,7 @@ import {
   formatValue,
   groupLabelOf,
   numberAt,
+  timeAt,
   type GroupRow,
 } from "./aggregate"
 import type {
@@ -77,7 +78,7 @@ function columnLabel(field: FieldDef): string {
 
 function cellFor(field: FieldDef, row: AggregateRow, barMax: number, isBar: boolean): ReactNode {
   if (field.kind === "time") {
-    const time = numberAt(row, field.key)
+    const time = timeAt(row, field.key)
     return time === null ? "—" : formatDateTime(time)
   }
   if (field.kind === "number") {
