@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react"
@@ -16,6 +17,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { EmptyPane } from "./empty-pane"
 import { activeGroupOf, activeTabOf } from "./layout"
 import { Pane } from "./pane"
+import { createRecordWriters } from "./record-writers"
 import { Sidebar } from "./sidebar"
 import { TabStrip } from "./tab-strip"
 import type { OpenHow, TabGroup, WorkspaceItem } from "./types"
@@ -74,6 +76,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
   const rootRef = useRef<HTMLDivElement>(null)
   const filterRef = useRef<HTMLInputElement>(null)
   const handledFocus = useRef(0)
+  const [writers] = useState(createRecordWriters<T>)
 
   const ready = status === "ready" && ws.status === "ready"
   const { layout } = ws
@@ -84,6 +87,14 @@ export function WorkspacePanes<T extends WorkspaceItem>({
   const shownItemId = activeTab.itemId
   const activeItem = shownItemId ? byId.get(shownItemId) : undefined
   const groups: TabGroup[] = wide ? layout.groups : [activeGroup]
+
+  useEffect(() => {
+    writers.saveWith(onChange)
+  }, [writers, onChange])
+
+  useEffect(() => {
+    writers.receive(items)
+  }, [writers, items])
 
   useEffect(() => {
     const request = ws.focusRequest
@@ -241,6 +252,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
                         <Pane
                           key={`${tab.tabId}:${tab.itemId}`}
                           item={item}
+                          writer={tab.itemId ? writers.get(tab.itemId) : undefined}
                           deleted={isDeleted(tab.itemId)}
                           mode={tab.mode}
                           maxContentWidth={maxContentWidth}
@@ -256,7 +268,6 @@ export function WorkspacePanes<T extends WorkspaceItem>({
                           renderStructured={renderStructured}
                           toRaw={toRaw}
                           parseRaw={parseRaw}
-                          onChange={onChange}
                           empty={
                             <EmptyPane
                               hasItems={hasItems}
