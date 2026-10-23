@@ -213,13 +213,19 @@ def frame_name(source_id: str, seconds: int) -> str:
     return f"{source_id}-t{seconds:04d}.png"
 
 
+def first_per_second(frames: List[Tuple[float, Path]]) -> dict:
+    """Map each whole second to the first frame that falls in it."""
+    chosen = {}
+    for pts, path in frames:
+        chosen.setdefault(max(int(pts), 0), path)
+    return chosen
+
+
 def publish_frames(
     frames: List[Tuple[float, Path]], source_id: str, media: Path
 ) -> List[Path]:
     """Move frames into media/, one per whole second, replacing this source's earlier frames."""
-    chosen = {}
-    for pts, path in frames:
-        chosen.setdefault(max(int(pts), 0), path)
+    chosen = first_per_second(frames)
     for stale in media.glob(f"{source_id}-t[0-9][0-9][0-9][0-9].png"):
         stale.unlink()
     published = []
@@ -243,7 +249,7 @@ def cmd_video(args: argparse.Namespace) -> int:
         out_dir = video_dir / "frames"
         scene_vf = f"select='gt(scene,{args.threshold})',showinfo,scale=1280:-1"
         frames = extract(ffmpeg, video, scene_vf, out_dir)
-        if len(frames) < MIN_SCENE_FRAMES:
+        if len(first_per_second(frames)) < MIN_SCENE_FRAMES:
             frames = extract(ffmpeg, video, "fps=1,showinfo,scale=1280:-1", out_dir)
         if not frames:
             raise CaptureError("no frames extracted from the video")
