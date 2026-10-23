@@ -1,0 +1,21 @@
+{
+  "name": "workspace-panes",
+  "title": "Workspace panes",
+  "description": "Tabs and side-by-side groups over a sidebar of records, with a Structured and a Raw view of each record.",
+  "dependencies": ["sonner"],
+  "registryDependencies": [
+    "badge",
+    "button",
+    "context-menu",
+    "dropdown-menu",
+    "input",
+    "kbd",
+    "resizable",
+    "scroll-area",
+    "separator",
+    "skeleton",
+    "textarea",
+    "toggle-group",
+    "tooltip"
+  ]
+}
