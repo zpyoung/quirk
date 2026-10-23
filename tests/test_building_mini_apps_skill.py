@@ -25,8 +25,11 @@ APPS = ["linear", "things", "raycast", "craft", "obsidian",
         "tableplus", "fantastical", "notion", "granola", "figma"]
 PATTERNS = ["list-peek", "expand-in-place", "action-palette", "doc-collections", "workspace-panes",
             "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector"]
-REQUIRED_SECTIONS = ["When to use", "Pattern index", "Building a new app",
-                     "When no pattern fits", "Adding a pattern", "Rules"]
+STYLES = ["neutral-house", "calm-paper", "airy-white", "cool-tool",
+          "dense-dark", "glass-launcher", "split-tone"]
+REQUIRED_SECTIONS = ["When to use", "Pattern index", "Style index", "Building a new app",
+                     "When no pattern fits", "Adding a pattern", "Changing an app's style",
+                     "Rules"]
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 DESCRIPTION_RE = re.compile(r"^description:\s*(.+?)\s*$", re.MULTILINE)
@@ -137,16 +140,24 @@ def test_pattern_reference_passes_check_docs(pattern: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("style", STYLES)
+def test_style_reference_passes_check_docs(style: str) -> None:
+    result = _run_script(SCRIPTS_DIR / "check_docs.py", "style", style)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize(
     "kind,name,heading",
-    [("pattern", "list-peek", "Anatomy"), ("study", "linear", "Unseen")],
+    [("pattern", "list-peek", "Anatomy"), ("study", "linear", "Unseen"),
+     ("style", "calm-paper", "Leaves out")],
 )
 def test_check_docs_fails_when_a_required_heading_is_removed(
     tmp_path: Path, kind: str, name: str, heading: str
 ) -> None:
     skill = _copy_skill(tmp_path)
     script = skill / "scripts" / "check_docs.py"
-    doc = skill / "references" / ("patterns" if kind == "pattern" else "apps") / f"{name}.md"
+    folder = {"pattern": "patterns", "study": "apps", "style": "styles"}[kind]
+    doc = skill / "references" / folder / f"{name}.md"
 
     # the untouched copy must pass, or the failure below proves nothing
     assert _run_script(script, kind, name).returncode == 0
