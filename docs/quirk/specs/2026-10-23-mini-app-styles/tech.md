@@ -90,7 +90,7 @@ Adding the attribute must not change classes, structure, ARIA or behavior.
 Back-link: [Key decisions & rationale](logic.md#key-decisions--rationale).
 
 `SCHEMA:` every style defines every key below in both `light` and `dark`, as an `oklch(L C H)` or
-`oklch(L C H / A%)` string (L 0–1, C ≥ 0, H 0–360, A 0–100):
+`oklch(L C H / A%)` string (finite; L 0–1, C 0–0.5, H 0–360, A 0–100):
 
 ```
 SCHEMA: shadcn keys: background foreground card card-foreground popover popover-foreground primary
@@ -135,7 +135,9 @@ Validation (`_styles.load_style` raises `StyleError` naming the file and field):
 - Any font stack naming `SF Pro`, `SF Compact`, `SF Mono` or `New York`.
 - `extra_css`: every `selector` must contain `[data-mini=` and may also use only attribute selectors,
   `:hover`, `:focus-visible`, `::before`/`::after` and the descendant combinator; every property must be
-  in the allowlist below. Values must not contain `url(`, `@import` or `!important`.
+  in the allowlist below. Values must not contain `url(`, `@import` or `!important`, and neither
+  selectors nor values may contain a backslash (no CSS escapes). A `font-family` value is held to the
+  same banned-font rule as the `fonts` stacks.
 
 `CONFIG:` extra_css property allowlist: `background`, `background-color`, `background-image`, `color`,
 `border-color`, `border-left-color`, `border-bottom-color`, `border-left-width`, `border-radius`,
@@ -243,13 +245,14 @@ search to 1e-4) until all channels are in [0, 1]. Ratio is WCAG 2.x relative lum
   (or the `StyleError`), write nothing, exit 1. Success prints `styles built: <n>` and exits 0.
 - `--check`: no writes. Exit 1 naming every output whose bytes differ from what would be generated,
   and on any validation or contrast failure; else print `styles are fresh` and exit 0.
-- `--check-file <css>`: parse an app tokens file (the `html:root` and `html.dark` blocks written by
-  `render_app_css`, possibly hand-edited), run the contrast gate on its token values, print failures as
+- `--check-file <css>`: parse an app tokens file (every `html:root` and then every `html.dark` block, in
+  file order, later declarations winning; possibly hand-edited). The path is resolved against the
+  current directory like any CLI argument, not against `skill_root`; run the contrast gate on its token values, print failures as
   above, exit 1 on any failure or on a missing token, else print `<path>: passes AA` and exit 0. No
   writes. This is the command SKILL.md names for SC-3's hand-tuned accent.
 - Missing `styles/` directory or a source whose slug is not one of the seven: exit 2.
-- `main(argv: list[str] | None = None, skill_root: Path | None = None) -> int`: every path is derived
-  from `skill_root` (default `SKILL_ROOT`), so tests run it in-process against a copied skill.
+- `main(argv: list[str] | None = None, skill_root: Path | None = None) -> int`: every skill path (sources
+  and outputs) is derived from `skill_root` (default `SKILL_ROOT`), so tests run it in-process against a copied skill.
 
 ### Scaffold and swap
 
