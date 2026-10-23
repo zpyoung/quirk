@@ -1,0 +1,16 @@
+{
+  "name": "assisted-notes",
+  "title": "Assisted notes",
+  "description": "A note page where your own lines stay primary and generated lines sit beside them in a quieter style, each with a way back to the excerpt it came from.",
+  "dependencies": ["react-hotkeys-hook", "sonner"],
+  "registryDependencies": [
+    "badge",
+    "button",
+    "kbd",
+    "popover",
+    "scroll-area",
+    "textarea",
+    "toggle-group",
+    "tooltip"
+  ]
+}
