@@ -41,6 +41,7 @@ export function SourcePopover({
         side="bottom"
         align="end"
         aria-label="Source"
+        data-mini="surface"
         className="w-[min(21rem,90vw)]"
         onOpenAutoFocus={(event) => {
           event.preventDefault()

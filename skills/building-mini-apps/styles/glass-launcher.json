@@ -1,0 +1,179 @@
+{
+  "slug": "glass-launcher",
+  "name": "Glass Launcher",
+  "studied_from": [
+    "raycast"
+  ],
+  "radius": "1rem",
+  "fonts": {
+    "sans": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "heading": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "data": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+  },
+  "font_packages": [],
+  "light": {
+    "background": "oklch(0.97 0.004 60)",
+    "foreground": "oklch(0.22 0.006 60)",
+    "card": "oklch(1 0 0 / 60%)",
+    "card-foreground": "oklch(0.22 0.006 60)",
+    "popover": "oklch(1 0 0 / 78%)",
+    "popover-foreground": "oklch(0.22 0.006 60)",
+    "primary": "oklch(0.55 0.15 50)",
+    "primary-foreground": "oklch(1 0 0)",
+    "secondary": "oklch(0.2 0.01 60 / 6%)",
+    "secondary-foreground": "oklch(0.26 0.006 60)",
+    "muted": "oklch(0.94 0.006 60)",
+    "muted-foreground": "oklch(0.46 0.008 60)",
+    "accent": "oklch(0.2 0.01 60 / 8%)",
+    "accent-foreground": "oklch(0.22 0.006 60)",
+    "destructive": "oklch(0.54 0.19 25)",
+    "border": "oklch(1 0 0 / 55%)",
+    "input": "oklch(0.2 0.01 60 / 14%)",
+    "ring": "oklch(0.55 0.15 50)",
+    "chart-1": "oklch(0.62 0.15 50)",
+    "chart-2": "oklch(0.55 0.01 60)",
+    "chart-3": "oklch(0.68 0.08 300)",
+    "chart-4": "oklch(0.42 0.01 60)",
+    "chart-5": "oklch(0.78 0.1 85)",
+    "sidebar": "oklch(1 0 0 / 45%)",
+    "sidebar-foreground": "oklch(0.26 0.006 60)",
+    "sidebar-primary": "oklch(0.55 0.15 50)",
+    "sidebar-primary-foreground": "oklch(1 0 0)",
+    "sidebar-accent": "oklch(0.2 0.01 60 / 8%)",
+    "sidebar-accent-foreground": "oklch(0.22 0.006 60)",
+    "sidebar-border": "oklch(1 0 0 / 55%)",
+    "sidebar-ring": "oklch(0.55 0.15 50)",
+    "mini-accent": "oklch(0.55 0.15 50)",
+    "mini-accent-soft": "oklch(0.62 0.15 50 / 16%)",
+    "mini-pending": "oklch(0.96 0.045 85)",
+    "mini-added": "oklch(0.95 0.05 150)",
+    "mini-removed": "oklch(0.95 0.04 25)"
+  },
+  "dark": {
+    "background": "oklch(0.17 0.01 290)",
+    "foreground": "oklch(0.95 0.004 60)",
+    "card": "oklch(1 0 0 / 7%)",
+    "card-foreground": "oklch(0.95 0.004 60)",
+    "popover": "oklch(0.22 0.012 290 / 80%)",
+    "popover-foreground": "oklch(0.95 0.004 60)",
+    "primary": "oklch(0.75 0.15 50)",
+    "primary-foreground": "oklch(0.2 0.03 50)",
+    "secondary": "oklch(1 0 0 / 8%)",
+    "secondary-foreground": "oklch(0.95 0.004 60)",
+    "muted": "oklch(0.27 0.012 290)",
+    "muted-foreground": "oklch(0.84 0.008 60)",
+    "accent": "oklch(1 0 0 / 8%)",
+    "accent-foreground": "oklch(0.97 0.004 60)",
+    "destructive": "oklch(0.7 0.16 24)",
+    "border": "oklch(1 0 0 / 12%)",
+    "input": "oklch(1 0 0 / 16%)",
+    "ring": "oklch(0.75 0.15 50)",
+    "chart-1": "oklch(0.75 0.15 50)",
+    "chart-2": "oklch(0.65 0.01 60)",
+    "chart-3": "oklch(0.72 0.1 300)",
+    "chart-4": "oklch(0.8 0.01 60)",
+    "chart-5": "oklch(0.82 0.1 85)",
+    "sidebar": "oklch(1 0 0 / 5%)",
+    "sidebar-foreground": "oklch(0.92 0.004 60)",
+    "sidebar-primary": "oklch(0.75 0.15 50)",
+    "sidebar-primary-foreground": "oklch(0.2 0.03 50)",
+    "sidebar-accent": "oklch(1 0 0 / 11%)",
+    "sidebar-accent-foreground": "oklch(0.97 0.004 60)",
+    "sidebar-border": "oklch(1 0 0 / 12%)",
+    "sidebar-ring": "oklch(0.75 0.15 50)",
+    "mini-accent": "oklch(0.75 0.15 50)",
+    "mini-accent-soft": "oklch(0.75 0.15 50 / 20%)",
+    "mini-pending": "oklch(0.3 0.04 85)",
+    "mini-added": "oklch(0.3 0.05 150)",
+    "mini-removed": "oklch(0.3 0.05 25)"
+  },
+  "extra_css": [
+    {
+      "selector": "[data-mini=\"shell-main\"]",
+      "mode": "light",
+      "declarations": {
+        "background-image": "linear-gradient(135deg, oklch(0.95 0.04 65), oklch(0.94 0.035 300))"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-main\"]",
+      "mode": "dark",
+      "declarations": {
+        "background-image": "linear-gradient(135deg, oklch(0.25 0.06 40), oklch(0.2 0.06 300))"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-sidebar\"]",
+      "mode": "both",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-header\"]",
+      "mode": "both",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"]",
+      "mode": "light",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)",
+        "box-shadow": "0 8px 32px oklch(0.2 0.05 60 / 12%)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"]",
+      "mode": "dark",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)",
+        "box-shadow": "0 8px 32px oklch(0 0 0 / 35%)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"surface\"]",
+      "mode": "light",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)",
+        "box-shadow": "0 12px 40px oklch(0.2 0.05 60 / 16%)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"surface\"]",
+      "mode": "dark",
+      "declarations": {
+        "backdrop-filter": "blur(18px) saturate(1.5)",
+        "-webkit-backdrop-filter": "blur(18px) saturate(1.5)",
+        "box-shadow": "0 12px 40px oklch(0 0 0 / 45%)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-accent-soft)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-current=\"true\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-accent-soft)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][data-active]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--mini-accent-soft)"
+      }
+    }
+  ]
+}

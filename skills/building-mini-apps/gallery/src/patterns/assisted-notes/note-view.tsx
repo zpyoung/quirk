@@ -316,6 +316,7 @@ export function NoteView<T extends AssistedNoteItem>({
                   value={note.title}
                   aria-label="Note title"
                   placeholder="Untitled note"
+                  data-mini="title"
                   onChange={(event) =>
                     onChange({
                       title: event.target.value.replace(/\n/g, " "),

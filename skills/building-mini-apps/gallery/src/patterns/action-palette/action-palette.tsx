@@ -260,6 +260,7 @@ export function ActionPalette<T extends PaletteItem>({
               {group.heading ? (
                 <div
                   aria-hidden
+                  data-mini="group-header"
                   className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground"
                 >
                   {group.heading}
@@ -409,6 +410,8 @@ function Row({
   return (
     <div
       role="none"
+      data-mini="row"
+      data-active={selected ? "" : undefined}
       className={cn(
         "group/row mx-1 flex h-11 items-center rounded-md text-sm",
         selected && "bg-muted"

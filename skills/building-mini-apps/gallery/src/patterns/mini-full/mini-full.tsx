@@ -389,6 +389,7 @@ export function MiniFull<T extends { id: string; title: string }>({
       <aside
         ref={panelRef}
         aria-label="Quick add panel"
+        data-mini="panel"
         style={mode === "full" ? { width: "22%", minWidth: 280 } : undefined}
         className={cn(
           "min-h-0 shrink-0 bg-sidebar text-sidebar-foreground",
@@ -409,7 +410,7 @@ export function MiniFull<T extends { id: string; title: string }>({
             <IconButton label={view === "month" ? "Next month" : "Next day"} onClick={() => step(1)}>
               <ChevronRightIcon />
             </IconButton>
-            <h2 className="min-w-0 truncate text-sm font-medium">
+            <h2 data-mini="title" className="min-w-0 truncate text-sm font-medium">
               {view === "month" ? formatMonth(month) : formatDayLong(selectedDate)}
             </h2>
             <ToggleGroup
