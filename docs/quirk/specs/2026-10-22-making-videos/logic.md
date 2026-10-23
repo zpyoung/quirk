@@ -61,9 +61,12 @@ installed.
    HyperFrames composites.
 6. **Render and verify.** The skill renders the MP4, then decodes frames from it and checks them. A
    failed check sends the work back to step 5 before the user sees it.
-7. **Review page.** A local HTML page per project shows the player, the storyboard, the decoded frames,
-   the verify results, every outside call made, and every version side by side. **This is the second
-   stop.**
+7. **Review page.** After its own look at the decoded frames, the agent writes a short note for the
+   version: a one-line verdict and what the user should check before signing off. A local HTML page
+   per project then leads with that note and the newest version's players, scenes with play buttons,
+   verify results and frames, followed by every outside call made and the earlier versions with a
+   side-by-side compare. It is built with quirk's `writing-html-artifacts` report template, so it
+   looks like other quirk pages. **This is the second stop.**
 8. **Notes loop.** The user's notes produce the next version, which runs steps 5 to 7 again.
 
 ## Key decisions and rationale
@@ -184,6 +187,23 @@ installed.
     - **Then** it says which parts are out of scope (over 3 min, avatars, publishing) before any work and
       offers what it can do, such as a 3 min cut without a presenter, delivered as files.
 
+11. **SC-11 The review page leads with what to check**
+    - **Given** `v2` rendered and verified, and the agent's frame review found the 9:16 captions in a
+      default typeface
+    - **When** the agent writes its note for `v2` and builds the page
+    - **Then** the page opens with the note's verdict, lists the caption typeface under "What I would
+      check before signing off", and shows `v2`'s players, scenes, checks and frames first. `v1` sits
+      under Earlier versions with its players and verdict. Each scene's play button starts the chosen
+      cut at that scene.
+    - **Data before:** **Project**: `v1/` ✓ shown at stop 2*; `v2/` ✓ every check met*;
+      `v2/review-notes.md` ✓ verdict + 1 item*
+    - **Walkthrough:**
+      1. A version without a note still gets a page. It states the verify result plainly and says the
+         agent's frame review isn't written yet.
+      2. A version that stopped after 3 failed attempts opens with that and names the failing checks.
+      3. If the html skill is missing or its build fails, the script stops with exit 1 and says why.
+    - **Data after:** **Review page**: ✓ v2 leads; ✓ v1 under Earlier versions; ✓ 1 item to check
+
 ### Strict verify checks
 
 Verify takes each check from the source that can see it (see Amendments): the rendered MP4 and its
@@ -256,7 +276,9 @@ Out of scope for v1:
 
 **Review**
 - Two stops: after the storyboard, then after the first full render.
-- A local review page per project with player, storyboard, decoded frames and version history.
+- A local review page per project with player, storyboard, decoded frames and version history, built
+  with quirk's `writing-html-artifacts` report template. The newest version leads; the agent's note
+  for it supplies the verdict and the list of things to check.
 - Notes produce a new version; every version is kept.
 - Strict self-check before the user sees a render.
 - After 3 failed verify attempts on one version, the skill stops and shows the failing render.
@@ -310,8 +332,6 @@ From research:
 - `[tech-spec]` How the font check tells a brand glyph from a fallback (rendered-glyph comparison vs
   Chrome's font report during render).
 - `[tech-spec]` The scene kit's file format and how subagents receive it.
-- `[tech-spec]` Whether the review page uses the house Web Awesome + Bulma scaffold or quirk's
-  `writing-html-artifacts` templates.
 - `[tech-spec]` The acceptance harness for the three runs below.
 
 ## Done when
@@ -351,3 +371,10 @@ telemetry.
 - 2026-10-22: added a `render_log` verify check. Acceptance run 3 rendered a Blender clip with two
   keyframes in 450 frames; HyperFrames warned that this causes seek failures and frozen frames, and
   every other check passed. Known-bad render warnings now fail verify; others are listed.
+- 2026-10-23: the review page is rebuilt on quirk's `writing-html-artifacts` report template, from a
+  hand-built page the user chose as the model (the run-2 explainer). This settles the deferred
+  question of which page system it uses. The agent now writes a per-version note (verdict and things
+  to check) before the page is built; the newest version leads and earlier ones sit below with the
+  compare; the scene table with play buttons comes from the storyboard's scene list. If the html
+  skill is missing the script fails instead of falling back. The three acceptance pages already
+  built stay as they are. Added SC-11.
