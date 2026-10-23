@@ -30,7 +30,7 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "Injected deterministic",
     ),
     "references/3d.md": ("blender_render.py", "--python-exit-code", "parse_known_args", "Standard", "2D"),
-    "references/review.md": ("verify.py", "review_page.py", "3 failed", "v2", "contact sheet"),
+    "references/review.md": ("verify.py", "review_page.py", "3 failed", "v2", "contact sheet", "review-notes.md"),
     "references/audio.md": ("voice.py", "LUFS", "dBTP", "20 dB", ".srt", "--burn", "cps_violations"),
     "references/cloud.md": ("cloud.py", "cloud_allow", "never permission", "calls.jsonl"),
     "references/gather.md": ("capture", "record.py", "native macOS"),
