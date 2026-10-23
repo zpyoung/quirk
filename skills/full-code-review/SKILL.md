@@ -228,7 +228,7 @@ out in the author seat. For a diff-only run there is no checkout to read, so rep
 Exit 2 means a malformed pack or `REVIEW.md`; show the named file and line and stop.
 `policy.json` fixes the lenses that run (`lenses`, each with its checklist path and
 model), `skipped`, `severity_floor`, `escalation`, `critical_paths`, `cross_family`,
-`cross_repo`, and `guidance_files`. List `excluded_generated` in the Summary.
+`cross_repo`, `adjudicator`, and `guidance_files`. List `excluded_generated` in the Summary.
 
 **Repo conventions.** Against `REVIEW_SOURCE_ROOT`:
 
@@ -349,8 +349,10 @@ checker, merge checked results, then reconcile memory in Step 6.
 **Incomplete runs.** A lens that still fails after the model-fallback retry goes in
 `run.dimensions_failed`, and the report is incomplete: it is never presented as clean.
 
-**Cross-family verification.** When `policy.cross_family.enabled` is true, follow
-"Cross-family verification" in `orchestration.md` before writing the report.
+**Adjudication, then cross-family verification.** After the merge below, unless
+`policy.adjudicator.enabled` is false, follow "Adjudication" in `orchestration.md`. Then,
+when `policy.cross_family.enabled` is true, follow "Cross-family verification" there before
+writing the report.
 
 Per `orchestration.md`: dedup by `file:line` (keep the highest severity, merge lens
 tags), drop speculative and linter-style nits, calibrate severity (description-only
@@ -406,9 +408,10 @@ python3 "$SCRIPTS/render_report.py" --in "$REPORT_JSON" --format <html|md|both> 
 ```
 
 Keep the renderer's `order`, `seat`, `head_sha`, paths, and warnings. Print only a short
-terminal digest: tally and verdict, lenses run, skipped, and failed, any `run.coverage`
-gap or unreviewed file, one line per Must/Should, and the artifact paths. A failed lens
-or unreviewed file must show in the digest, so it never reads as a clean review.
+terminal digest: tally and verdict, the renderer's `adjudication` line, lenses run, skipped,
+and failed, any `run.coverage` gap or unreviewed file, one line per Must/Should, and the
+artifact paths. A failed lens or unreviewed file must show in the digest, so it never
+reads as a clean review.
 
 ## Step 8: triage
 
@@ -431,9 +434,8 @@ python3 "$MEMORY_SCRIPT" save --report "$REPORT_JSON" --decisions "$REVIEW_RUN_D
 ```
 
 `save` prints JSON and exits 1 when it says `saved: false`. Check the exit code and, on
-failure, tell the user their triage decisions were not saved.
-
-Keep the report unchanged after validation; the decisions artifact is bound to it.
+failure, tell the user their triage decisions were not saved. Keep the report unchanged after
+validation; the decisions artifact is bound to it.
 
 ## Step 9: deliver
 
