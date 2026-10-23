@@ -18,6 +18,8 @@ const UNIT_MS: Record<DurationUnit, number> = {
   days: 86_400_000,
 }
 
+const MAX_DURATION_MS = 100 * 365 * UNIT_MS.days
+
 export function durationMs(amount: number, unit: DurationUnit): number {
   return amount * UNIT_MS[unit]
 }
@@ -60,9 +62,10 @@ export function validateInput(
       return null
     }
     case "duration":
-      return typeof value === "number" && Number.isFinite(value) && value > 0
-        ? null
-        : "Enter a length of time above zero"
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return "Enter a length of time above zero"
+      }
+      return value > MAX_DURATION_MS ? "Enter 100 years or less" : null
     case "choice":
       return typeof value === "string" && input.options.includes(value)
         ? null
