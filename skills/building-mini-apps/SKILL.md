@@ -38,17 +38,17 @@ Each app has a study note in `references/apps/<app>.md` if a reference points to
 
 ## Style index
 
-A style is the look of one app: colors, type, radii, density. Each app gets exactly one, written to `src/styles/mini-tokens.css`. Read the linked reference before recommending one: it holds the character, when it fits, and what it leaves out.
+A style is the look of one app: colors (light and dark), radius, fonts, border and shadow weight, and a few rules on named hooks. It never changes layout, spacing or components. Each app gets exactly one, written to `src/styles/mini-tokens.css`. Read the linked reference before recommending one: it holds the character, when it fits, and what it leaves out.
 
 | Slug | Character | Studied from |
 |---|---|---|
 | neutral-house | Calm cool greys, white cards, one slate-teal accent; the default | Not studied from an app |
-| calm-paper | Warm cream page, serif titles, ink-black actions, spacious rows | Granola, Craft |
-| airy-white | Stark white, large bold titles, one soft blue action, pastel tags | Notion, Things 3 |
-| cool-tool | Cool-grey hairlines, compact rows, one blue-violet for selection | Linear, Figma |
-| dense-dark | Flat charcoal, compact rows, monospace data, three panes | TablePlus, Obsidian |
-| glass-launcher | Translucent blurred panel, big search input, keycap chips | Raycast |
-| split-tone | Dark sidebar against a white canvas, pastel blocks with a rose accent | Fantastical |
+| calm-paper | Warm paper, serif titles, ink-black actions | Granola, Craft |
+| airy-white | Stark white, bold titles, one soft blue accent, small radius, faint shadow | Notion, Things 3 |
+| cool-tool | Cool-grey hairlines, small radius, one blue-violet for selection and focus | Linear, Figma |
+| dense-dark | Flat charcoal, steel-blue solid selection, monospace data cells | TablePlus, Obsidian |
+| glass-launcher | Translucent blurred panels, large radius, warm orange accent | Raycast |
+| split-tone | Dark sidebar on a light canvas, rose accent, edge-striped selection | Fantastical |
 
 References: [neutral-house](references/styles/neutral-house.md), [calm-paper](references/styles/calm-paper.md), [airy-white](references/styles/airy-white.md), [cool-tool](references/styles/cool-tool.md), [dense-dark](references/styles/dense-dark.md), [glass-launcher](references/styles/glass-launcher.md), [split-tone](references/styles/split-tone.md).
 
