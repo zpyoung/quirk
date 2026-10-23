@@ -34,6 +34,9 @@ export function RecordPage<T extends DocRecord>({
   const [title, setTitle] = useDraft(record.title)
   const [body, setBody] = useDraft(record.body)
 
+  // props lag behind edits until each store write resolves, so writes compose from this buffer
+  const latestProps = useRef<{ id: string; props: Record<string, PropValue>; pending: number } | null>(null)
+
   const save = (patch: Partial<T>) => {
     onUpdate(patch).catch(() => {
       setRevision((n) => n + 1)
@@ -76,7 +79,24 @@ export function RecordPage<T extends DocRecord>({
   }
 
   const setProp = (key: string, value: PropValue) => {
-    save({ props: { ...record.props, [key]: value } } as Partial<T>)
+    const current = latestProps.current?.id === record.id ? latestProps.current : null
+    const inFlight = current !== null && current.pending > 0
+    const base = inFlight ? current.props : record.props
+    const previous = base[key] ?? null
+    const entry = { id: record.id, props: { ...base, [key]: value }, pending: (inFlight ? current.pending : 0) + 1 }
+    latestProps.current = entry
+    onUpdate({ props: entry.props } as Partial<T>)
+      .catch(() => {
+        setRevision((n) => n + 1)
+        const latest = latestProps.current
+        if (latest && latest.id === entry.id && latest.props[key] === value) {
+          latest.props = { ...latest.props, [key]: previous }
+        }
+      })
+      .finally(() => {
+        const latest = latestProps.current
+        if (latest && latest.id === entry.id) latest.pending -= 1
+      })
   }
 
   return (
