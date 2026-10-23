@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
-import { Loader2Icon, SearchIcon } from "lucide-react"
+import { Loader2Icon, MoreHorizontalIcon, SearchIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/mini/states"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -152,6 +153,15 @@ export function ActionPalette<T extends PaletteItem>({
     else if (canOpen && activeId !== undefined) setPanel({ itemId: activeId, path: [], nonce: 0 })
   }
 
+  function toggleRowPanel(item: T) {
+    if (panelOpen && activeId === item.id) {
+      closePanel()
+      return
+    }
+    setSelectedId(item.id)
+    setPanel({ itemId: item.id, path: [], nonce: 0 })
+  }
+
   useHotkeys("mod+k", togglePanel, { enableOnFormTags: true, preventDefault: true })
 
   const searchHotkeyRef = useHotkeys<HTMLInputElement>(
@@ -264,6 +274,9 @@ export function ActionPalette<T extends PaletteItem>({
                   title={item.title}
                   subtitle={getSubtitle?.(item)}
                   meta={getMeta?.(item)}
+                  actionsLabel={getActions(item).length > 0 ? `Actions for ${item.title}` : undefined}
+                  actionsOpen={panelOpen && activeId === item.id}
+                  onToggleActions={() => toggleRowPanel(item)}
                 />
               ))}
             </div>
@@ -337,17 +350,19 @@ export function ActionPalette<T extends PaletteItem>({
             {canOpen ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     data-action-palette-toggle
                     aria-expanded={panelOpen}
                     aria-label="Actions"
                     onClick={togglePanel}
-                    className="flex items-center gap-1.5 rounded-md px-1.5 py-1 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                    className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
                   >
                     Actions
                     <ShortcutKeys shortcut="mod+k" />
-                  </button>
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent>Show actions for the selected row</TooltipContent>
               </Tooltip>
@@ -377,6 +392,9 @@ function Row({
   title,
   subtitle,
   meta,
+  actionsLabel,
+  actionsOpen,
+  onToggleActions,
 }: {
   id: string
   selected: boolean
@@ -384,33 +402,61 @@ function Row({
   title: string
   subtitle?: string
   meta?: string
+  actionsLabel?: string
+  actionsOpen?: boolean
+  onToggleActions?: () => void
 }) {
   return (
     <div
-      id={id}
-      role="option"
-      aria-selected={selected}
-      onClick={onSelect}
+      role="none"
       className={cn(
-        "mx-1 flex h-11 items-center gap-3 rounded-md px-3 text-sm",
+        "group/row mx-1 flex h-11 items-center rounded-md text-sm",
         selected && "bg-muted"
       )}
     >
-      <span className="max-w-[65%] min-w-0 shrink-0 truncate font-medium" title={title}>
-        {title}
-      </span>
-      {subtitle ? (
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={subtitle}>
-          {subtitle}
+      <div
+        id={id}
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        className="flex h-full min-w-0 flex-1 items-center gap-3 pl-3"
+      >
+        <span className="max-w-[65%] min-w-0 shrink-0 truncate font-medium" title={title}>
+          {title}
         </span>
+        {subtitle ? (
+          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={subtitle}>
+            {subtitle}
+          </span>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {meta ? (
+          <Badge variant="secondary" className="shrink-0">
+            {meta}
+          </Badge>
+        ) : null}
+      </div>
+      {actionsLabel ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          data-action-palette-toggle
+          aria-label={actionsLabel}
+          aria-expanded={actionsOpen}
+          tabIndex={selected ? 0 : -1}
+          onClick={onToggleActions}
+          className={cn(
+            "mx-1.5 text-muted-foreground",
+            !selected && "opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100"
+          )}
+        >
+          <MoreHorizontalIcon aria-hidden />
+        </Button>
       ) : (
-        <span className="flex-1" />
+        <span className="w-3 shrink-0" />
       )}
-      {meta ? (
-        <Badge variant="secondary" className="shrink-0">
-          {meta}
-        </Badge>
-      ) : null}
     </div>
   )
 }
