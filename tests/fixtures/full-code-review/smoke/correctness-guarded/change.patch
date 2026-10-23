@@ -1,0 +1,14 @@
+diff --git a/invoices.py b/invoices.py
+index 1678a45..4490805 100644
+--- a/invoices.py
++++ b/invoices.py
+@@ -1,4 +1,8 @@
++def display_name(request):
++    return request.get("name").strip().title()
++
++
+ def summarize(request):
+     """Summarize an invoice request that has already been validated by the API layer."""
+     items = request.get("items", [])
+-    return {"item_count": len(items)}
++    return {"customer": display_name(request), "item_count": len(items)}
