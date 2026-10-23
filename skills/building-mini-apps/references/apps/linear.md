@@ -1,0 +1,75 @@
+# Linear study note
+
+Captured 2026-10-22 from public videos and docs pages only; no login. Frame paths are relative to the repo's `skills/building-mini-apps/` folder; the media folder is gitignored, so the files exist only on the capture machine. A frame named `S1-t0042.png` is the video frame at 42 seconds.
+
+## Sources
+
+| ID | URL | Kind | Date | Shows |
+|----|-----|------|------|-------|
+| S1 | https://www.youtube.com/watch?v=7oN7aFzfIvQ | official | undated | "Daily workflows and task management in Linear": light-theme desktop app, triage list, My issues, filter and display menus, status picker, project overview |
+| S2 | https://www.youtube.com/watch?v=9Q5BoiIFBiY | official | undated | "Intro to Linear": light-theme desktop app, create-issue modal, issue detail page with properties sidebar and activity |
+| S3 | https://www.youtube.com/watch?v=ddFgXoNa9_0 | third-party | undated | "How I use Linear to manage my SaaS" (Brian Casel): dark-theme web app, board layout, issue detail, command menu on an issue, inbox |
+| S4 | https://linear.app/docs/select-issues | official | undated | Highlight and select keys (J/K, X, Shift, Esc) and acting via Cmd+K; one page screenshot |
+| S5 | https://linear.app/docs/custom-views | official | undated | "Peek preview" section: how Space toggles and holds peek (text only) |
+| S6 | https://linear.app/docs/board-layout | official | undated | Space on a hovered board card to peek (text only) |
+| S7 | https://linear.app/docs/display-options | official | undated | Shift+V display options, Cmd+B list/board toggle (text only) |
+| S8 | https://linear.app/now/behind-the-latest-design-refresh | official | 2026-03-12 | Design refresh essay: dimmer sidebar, fewer separators, smaller icons (text only) |
+
+`https://linear.app/docs/peek` from the starting list returns "Not found"; the peek behavior is documented in S5 and S6 instead. The 2024 redesign post (`/now/how-we-redesigned-the-linear-ui`) was read but adds nothing for this pattern beyond S8, so it is not cited.
+
+## Observations
+
+- S1, `references/media/linear/S1-t0042.png`: the Triage view is a two-pane master/detail. Sidebar is about 21% of the window width, the list column about 30%, and the remaining ~48% is a detail pane that shows an empty state until a row is selected. → feeds: list-peek, workspace-panes
+- S1, `references/media/linear/S1-t0042.png`: list rows in the narrow column are two lines. Line 1 is the title in regular weight with the issue ID (RIDE-708) right-aligned in muted text; line 2 is a small avatar, the person's name, and an age ("5w ago"). Rows are separated by a hairline and are about 57px tall at 1280px frame width. → feeds: list-peek
+- S1, `references/media/linear/S1-t0042.png`: the triage empty-detail state is a small outline illustration, the text "9 issues to triage", and one outlined secondary button ("Create triage issue"). No color, no arrows to the list. → feeds: list-peek, inspector
+- S1, `references/media/linear/S1-t0066.png`: in a full-width list the rows are single-line and about 42px apart. Left to right: priority icon, muted issue ID, status icon, title, then right-aligned pill-shaped labels, a due date, and an avatar. The ID and status icon sit at a fixed x so titles line up as a column. → feeds: list-peek, staged-table-edit
+- S1, `references/media/linear/S1-t0066.png`: group headers are full-width bands with a slightly darker tint than rows, containing an icon, group name, a count, and a muted description ("Within 24 hours of SLA"). Header band height is about 36px. A "+" sits at the far right of headers that allow creating into the group. → feeds: list-peek
+- S1, `references/media/linear/S1-t0066.png`: hovering the Display button shows a tooltip "Show display options" with the keycaps Shift and V drawn as two small boxes. This is how shortcuts are advertised on screen: a keycap pair inside a tooltip, not a cheat sheet. → feeds: action-palette, view-switcher
+- S1, `references/media/linear/S1-t0072.png`: a different grouping (by priority: Urgent issues, Moderate Risk, Low Risk) reuses the same row layout, so changing grouping changes only the header bands. Right-side metadata truncates with an ellipsis ("Improvem...", "Android UI Refresh") before the title does, and the title keeps priority. → feeds: list-peek, view-switcher
+- S1, `references/media/linear/S1-t0102.png`: the Filter button opens a small popover with a search field at the top (keycap "F" at its right edge) and a flat list of filter fields, each with an icon and a right chevron for submenus. A one-letter shortcut opens it, and typing narrows the list. → feeds: action-palette, view-switcher
+- S1, `references/media/linear/S1-t0078.png`: typing "lab" in the filter popover shows matches inline ("Labels > Bug 22 issues") and a second popover opens to the right for the Labels submenu. Each value shows an issue count in muted text. → feeds: action-palette
+- S1, `references/media/linear/S1-t0108.png`: with a filter applied, the filter bar becomes chips ("SLA status is any of 3 statuses") with an x on each. "Display" gains a small colored dot, and "Clear" and "Save" buttons appear at the right end of the bar. → feeds: view-switcher
+- S1, `references/media/linear/S1-t0111.png`: the filtered-to-nothing state is a centered dashed-outline illustration, "No issues matching the filters", and a two-row box: "1 issue hidden by display options / Show options" and "72 more hidden by filters / Clear Filters x". The empty state says why the list is empty and offers the exact control to undo it. → feeds: list-peek, view-switcher
+- S1, `references/media/linear/S1-t0129.png`: the "Change status..." command menu is a centered panel about 70% of window width. A grey chip at the top names the target ("RIDE-759 · Tips to drivers are rounded down instead of up."), then an input, then a list where each row has an icon, a name, and a numeric keycap (1 to 8) at the right. The current value shows a check mark. The list behind it dims. → feeds: action-palette, list-peek
+- S1, `references/media/linear/S1-t0138.png`: the project issues list groups by status with count badges ("In progress 11", "Todo 17"). The group band tint differs by group (warm for In progress, cool for Todo). There is no row selection highlight in this still. → feeds: list-peek
+- S1, `references/media/linear/S1-t0036.png`: the inbox list uses an avatar with a small badge icon at the lower right for event type, a two-line row (title with ID, then event text), and a right-aligned muted age ("4d", "2mo") with a single status icon above it. → feeds: list-peek
+- S1, `references/media/linear/S1-t0150.png`: the project Overview page has a main column (title, properties row, latest update, description) and a right properties sidebar of about 29% of window width with labeled rows (Status, Priority, Lead, Members, Dates). The sidebar is toggled from an icon at the top right of the header. → feeds: inspector
+- S2, `references/media/linear/S2-t0114.png`: the issue detail page is a centered content column with the title, description, sub-issues, links, and activity, and a fixed right "Properties" sidebar (about 20% of width). Sidebar rows are icon plus value with no row borders: status, priority, assignee, "Set estimate", then Labels, Cycle, Project, Milestone under small muted section labels. Empty values read as muted verbs ("Add label", "Set milestone"). → feeds: inspector, list-peek
+- S2, `references/media/linear/S2-t0114.png`: the header shows a breadcrumb (team > project > issue ID), a "..." menu, and a star; the sidebar header holds three small icon buttons (copy link, copy ID, copy branch name). Activity is a plain text timeline of small avatar plus one line ("sagan moved from Backlog to Done 10mo ago"), with no cards. → feeds: inspector, assisted-notes
+- S2, `references/media/linear/S2-t0042.png`: the create-issue modal is about 70% of window width, over a dimmed list. Rows from top: team breadcrumb and Template chip, title field, description field, a Suggestions row, a chip row of property pickers (Backlog, Priority, Assignee, project, Milestone), then a footer with attach icon, a "Create more" toggle and a filled "Create issue" button. The only filled, colored element on the screen is that button. → feeds: action-palette, staged-table-edit
+- S2, `references/media/linear/S2-t0108.png`: the same modal with a template applied shows a prefilled body (Description, Problem Statement, Priority checkboxes) and a "Save as draft" button in the header row. The chip row stays pinned at the bottom while the body scrolls. → feeds: assisted-notes
+- S2, `references/media/linear/S2-t0096.png`: the Active issues list at the full window width: rows about 42px tall, group header "In Review 9" with a green status icon, a view-tab strip above the toolbar (All issues, Active, Backlog, Bugs, Quick Wins, "4 more..."), and a toolbar row with "Filter" at the left and "Display" at the right. → feeds: list-peek, view-switcher
+- S2, `references/media/linear/S2-t0096.png`: one row in the list (RIDE-115) has a faint hover/selection tint across its full width and no other change; no checkbox or action buttons are drawn on it in this frame. → feeds: list-peek
+- S3, `references/media/linear/S3-t0090.png`: board layout shows columns with fixed width (about 25% of window each), a header with status icon, name, count, "..." and "+", and cards with ID in muted text, an assignee avatar at the top right, a title, and a small row of label chips. Cards have no description. A footer strip reads "43 issues hidden by display options" with a "Show options" link. → feeds: list-peek, view-switcher
+- S3, `references/media/linear/S3-t1470.png`: Inbox is a master/detail layout: a narrow list (about 28% of width) beside the full issue, with the sidebar still visible. The open issue's row is tinted, the pointer sits on a row's right edge showing the age, and the header gains "Unsubscribe / Snooze / Delete notification". → feeds: list-peek, workspace-panes
+- S3, `references/media/linear/S3-t1440.png`: the empty state of the Inbox detail pane is an outline inbox illustration and "3 unread notifications", centered in the space where the issue would open. → feeds: list-peek
+- S3, `references/media/linear/S3-t1126.png`: Cmd+K on an issue opens a command menu with a grey chip naming the issue ("CF-1734 - Availability not pulling correctly into scheduling page"), the input showing the typed letter, and rows with an icon, a label, and right-aligned keycaps (for example Copy issue URL with Cmd, Shift, and a comma). Actions apply to the issue named in the chip. The menu is a wide centered panel, not a dropdown. → feeds: action-palette
+- S3, `references/media/linear/S3-t1050.png`: the full issue page header shows a position counter "16 / 25" with up and down chevrons to step to the previous or next issue in the list the user came from. → feeds: list-peek, inspector
+- S3, `references/media/linear/S3-t0780.png`: descriptions with checklists render with real checkboxes, indented lists, and inline code; the page keeps the same narrow reading column and the properties sidebar stays fixed while the body scrolls. → feeds: assisted-notes, inspector
+- S4, `references/media/linear/S4-select-issues.png`: the docs page's own screenshot shows multi-selected rows with a filled checkbox at the left and a deep blue row tint, while unselected rows show only an ID and a status glyph. The page text says J/K or arrow keys highlight a row, X selects it, Shift plus arrow extends the range, Esc clears, and Cmd+K acts on the selection. → feeds: list-peek, action-palette
+- S5, text of the "Peek preview" section at https://linear.app/docs/custom-views: pressing Space launches peek and pressing Space again closes it; holding Space shows peek only while the key is down. Peek is on by default where the view supports it. → feeds: list-peek
+- S6, text of the FAQ at https://linear.app/docs/board-layout: board cards omit descriptions and some properties, and the docs tell users to press Space while hovering a card to peek for more detail. Peek works from a hovered row, not only a keyboard-highlighted one. → feeds: list-peek
+- S7, text at https://linear.app/docs/display-options: Shift+V opens display options and Cmd/Ctrl+B toggles list and board. By default no issue is selected when a list opens. → feeds: view-switcher, list-peek
+- S8, text at https://linear.app/now/behind-the-latest-design-refresh: the sidebar was made "a few notches dimmer" so the content area leads, tabs became compact and icon-only, icons got smaller and lost colored backgrounds, and borders were rounded and lower in contrast ("structure should be felt, not seen"). → feeds: list-peek, workspace-panes
+
+## Unseen
+
+- What the peek panel itself looks like (size, position, animation, whether it overlays or pushes the list) was not shown in any public source. S5 and S6 give only its key behavior.
+- Whether J/K moves a visible highlight in the list, and how that highlight looks versus hover, was not shown. S4 describes the keys in text; no video frame showed a keyboard-highlighted row.
+- What Space does while a row is multi-selected, and whether arrow keys keep moving the peek target while peek is open.
+- Loading and error states for lists and for the issue page were not shown.
+- Row hover affordances (the checkbox that appears at the left edge, per S4 text) were not seen in a frame.
+- Escape behavior for closing peek versus clearing selection.
+
+## Patterns fed
+
+- list-peek: dense one-line rows at about 42px, a fixed ID/status column, right-aligned metadata that truncates before the title, tinted group headers with counts, Space to toggle peek or hold to peek, J/K and arrows to move, X to select, and "n / total" stepping on the full page.
+- expand-in-place: not fed by public material; Linear opens peek or a full page, never an inline expansion.
+- action-palette: Cmd+K opens a centered panel that names its target issue in a chip, lists actions with keycaps, and numbers choices in pickers (1 to 8); filter and display popovers advertise their key in a tooltip or field corner.
+- doc-collections: sidebar groups (workspace, teams, favorites) with counts and a dimmed sidebar relative to content.
+- workspace-panes: sidebar, list column, and detail pane at roughly 21%, 30%, and 48% in the Triage and Inbox views, with an illustrated empty state in the detail pane.
+- staged-table-edit: chip-style property pickers in the create modal and the filter chip bar with "Clear" and "Save".
+- mini-full: the same issue appears as a peek, a side detail pane, and a full page with a properties sidebar.
+- view-switcher: view tabs above the toolbar, Filter at left and Display at right, Shift+V and Cmd+B, and empty states that name what is hidden and how to undo it.
+- assisted-notes: templated issue bodies with a "Save as draft" button and a plain-text activity timeline.
+- inspector: a fixed right properties sidebar of about 20 to 29% of width with icon-plus-value rows and muted verbs for empty values.

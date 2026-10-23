@@ -1,0 +1,18 @@
+{
+  "name": "staged-table-edit",
+  "title": "Staged table edit",
+  "description": "An editable table where cell edits, new rows and deletions stay pending and tinted until one commit applies them or one discard throws them away.",
+  "dependencies": ["sonner"],
+  "registryDependencies": [
+    "button",
+    "context-menu",
+    "dialog",
+    "input",
+    "kbd",
+    "popover",
+    "scroll-area",
+    "select",
+    "table",
+    "tooltip"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "view-switcher",
+  "title": "View switcher",
+  "description": "One set of records shown through named view tabs (table, board, list, calendar), each with its own filter and sort, and a record opening in a docked side panel.",
+  "dependencies": ["react-hotkeys-hook", "sonner"],
+  "registryDependencies": [
+    "button",
+    "checkbox",
+    "dialog",
+    "dropdown-menu",
+    "input",
+    "kbd",
+    "popover",
+    "select",
+    "table",
+    "tabs",
+    "tooltip",
+    "badge"
+  ]
+}
