@@ -506,3 +506,37 @@ def test_video_failed_publish_keeps_the_previous_capture_and_leaves_no_temporari
     assert moves["count"] >= 3
     assert "No space left" in capsys.readouterr().err
     assert {p.name: p.read_bytes() for p in media.iterdir()} == previous
+
+
+def test_video_failed_commit_restores_every_previous_frame_and_leaves_no_leftovers(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    for key, value in rig.env.items():
+        monkeypatch.setenv(key, value)
+    capture = _load_capture(rig.skill, "capture_commit_failure")
+    media = rig.media()
+    media.mkdir(parents=True)
+    previous = {
+        "S1-t0000.png": b"old zero",
+        "S1-t9999.png": b"old stale",
+        "S3-t0042.png": b"other source",
+    }
+    for name, data in previous.items():
+        (media / name).write_bytes(data)
+
+    real_replace = os.replace
+    placements = {"count": 0}
+
+    def failing_replace(src, dst, *args, **kwargs):
+        if str(src).endswith(".tmp"):
+            placements["count"] += 1
+            if placements["count"] == 2:
+                raise OSError(5, "Input/output error")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(capture.os, "replace", failing_replace)
+    assert capture.main(["video", "sentry", "S1", "https://example.invalid/one"]) == 1
+
+    assert placements["count"] == 2
+    assert "Input/output error" in capsys.readouterr().err
+    assert {p.name: p.read_bytes() for p in media.iterdir()} == previous
