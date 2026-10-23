@@ -27,6 +27,10 @@ Write `<project>/storyboard.md` with these parts, in this order:
 5. Scene kit: the locked tokens, motion roles and components (see The scene kit).
 6. Flags: any 3D shot with Blender's status, any cloud service the brief named, anything the user must decide.
 
+Two layout rules in the scene table and the Script exist so the review page can build its play buttons:
+- The Time cell opens with the scene's start second, for example `9.4-16.1` or `0.0 to 15.0`. The page reads that number as where the scene's button seeks.
+- When narration is on, the Script section is a numbered list with one item per scene. The page uses each item as that scene's words. Without a list it falls back to a Narration or Text column in the table.
+
 Every claim on screen or in the script traces to something gather read. A claim without a source gets
 cut or flagged for the user.
 

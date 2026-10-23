@@ -20,7 +20,7 @@ Contents:
 2. Run `verify.py`.
 3. If a check failed and `stop` is false, fix the cause, re-render into the same `$V`, regenerate every input, and verify again. The user has not seen this version yet, so rebuilding in place is allowed.
 4. If `stop` is true, do not rebuild. Go to the review page with the failures flagged.
-5. When verify passes, do your visual pass, build the page and stop.
+5. When verify passes, do your visual pass, write the review notes, build the page and stop.
 
 Only failed verify runs count toward the stop. After 3 failed verify attempts on one MP4, verify sets `"stop": true` for it: stop looping and show the user the failing render with the failing checks flagged. A passing re-run (for example after a layout fix you chose to make) is free and does not add an attempt, so never copy a project to a scratch folder to verify there and dodge the counter. A new version starts its own count.
 
@@ -110,13 +110,37 @@ If you find a problem verify did not, fix it before the user sees the version. R
 
 ## Review page and stop 2
 
-Build the page after verify, and again after every new version.
+Write the review notes, then build the page. Do both after verify, and again after every new version.
+
+The notes go in `<vN>/review-notes.md`, written from your own pass over the frames decoded from the MP4 and written before you run the script:
+
+```markdown
+<one paragraph: the verdict, one or two sentences>
+
+- <a thing the user should check before signing off>
+- <another>
+```
+
+The first paragraph becomes the page's summary under the title. Everything after it shows under "What I would check before signing off". An empty list is fine. Without the file the page still builds and says your frame review is not written yet, so a missing file never blocks stop 2, but write it every time.
 
 ```bash
 python3 "$SKILL_DIR/scripts/review_page.py" --project "$P"
 ```
 
-It writes `$P/review.html` and prints `{"page": ...}`. The page is one self-contained file that opens from disk. It shows a player per version, the storyboard, each MP4's contact sheet and stills, each MP4's verify checks with their measured values, the outside calls, and a version list, newest first, with a side-by-side compare of any two. A version missing its MP4, `verify.json` or frames still gets a row saying what is missing. A missing project exits 2.
+The script writes `$P/review.src.html`, builds `$P/review.html` from it through quirk's `writing-html-artifacts` skill (report template), and prints `{"page", "source", "checks"}`. It exits 1 if `writing-html-artifacts` is missing or its build or static checks fail, and it writes no fallback page, so report that failure instead of handing over an older `review.html`. A missing project exits 2.
+
+The page is about 750 KB because the HTML kit is inlined. It opens from disk and makes no network calls. Its links are relative, so keep it inside the project folder. It shows, newest version first:
+- the verdict, or "Stopped after 3 failed verify attempts" with the failing checks when verify stopped;
+- findings generated from `verify.json`;
+- one player per MP4, and a scene table whose play buttons jump to each scene (see the Time cell and Script list rules in [storyboard.md](storyboard.md#what-the-storyboard-file-holds));
+- your check-before-signing-off list;
+- the verify results in plain words, with a beat-offset chart when sync ran;
+- verify's per-scene stills, one tab per MP4. The contact sheet is not on the page. Verify still writes it for your own pass;
+- the outside calls: counts, then each cloud call on its own row, with providers outside `cloud_allow` marked;
+- earlier versions with their players, and a compare of any two;
+- links to the files.
+
+A version missing its MP4, `verify.json` or stills gets a line naming what is missing.
 
 Stop 2 is the point where you wait for the user. Tell them:
 - the path to `review.html`, ready to open;
