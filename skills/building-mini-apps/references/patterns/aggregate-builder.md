@@ -45,7 +45,7 @@ Do not use it when:
 
 - **Rail:** about 36% of the block, three sections. Visualize holds the aggregate picker and the field picker side by side. Group By holds a field picker with a "None" choice. Sort By holds a field picker and an Asc/Desc picker. A Reset button appears only when the query differs from its starting point.
 - **Chart header:** the aggregate written as `fn(field)` at the left, then a Line/Bar toggle and an interval picker at the right. The title adds "by <group field>" when grouping applies.
-- **Chart:** inline SVG, about 11rem tall, with a y axis from zero, an x axis of time labels, and one series per group colored by the chart tokens. At most five series: the top four groups plus "Other", which re-aggregates every remaining group's rows together. A legend under the header lists the series, and a footnote under the plot says how many rows and buckets it shows.
+- **Chart:** inline SVG, about 11rem tall, with a y axis that always includes zero and reaches below it when a value is negative, an x axis of time labels, and one series per group colored by the chart tokens. At most five series: the top four groups plus "Other", which re-aggregates every remaining group's rows together. A legend under the header lists the series, and a footnote under the plot says how many rows and buckets it shows.
 - **Chart cursor:** a vertical marker with a small box listing every series' value in that bucket. The pointer or the Left/Right keys move it.
 - **Tabs:** Samples and Aggregates. Samples lists raw rows, one per line, with the bar field (a duration, for example) drawn as a proportional bar in its cell. Aggregates lists one row per group, starting with a color swatch that matches its chart series, then the aggregate value and the row count.
 - **Column headers:** the active sort shows an arrow and `aria-sort`; clicking a header sorts by it and clicking again flips the direction.
@@ -77,9 +77,9 @@ The pickers are Radix selects: Enter, Space or Down opens one, arrows move, Ente
 - Group By offers text fields. It is disabled on the Samples tab and says so in text next to it: "Switch to Aggregates to group." The Samples chart is one series.
 - Sort By edits the sort of the tab you are on. Samples sorts by any field (default: the time field, newest first). Aggregates sorts by the aggregate value (default, highest first), by the row count (not offered when the aggregate is the count), or by the group name (offered only when grouped). Each tab remembers its own sort.
 - The chart's top groups are the first rows of the Aggregates table in its current sort, so the chart and the table always agree on who is colored.
-- Percentiles use linear interpolation between ranks. Rows whose field is not a finite number are skipped for numeric aggregates. A bucket with no values draws as a gap for average, minimum, maximum and the percentiles, and as zero for count, count unique and sum.
+- Percentiles use linear interpolation between ranks. Rows whose field is not a finite number are skipped for numeric aggregates. A time that is not a finite number a date can hold (beyond about 8.64e15 milliseconds) counts as no time: the row stays out of the chart and its time cell shows a dash. A bucket with no values draws as a gap for average, minimum, maximum and the percentiles, and as zero for count, count unique and sum.
 - The interval defaults to "Auto", the smallest preset that gives at most 60 buckets. A chosen interval that would give more than 240 buckets steps up to the next preset.
-- Stacking: bars stack for count and sum, which add up across groups, and sit side by side for the other aggregates. Lines never stack. Series are told apart by a dash pattern as well as by color, so a style whose chart colors are close still reads.
+- Stacking: bars stack for count and sum, which add up across groups, and sit side by side for the other aggregates. Negative sums stack downward from zero, apart from the positive ones. Lines never stack. Series are told apart by a dash pattern as well as by color, so a style whose chart colors are close still reads.
 
 | State | Shows |
 |-------|-------|
@@ -90,6 +90,7 @@ The pickers are Radix selects: Enter, Space or Down opens one, arrows move, Ente
 | An aggregate with no values (every row's field is blank) | The chart says there are no values for `fn(field)`; the table cells show a dash. |
 | One bucket | The chart draws single points and one bar instead of a line. |
 | Many rows | Samples shows the first `sampleLimit` rows (default 100) and says "Showing the first 100 of 1400 deliveries". Aggregates lists every group. Not virtualized; fine to a few thousand rows. |
+| Rows with no group value | One group labeled "(none)". A real value spelled "(none)" is its own group, labeled with quotes. |
 | A group with no value in a bucket | A gap in its line, so a missing reading is never drawn as zero. |
 
 ## Borrow / Leave out
