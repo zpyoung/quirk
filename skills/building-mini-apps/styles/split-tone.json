@@ -89,6 +89,76 @@
   },
   "extra_css": [
     {
+      "selector": "[data-mini=\"shell-sidebar\"] [class*=\" text-muted-foreground\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "oklch(0.78 0.008 280)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"][aria-label=\"Quick add panel\"] [class*=\" text-muted-foreground\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "oklch(0.78 0.008 280)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-main\"] [aria-label=\"Items\"] [class*=\" text-muted-foreground\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "oklch(0.78 0.008 280)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-main\"] [aria-label=\"Items\"] [class*=\"placeholder:text-muted-foreground\"]::placeholder",
+      "mode": "light",
+      "declarations": {
+        "color": "oklch(0.78 0.008 280)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"][aria-label=\"Quick add panel\"] [class*=\"placeholder:text-muted-foreground\"]::placeholder",
+      "mode": "light",
+      "declarations": {
+        "color": "oklch(0.78 0.008 280)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"][aria-label=\"Quick add panel\"] [data-mini=\"surface\"] [class*=\" text-muted-foreground\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "var(--muted-foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"][aria-label=\"Quick add panel\"] [data-slot=\"kbd\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "var(--muted-foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"panel\"][aria-label=\"Quick add panel\"] [class*=\"bg-background\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "var(--foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-main\"] [aria-label=\"Show sidebar\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "var(--sidebar-foreground)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-main\"] [aria-label=\"Open tabs\"] [role=\"tab\"][aria-selected=\"false\"]",
+      "mode": "light",
+      "declarations": {
+        "color": "var(--foreground)"
+      }
+    },
+    {
       "selector": "[data-mini=\"row\"][aria-selected=\"true\"]",
       "mode": "both",
       "declarations": {

@@ -1,4 +1,4 @@
-/* mini-style: split-tone sha256=d0a6cd9ceca55815f352a1c3af36fad030b6dba2be236cc0ce7954cdefd13bd4 */
+/* mini-style: split-tone sha256=700d3845713428308a19d4fc5edfe5c5ff41af163b619504d12f0972ecef317d */
 html:root {
   font-size: 15px;
 
@@ -90,6 +90,16 @@ html.dark {
 [data-mini="title"] { font-family: var(--mini-font-heading); }
 [data-mini="cell"] { font-family: var(--mini-font-data); }
 
+html:not(.dark) [data-mini="shell-sidebar"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html:not(.dark) [data-mini="shell-main"] [aria-label="Items"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html:not(.dark) [data-mini="shell-main"] [aria-label="Items"] [class*="placeholder:text-muted-foreground"]::placeholder { color: oklch(0.78 0.008 280); }
+html:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*="placeholder:text-muted-foreground"]::placeholder { color: oklch(0.78 0.008 280); }
+html:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [data-mini="surface"] [class*=" text-muted-foreground"] { color: var(--muted-foreground); }
+html:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [data-slot="kbd"] { color: var(--muted-foreground); }
+html:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*="bg-background"] { color: var(--foreground); }
+html:not(.dark) [data-mini="shell-main"] [aria-label="Show sidebar"] { color: var(--sidebar-foreground); }
+html:not(.dark) [data-mini="shell-main"] [aria-label="Open tabs"] [role="tab"][aria-selected="false"] { color: var(--foreground); }
 [data-mini="row"][aria-selected="true"] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }
 [data-mini="row"][aria-current="true"] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }
 [data-mini="row"][data-active] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }

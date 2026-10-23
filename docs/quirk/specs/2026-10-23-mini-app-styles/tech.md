@@ -134,7 +134,7 @@ Validation (`_styles.load_style` raises `StyleError` naming the file and field):
   fonts only; no URL, no remote `@import`).
 - Any font stack naming `SF Pro`, `SF Compact`, `SF Mono` or `New York`.
 - `extra_css`: every `selector` must contain `[data-mini=` and may also use only attribute selectors,
-  `:hover`, `:focus-visible`, `::before`/`::after` and the descendant combinator; every property must be
+  `:hover`, `:focus-visible`, `::before`/`::after`/`::placeholder` and the descendant combinator; every property must be
   in the allowlist below. Values must not contain `url(`, `@import` or `!important`, and neither
   selectors nor values may contain a backslash (no CSS escapes). A `font-family` value is held to the
   same banned-font rule as the `fonts` stacks.
@@ -215,16 +215,27 @@ Back-link: [SC-7](logic.md#behavior--scenarios).
 |---|---|---|
 | foreground, muted-foreground, primary, destructive | background | 4.5 |
 | card-foreground, muted-foreground | card | 4.5 |
-| popover-foreground | popover | 4.5 |
+| popover-foreground, muted-foreground | popover | 4.5 |
 | primary-foreground | primary | 4.5 |
 | secondary-foreground | secondary | 4.5 |
 | muted-foreground | muted | 4.5 |
-| accent-foreground | accent | 4.5 |
-| sidebar-foreground | sidebar | 4.5 |
+| muted-foreground | muted over primary (the Kbd chip inside a primary button) | 4.5 |
+| foreground, muted-foreground, accent-foreground | accent | 4.5 |
+| sidebar-foreground, muted-foreground | sidebar | 4.5 |
 | sidebar-primary-foreground | sidebar-primary | 4.5 |
-| sidebar-accent-foreground | sidebar-accent | 4.5 |
+| sidebar-foreground, sidebar-accent-foreground | sidebar-accent | 4.5 |
 | ring | background | 3.0 |
 | sidebar-ring | sidebar | 3.0 |
+
+The pairs cover what the blocks render: `bg-accent` and `bg-sidebar-accent` selections keep the default
+foreground, so those tokens must be backgrounds `foreground` and `sidebar-foreground` read on. A
+translucent surface is composited over `background`, or over its named base ("over primary").
+
+A style whose sidebar sits on the other side of mid-grey from its page (`split-tone` light) cannot
+make one `muted-foreground` read on both. It remaps muted text inside the sidebar surfaces with an
+`extra_css` rule `<surface> [class*=" text-muted-foreground"]` that sets an oklch `color`; the gate
+then checks that colour on `sidebar` in place of the token. The surfaces are `[data-mini="shell-sidebar"]`,
+`[data-mini="panel"][aria-label="Quick add panel"]` and `[data-mini="shell-main"] [aria-label="Items"]`.
 
 Borders and input outlines are not checked ([SC-7](logic.md#behavior--scenarios), amended 2026-10-23).
 

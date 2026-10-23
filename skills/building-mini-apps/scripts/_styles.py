@@ -55,7 +55,7 @@ OKLCH_RE = re.compile(
 )
 LENGTH_RE = re.compile(rf"^(0|{_NUM}(px|rem|em))$")
 _ATTR = r"""\[[A-Za-z_][\w-]*(?:[~|^$*]?=(?:"[^"\\]*"|'[^'\\]*'|[\w.-]+))?\]"""
-_COMPOUND = rf"(?:{_ATTR})+(?::hover|:focus-visible|::before|::after)*"
+_COMPOUND = rf"(?:{_ATTR})+(?::hover|:focus-visible|::before|::after|::placeholder)*"
 SELECTOR_RE = re.compile(rf"^{_COMPOUND}(?: +{_COMPOUND})*$")
 HEADER_RE = re.compile(r"^/\* mini-style: ([a-z0-9-]+) sha256=([0-9a-f]{64}) \*/$")
 COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -67,24 +67,37 @@ MAX_CHROMA = 0.5
 
 AA_TEXT = 4.5
 AA_UI = 3.0
-CONTRAST_PAIRS: Tuple[Tuple[str, str, float], ...] = (
-    ("foreground", "background", AA_TEXT),
-    ("muted-foreground", "background", AA_TEXT),
-    ("primary", "background", AA_TEXT),
-    ("destructive", "background", AA_TEXT),
-    ("card-foreground", "card", AA_TEXT),
-    ("muted-foreground", "card", AA_TEXT),
-    ("popover-foreground", "popover", AA_TEXT),
-    ("primary-foreground", "primary", AA_TEXT),
-    ("secondary-foreground", "secondary", AA_TEXT),
-    ("muted-foreground", "muted", AA_TEXT),
-    ("accent-foreground", "accent", AA_TEXT),
-    ("sidebar-foreground", "sidebar", AA_TEXT),
-    ("sidebar-primary-foreground", "sidebar-primary", AA_TEXT),
-    ("sidebar-accent-foreground", "sidebar-accent", AA_TEXT),
-    ("ring", "background", AA_UI),
-    ("sidebar-ring", "sidebar", AA_UI),
+CONTRAST_PAIRS: Tuple[Tuple[str, str, float, Optional[str]], ...] = (
+    ("foreground", "background", AA_TEXT, None),
+    ("muted-foreground", "background", AA_TEXT, None),
+    ("primary", "background", AA_TEXT, None),
+    ("destructive", "background", AA_TEXT, None),
+    ("card-foreground", "card", AA_TEXT, None),
+    ("muted-foreground", "card", AA_TEXT, None),
+    ("popover-foreground", "popover", AA_TEXT, None),
+    ("muted-foreground", "popover", AA_TEXT, None),
+    ("primary-foreground", "primary", AA_TEXT, None),
+    ("secondary-foreground", "secondary", AA_TEXT, None),
+    ("muted-foreground", "muted", AA_TEXT, None),
+    ("muted-foreground", "muted", AA_TEXT, "primary"),
+    ("foreground", "accent", AA_TEXT, None),
+    ("muted-foreground", "accent", AA_TEXT, None),
+    ("accent-foreground", "accent", AA_TEXT, None),
+    ("sidebar-foreground", "sidebar", AA_TEXT, None),
+    ("muted-foreground", "sidebar", AA_TEXT, None),
+    ("sidebar-primary-foreground", "sidebar-primary", AA_TEXT, None),
+    ("sidebar-foreground", "sidebar-accent", AA_TEXT, None),
+    ("sidebar-accent-foreground", "sidebar-accent", AA_TEXT, None),
+    ("ring", "background", AA_UI, None),
+    ("sidebar-ring", "sidebar", AA_UI, None),
 )
+
+SIDEBAR_SURFACES = (
+    '[data-mini="shell-sidebar"]',
+    '[data-mini="panel"][aria-label="Quick add panel"]',
+    '[data-mini="shell-main"] [aria-label="Items"]',
+)
+MUTED_TEXT = '[class*=" text-muted-foreground"]'
 
 Style = Dict[str, Any]
 Rgb = Tuple[float, float, float]
@@ -203,9 +216,29 @@ def _resolved(tokens: Mapping, key: str, mode_background: Rgb) -> Rgb:
     return tuple(c * alpha + b * (1.0 - alpha) for c, b in zip(rgb, mode_background))  # type: ignore[return-value]
 
 
+def _sidebar_muted_colors(style: Mapping, mode: str) -> List[str]:
+    """Colours a style gives muted text on its sidebar surfaces through extra_css, in file order.
+
+    A style whose sidebar sits on the other side of mid-grey from its page cannot make one
+    `muted-foreground` read on both, so it remaps muted text inside the sidebar surfaces instead.
+    """
+    scoped = {f"{surface} {MUTED_TEXT}" for surface in SIDEBAR_SURFACES}
+    colors = []
+    for rule in style.get("extra_css", ()):
+        color = rule["declarations"].get("color", "")
+        if rule["selector"] in scoped and rule["mode"] in ("both", mode) and OKLCH_RE.match(color):
+            colors.append(color)
+    return colors
+
+
 def contrast_failures(style: Mapping) -> List[Failure]:
     """Every checked pair that misses its minimum, in light then dark; empty when the style passes.
 
+    Muted text on the sidebar is checked against the colour `extra_css` remaps it to there, when
+    the style has one (see `_sidebar_muted_colors`).
+
+    A pair with a base is a translucent surface sitting on another token, such as the keyboard-hint
+    chip (`muted`) inside a primary button; it is reported as `<bg> over <base>`.
     Borders and input outlines are deliberately not checked.
     """
     failures: List[Failure] = []
@@ -213,14 +246,20 @@ def contrast_failures(style: Mapping) -> List[Failure]:
     for mode in ("light", "dark"):
         tokens = style[mode]
         page = oklch_to_linear_srgb(tokens["background"])
-        for fg_key, bg_key, needed in CONTRAST_PAIRS:
-            background = _resolved(tokens, bg_key, page)
-            lightness, chroma, hue, alpha = parse_oklch(tokens[fg_key])
-            top = _linear_rgb(lightness, chroma, hue)
-            foreground = tuple(t * alpha + b * (1.0 - alpha) for t, b in zip(top, background))
-            ratio = _ratio(foreground, background)  # type: ignore[arg-type]
-            if ratio < needed:
-                failures.append(Failure(slug, mode, fg_key, bg_key, math.floor(ratio * 100) / 100, needed))
+        for fg_key, bg_key, needed, base_key in CONTRAST_PAIRS:
+            underlay = page if base_key is None else _resolved(tokens, base_key, page)
+            background = _resolved(tokens, bg_key, underlay)
+            foregrounds = [tokens[fg_key]]
+            if (fg_key, bg_key) == ("muted-foreground", "sidebar"):
+                foregrounds = _sidebar_muted_colors(style, mode) or foregrounds
+            for value in foregrounds:
+                lightness, chroma, hue, alpha = parse_oklch(value)
+                top = _linear_rgb(lightness, chroma, hue)
+                foreground = tuple(t * alpha + b * (1.0 - alpha) for t, b in zip(top, background))
+                ratio = _ratio(foreground, background)  # type: ignore[arg-type]
+                if ratio < needed:
+                    label = bg_key if base_key is None else f"{bg_key} over {base_key}"
+                    failures.append(Failure(slug, mode, fg_key, label, math.floor(ratio * 100) / 100, needed))
     return failures
 
 
@@ -285,7 +324,7 @@ def _check_extra_css(source: str, rules: Any) -> None:
         if not SELECTOR_RE.match(selector):
             raise _fail(
                 source, f"{field}.selector",
-                "may use only attribute selectors, :hover, :focus-visible, ::before, ::after "
+                "may use only attribute selectors, :hover, :focus-visible, ::before, ::after, ::placeholder "
                 "and the descendant combinator (no commas)",
             )
         if rule["mode"] not in MODES:

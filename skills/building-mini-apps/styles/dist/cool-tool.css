@@ -1,13 +1,13 @@
-/* mini-style: cool-tool sha256=549a959353f2f2b3ab8e0a74909f75c04485465e8460f35af9e29e3631194759 */
+/* mini-style: cool-tool sha256=dc0c5c13df825bb2f241b888a79b4f744c69cec904fc085a80f2415cbe09841a */
 html:root {
   font-size: 15px;
 
   --background: oklch(0.99 0.001 260);
-  --foreground: oklch(0.24 0.008 265);
+  --foreground: oklch(0.17 0.008 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.24 0.008 265);
+  --card-foreground: oklch(0.17 0.008 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.24 0.008 265);
+  --popover-foreground: oklch(0.17 0.008 265);
   --primary: oklch(0.5 0.12 265);
   --primary-foreground: oklch(0.99 0.001 260);
   --secondary: oklch(0.962 0.004 262);

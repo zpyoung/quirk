@@ -25,8 +25,8 @@
     "secondary-foreground": "oklch(0.28 0.008 240)",
     "muted": "oklch(0.955 0.005 240)",
     "muted-foreground": "oklch(0.5 0.01 240)",
-    "accent": "oklch(0.5 0.1 235)",
-    "accent-foreground": "oklch(1 0 0)",
+    "accent": "oklch(0.93 0.02 235)",
+    "accent-foreground": "oklch(0.22 0.008 240)",
     "destructive": "oklch(0.54 0.19 25)",
     "border": "oklch(0.9 0.006 240)",
     "input": "oklch(0.87 0.007 240)",
@@ -40,8 +40,8 @@
     "sidebar-foreground": "oklch(0.28 0.008 240)",
     "sidebar-primary": "oklch(0.5 0.1 235)",
     "sidebar-primary-foreground": "oklch(1 0 0)",
-    "sidebar-accent": "oklch(0.5 0.1 235)",
-    "sidebar-accent-foreground": "oklch(1 0 0)",
+    "sidebar-accent": "oklch(0.92 0.02 235)",
+    "sidebar-accent-foreground": "oklch(0.22 0.008 240)",
     "sidebar-border": "oklch(0.9 0.006 240)",
     "sidebar-ring": "oklch(0.55 0.1 235)",
     "mini-accent": "oklch(0.5 0.1 235)",
@@ -63,8 +63,8 @@
     "secondary-foreground": "oklch(0.92 0.004 240)",
     "muted": "oklch(0.27 0.006 240)",
     "muted-foreground": "oklch(0.7 0.01 240)",
-    "accent": "oklch(0.5 0.1 235)",
-    "accent-foreground": "oklch(1 0 0)",
+    "accent": "oklch(0.3 0.04 235)",
+    "accent-foreground": "oklch(0.95 0.004 240)",
     "destructive": "oklch(0.68 0.17 24)",
     "border": "oklch(1 0 0 / 8%)",
     "input": "oklch(1 0 0 / 12%)",
@@ -78,8 +78,8 @@
     "sidebar-foreground": "oklch(0.9 0.004 240)",
     "sidebar-primary": "oklch(0.7 0.1 235)",
     "sidebar-primary-foreground": "oklch(0.18 0.01 240)",
-    "sidebar-accent": "oklch(0.5 0.1 235)",
-    "sidebar-accent-foreground": "oklch(1 0 0)",
+    "sidebar-accent": "oklch(0.28 0.04 235)",
+    "sidebar-accent-foreground": "oklch(0.95 0.004 240)",
     "sidebar-border": "oklch(1 0 0 / 8%)",
     "sidebar-ring": "oklch(0.65 0.1 235)",
     "mini-accent": "oklch(0.7 0.1 235)",
@@ -101,66 +101,66 @@
       "selector": "[data-mini=\"row\"][aria-selected=\"true\"]",
       "mode": "both",
       "declarations": {
-        "background-color": "var(--accent)",
-        "color": "var(--accent-foreground)"
+        "background-color": "oklch(0.5 0.1 235)",
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [data-mini=\"cell\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [class*=\"text-muted-foreground\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][aria-current=\"true\"]",
       "mode": "both",
       "declarations": {
-        "background-color": "var(--accent)",
-        "color": "var(--accent-foreground)"
+        "background-color": "oklch(0.5 0.1 235)",
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][aria-current=\"true\"] [data-mini=\"cell\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][aria-current=\"true\"] [class*=\"text-muted-foreground\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][data-active]",
       "mode": "both",
       "declarations": {
-        "background-color": "var(--accent)",
-        "color": "var(--accent-foreground)"
+        "background-color": "oklch(0.5 0.1 235)",
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][data-active] [data-mini=\"cell\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     },
     {
       "selector": "[data-mini=\"row\"][data-active] [class*=\"text-muted-foreground\"]",
       "mode": "both",
       "declarations": {
-        "color": "var(--accent-foreground)"
+        "color": "oklch(1 0 0)"
       }
     }
   ]
