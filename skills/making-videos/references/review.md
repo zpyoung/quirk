@@ -16,9 +16,9 @@ Contents:
 
 ## The loop
 
-1. Render into `$V` (recipe in [hyperframes.md](hyperframes.md)) and prepare the inputs below.
+1. Render into `$V` (recipe in [hyperframes.md](hyperframes.md)) and prepare the inputs below that verify does not make itself.
 2. Run `verify.py`.
-3. If a check failed and `stop` is false, fix the cause, re-render into the same `$V`, regenerate every input, and verify again. The user has not seen this version yet, so rebuilding in place is allowed.
+3. If a check failed and `stop` is false, fix the cause, re-render into the same `$V`, refresh any input below that the fix changed, and verify again. The user has not seen this version yet, so rebuilding in place is allowed.
 4. If `stop` is true, do not rebuild. Go to the review page with the failures flagged.
 5. When verify passes, do your visual pass, write the review notes, build the page and stop.
 
@@ -26,13 +26,13 @@ Only failed verify runs count toward the stop. After 3 failed verify attempts on
 
 ## Preparing verify's inputs
 
-Regenerate all of these after every fix. A stale file from an earlier attempt makes verify judge the wrong render.
+You make the inputs in this table and refresh any that a fix changes. Verify makes the four edge-band `check` runs (saved as `$V/check-<band>.json`, aspect-suffixed for a 9:16 or 1:1 cut) and the still times itself on every run. A stale file from an earlier attempt makes verify judge the wrong render.
 
 | Input | How to produce it | Needed for |
 |---|---|---|
 | MP4 | `hf.py ... render --output "$V/<slug>-16x9.mp4"`; verify takes the only `*.mp4` in `$V`. A 9:16 or 1:1 render is `<slug>-9x16.mp4` or `-1x1.mp4`, rendered from `scenes-9x16/` or `scenes-1x1/` | everything |
 | Render log | the same render with `> "$V/render.log" 2>&1` | fonts |
-| Check JSONs with band labels | for each aspect cut, four `hf.py ... check --json --caption-zone "<band>;severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"` runs, one per edge band, saved as `$V/check-<band>.json` (`check-<band>-9x16.json` for the 9:16 cut, generated from `scenes-9x16/`; same for 1:1); the `seek=` list samples the whole film, because the default samples only its last instant (exact commands in [hyperframes.md](hyperframes.md#recipes)) | contrast, title-safe |
+| Captions sidecar | with narration on, `voice.py captions --out "$V/<mp4 stem>.srt"` (burned in as well for a 9:16 or 1:1 cut; see [audio.md](audio.md#captions)). One per MP4 | captions |
 | Beats file | written when narration is on; see below. One per aspect: `beats.json` for 16:9, `beats-9x16.json`, `beats-1x1.json`. Verify picks the file by the MP4's name. A narrated video fails `sync` without it | sync |
 | Audio JSON | verify runs `hf.py audio` itself for each beat clip; to supply your own, save `hf.py ... audio CLIP --only loudness,onsets,silence,envelope --hop-ms 10 --json` and pass `--audio-json CLIP=FILE` | sync |
 
@@ -51,19 +51,16 @@ The beats file is a list of the on-screen changes that must land on a spoken wor
 ## Running verify
 
 ```bash
-python3 "$SKILL_DIR/scripts/verify.py" --project "$P" --version v1 \
-  --render-log "$V/render.log" \
-  --check-json top="$V/check-top.json" --check-json bottom="$V/check-bottom.json" \
-  --check-json left="$V/check-left.json" --check-json right="$V/check-right.json" \
-  --beats "$P/beats.json" --at 1.5,4.2,7.0
+python3 "$SKILL_DIR/scripts/verify.py" --project "$P" --version v1
 ```
 
-For a 9:16 cut, pass its own check JSONs and beats, for example `--check-json top="$V/check-top-9x16.json"` and `--beats "$P/beats-9x16.json"`; with `--mp4` naming a `-9x16.mp4`, verify picks `beats-9x16.json` itself when `--beats` is omitted.
+For a 9:16 cut, pass `--mp4 "$V/<slug>-9x16.mp4"`: verify checks `scenes-9x16/` and picks `beats-9x16.json` itself. The render log defaults to `$V/render.log`.
 
 - `--beats` is optional: verify uses the beats file for the MP4's aspect (`beats.json`, `beats-9x16.json` or `beats-1x1.json`) when it exists. Omit it for a silent video.
-- `--at` lists seconds for the stills. Pass one settled instant per storyboard scene, after its last entrance finishes (scene end minus 0.5 s works), not the midpoint, which often lands mid-animation. The contact sheet is built from these `--at` stills, so a badly chosen instant shows an empty or half-entered card in both the sheet and the stills. When scenes overlap for the whole film, scene ends do not apply: pick the moments after each major move lands, and look at the animation to find them. The default is six evenly spaced stills.
-- With several MP4s in `$V` (for example 16:9 and 9:16), verify refuses with exit 2. Pass `--mp4` and run once per file; for the second aspect, regenerate the check JSONs from its own `scenes-9x16/` folder. Each MP4 has its own run in `verify.json`, with its own attempt count and stop flag, so a 9:16 retry does not use up the 16:9 attempts. The printed JSON is the run you just made, plus `mp4`.
-- Exit 0 means no check failed. Exit 1 means a check failed, or the MP4 is missing (`missing_render`). Exit 2 is a usage error such as an unreadable input. Exit 3 means ffmpeg or ffprobe is missing.
+- Stills: by default verify takes one per storyboard scene, 0.5 s before the next scene starts (or the film ends), so each lands after the scene's entrances settle. The contact sheet is built from these stills. When scenes overlap for the whole film, scene starts do not mark settled moments: pass `--at` with the seconds after each major move lands, and look at the animation to find them. Without a scene table in `storyboard.md`, verify takes six evenly spaced stills.
+- `--check-json [BAND=]FILE` replaces the generated band runs with saved ones, for example to re-judge a JSON you already have. Label each with its band (`top`, `bottom`, `left` or `right`).
+- With several MP4s in `$V` (for example 16:9 and 9:16), verify refuses with exit 2. Pass `--mp4` and run once per file. Each MP4 has its own run in `verify.json`, with its own attempt count and stop flag, so a 9:16 retry does not use up the 16:9 attempts. The printed JSON is the run you just made, plus `mp4`.
+- Exit 0 means no check failed. Exit 1 means a check failed, the MP4 is missing (`missing_render`), or a band check could not run (pnpm missing, or `check` printed no JSON); those last two record no attempt. Exit 2 is a usage error such as an unreadable input. Exit 3 means ffmpeg or ffprobe is missing.
 - Verify prints one JSON object. The detail of a failing check names what to run or fix.
 
 ## The verify checks
@@ -73,9 +70,10 @@ Each check reads the source that can see the thing: raw MP4 pixels cannot locate
 | Check | Source | Passes when |
 |---|---|---|
 | `fonts` | static scan of every HTML file under every `scenes*/` folder (`scenes/`, `scenes-9x16/`, `scenes-1x1/`), plus the render log; a `*-9x16.mp4` or `*-1x1.mp4` also needs its matching folder to exist and pass | every `var(--font-*)` resolves in an inline `<style>` or `style=` (in that file or the root `index.html`); no linked stylesheet defines `--font-*`; no `font:` shorthand uses `var(--font-*)` (write `font-family`); and the log's `Injected deterministic @font-face rules for N requested font families` has N at least the number of families in `brand.json` |
-| `contrast` | `contrast.findings` in the check JSONs | no `contrast_aa_failure`; measured is the failing count and the worst ratio. It fails if a JSON has no enabled contrast section (lint errors skip the browser audit) or reports an error |
-| `title_safe` | `layout.findings` in the four band JSONs, each sampled at eleven instants across the film | no `caption_zone_collision` in any band, and all four bands were supplied |
+| `contrast` | `contrast.findings` in the four band check JSONs | no `contrast_aa_failure`; measured is the failing count and the worst ratio. It fails if a JSON has no enabled contrast section (lint errors skip the browser audit) or reports an error |
+| `title_safe` | `layout.findings` in the four band JSONs, each sampled at eleven instants across the film | no `caption_zone_collision` in any band, and all four bands ran |
 | `loudness` | `ffmpeg -af ebur128=peak=true` on the MP4 | narrated: integrated loudness from -17 to -15 LUFS and true peak at or below -1.0 dBTP. Silent video: skipped |
+| `captions` | `<mp4 stem>.srt` beside the MP4 | narrated: the sidecar exists and is not empty. `voice.py captions` writes it and fails on reading speed, so a missing file means that check never ran. Silent video: skipped |
 | `sync` | `beats.json`, `hf.py audio` per clip, and a pixel analysis run in the skill's venv | every beat's first changed frame is within one frame of its word's onset. Silent video: skipped when there are no beats or no venv. Narrated video: fails with "narrated videos need beats.json (see audio.md)" when there is no `beats.json`, and fails with the `doctor.py` fix when the venv is missing |
 | `blender` | every `guard.json` under the project, except those under a `sketches/` folder | no default scene and no mirrored frames. Skipped without 3D |
 | `render_log` | `render.log` | no known-bad compiler warning, such as `Video "<id>" has sparse keyframes`. Fix the cause and re-render ([hyperframes.md](hyperframes.md#render-log-warnings)) |

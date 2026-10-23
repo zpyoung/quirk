@@ -1,7 +1,10 @@
 # Storyboard: script, scene list, style frames, scene kit
 
 The storyboard is stop 1. Write it, show it to the user with the draft brand if the brand is new, and
-build nothing until the user approves it. With narration on, you may synthesize and align the voice before this stop so the scene times are measured; see Narration pace and word budget. Scope limits (over 3 min, avatars, publishing, editing user
+build nothing until the user approves it. To show it, run `review_page.py --project "$P"`: with no version
+folder yet, the page shows `storyboard.md` and the stills in `frames-storyboard/`. Give the user the
+`review.html` path. Do not render an animatic as `v1` to fill the page: `v1` is the first build the user
+reviews, and an animatic there spends its verify attempts on placeholders. With narration on, you may synthesize and align the voice before this stop so the scene times are measured; see Narration pace and word budget. Scope limits (over 3 min, avatars, publishing, editing user
 footage) are handled before this phase; see [SKILL.md](../SKILL.md).
 
 Contents:
@@ -176,7 +179,9 @@ scene kit, so the user judges the look before the build.
    `python3 "$SKILL_DIR/scripts/hf.py" --project "<project>" -- snapshot --at 1.5,4.2 "<project>/scenes"`
 3. Copy the PNGs from `<project>/scenes/.hyperframes/artifacts/snapshots/<run-id>/` into
    `<project>/frames-storyboard/` and link them from the storyboard. Files are named
-   `frame-NN-at-Xs.png`, and `snapshot` adds one end-of-timeline frame you did not ask for.
+   `frame-NN-at-Xs.png`, and `snapshot` adds one end-of-timeline frame you did not ask for. Copy only the
+   frames you asked for: the review page shows every PNG in `frames-storyboard/`, ordered by the time in
+   its name.
 
 These are previews for the user's approval. Snapshots can differ from the MP4 (fonts rendered correctly
 in snapshots while the MP4 fell back to system fonts in a trial), so they never count as review. Real

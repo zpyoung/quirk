@@ -350,6 +350,7 @@ CHECK_LABELS = {
     "contrast": "contrast",
     "title_safe": "title safe",
     "loudness": "loudness",
+    "captions": "captions",
     "sync": "sync",
     "blender": "blender",
     "outside_calls": "outside calls",
@@ -725,6 +726,7 @@ MEASURED = {
     "contrast": _measured_contrast,
     "title_safe": _measured_title_safe,
     "loudness": _measured_loudness,
+    "captions": lambda m: "%s written" % m["srt"] if isinstance(m, dict) and m.get("srt") else "",
     "sync": _measured_sync,
     "blender": _measured_blender,
 }
@@ -735,6 +737,7 @@ THRESHOLD = {
     "render_log": lambda t: "No known-bad lines" if isinstance(t, dict) and "known_bad" in t else "",
     "title_safe": lambda t: "No text in the outer 5% of any edge" if isinstance(t, dict) and "collisions" in t else "",
     "loudness": _threshold_loudness,
+    "captions": lambda t: "A %s sidecar for narrated video" % t["srt"] if isinstance(t, dict) and t.get("srt") else "",
     "sync": _threshold_sync,
     "blender": lambda t: "No default scene and no mirrored text" if isinstance(t, dict) and "default_scene" in t else "",
     "outside_calls": _threshold_outside_calls,
@@ -1162,6 +1165,19 @@ def _still_figure(project: Path, still: Path, scenes: "Optional[list[Scene]]", c
         rel_url(still, project), esc(alt), esc(caption))
 
 
+def render_style_frames(project: Path, scenes: "Optional[list[Scene]]") -> str:
+    """The storyboard's style frames from ``frames-storyboard/``, for review before anything is rendered."""
+    def order(still: Path) -> "tuple[float, str]":
+        match = _STILL_TIME.search(still.stem)
+        return (float(match.group(1)) if match else float("inf"), still.name)
+
+    stills = sorted((p for p in (project / "frames-storyboard").glob("*.png") if p.is_file()), key=order)
+    if not stills:
+        return _missing_line(["no style frames in frames-storyboard/"])
+    figures = "\n      ".join(_still_figure(project, s, scenes, "style") for s in stills)
+    return "<p>Stills of key scenes rendered from the scene kit, so the look can be judged before the build.</p>\n<q-grid>\n      %s\n    </q-grid>" % figures
+
+
 def render_frames(project: Path, version: Version, scenes: "Optional[list[Scene]]") -> str:
     groups = version.frame_groups()
     if not groups:
@@ -1305,6 +1321,12 @@ def render_method(project: Path, version: Optional[Version], brief_ok: bool, sto
                               ("the beats files", bool(list(project.glob("beats*.json")))),
                               ("storyboard.md", story_ok), ("brief.json", brief_ok)) if ok]
     sources = _join_words(["<code>%s</code>" % esc(u) if u.endswith((".json", ".md", ".jsonl")) else esc(u) for u in used]) or "the project files"
+    if version is None:
+        return (
+            "<p>This page was generated from %s. Nothing is rendered yet, so it shows the storyboard as written and the "
+            "style frames in <code>frames-storyboard/</code>. Links are relative to the project folder, so keep this page "
+            "there for the images to load. The source is <code>review.src.html</code>, built with the writing-html-artifacts skill.</p>" % sources
+        )
     return (
         "<p>This page was generated from %s. The findings and the verify results are read from verify.json; "
         "the checklist is the agent's own frame review. The frames are verify's own stills, and the contact sheet it also writes is not shown. "
@@ -1386,10 +1408,10 @@ def build_source(project: Path) -> str:
     newest = versions[0] if versions else None
 
     base = brief.get("title") if isinstance(brief, dict) and brief.get("title") else "Video review"
-    title = "%s, %s review" % (base, newest.name) if newest else "%s, no versions yet" % base
+    title = "%s, %s review" % (base, newest.name) if newest else "%s, storyboard" % base
 
     interactions = []
-    has_scene_buttons = bool(scenes) and any(s.start is not None for s in scenes)
+    has_scene_buttons = newest is not None and bool(scenes) and any(s.start is not None for s in scenes)
     if newest and newest.mp4s:
         interactions.append("play each cut in its own player")
     if has_scene_buttons:
@@ -1407,7 +1429,7 @@ def build_source(project: Path) -> str:
         "<!-- slot: summary -->",
     ]
     if newest is None:
-        out.append('<p class="q-lede">There is no version folder in this project yet, so there is nothing to review.</p>')
+        out.append('<p class="q-lede">Nothing is rendered yet. This is the storyboard to approve before the build: the plan as written and its style frames.</p>')
     else:
         out.append(_summary(newest))
     out.append("<!-- slot: main -->")
@@ -1417,10 +1439,11 @@ def build_source(project: Path) -> str:
         gaps.append("brief.json %s" % ("is missing" if brief_reason == "missing" else brief_reason))
     if storyboard is None:
         gaps.append("storyboard.md is missing")
-    if newest is None:
-        gaps.append("no versions (vN folders)")
     out.append(_missing_line(gaps))
 
+    if newest is None and storyboard is not None:
+        out.append(_section("storyboard", "Storyboard", render_markdown(storyboard, _shift_to_h3(storyboard))))
+        out.append(_section("style", "Style frames", render_style_frames(project, scenes)))
     if newest:
         out.append(_section("findings", "Findings", render_findings(project, newest, brief)))
         watch = _players(project, newest, True) or _missing_line(["no MP4"])

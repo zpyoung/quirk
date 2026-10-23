@@ -131,29 +131,14 @@ Run in this order: lint, check, snapshot while building, then render, then verif
    python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- lint "$P/scenes"
    ```
 
-2. Check, four runs for verify. `verify.py` needs one `check --json` run per edge band, each labelled by band (`top`, `bottom`, `left`, `right`), to prove no text sits in the outer 5% of the frame. Every run also carries the contrast audit, so these four files cover contrast too. Do not pass `--no-contrast`.
+2. Check edges and contrast. `verify.py` does the four runs it needs: one `check --json --caption-zone` per edge band (`top`, `bottom`, `left`, `right`), on the MP4's own scenes folder, saved as `$V/check-<band>.json` (`check-<band>-9x16.json` for a 9:16 cut, and the same for 1:1). Every run also carries the contrast audit. Read those files when `title_safe` or `contrast` fails. To look at one band while you build, run it yourself:
 
    ```bash
-   for spec in "top|x0=0;y0=0;x1=1;y1=.05" "bottom|x0=0;y0=.95;x1=1;y1=1" \
-               "left|x0=0;y0=0;x1=.05;y1=1" "right|x0=.95;y0=0;x1=1;y1=1"; do
-     band="${spec%%|*}"; zone="${spec#*|}"
-     python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- check --json \
-       --caption-zone "${zone};severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1" "$P/scenes" > "$V/check-${band}.json"
-   done
+   python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- check --json \
+     --caption-zone "x0=0;y0=.95;x1=1;y1=1;severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1" "$P/scenes"
    ```
 
-   For a 9:16 or 1:1 cut, run the same loop on its own folder and write aspect-suffixed files, because the JSONs describe the scenes folder they were generated from. Pass them to verify with the same band labels (`--check-json top="$V/check-top-9x16.json"`):
-
-   ```bash
-   for spec in "top|x0=0;y0=0;x1=1;y1=.05" "bottom|x0=0;y0=.95;x1=1;y1=1" \
-               "left|x0=0;y0=0;x1=.05;y1=1" "right|x0=.95;y0=0;x1=1;y1=1"; do
-     band="${spec%%|*}"; zone="${spec#*|}"
-     python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- check --json \
-       --caption-zone "${zone};severity=error;seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1" "$P/scenes-9x16" > "$V/check-${band}-9x16.json"
-   done
-   ```
-
-   The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film (text that sits in a band from 2 to 3 s of a 6 s film passes), so keep the `seek=` list: it samples eleven instants across the film as fractions of its duration.
+   The geometry is fractions of the canvas: each band is 5% deep along one edge. `severity=error` makes a collision a finding verify counts. The flag defaults to `seek=1`, which samples only the last moment of the film (text that sits in a band from 2 to 3 s of a 6 s film passes), so verify passes a `seek=` list of eleven instants across the film.
    Read the result, not the exit code. `check --json` exits 1 on any error, and the evidence is in `layout.findings` and `contrast.findings` in the JSON; a clean run has both arrays empty (and the file is much smaller). Findings seen in the trials:
 
    - `caption_zone_collision`: see the table below. A text box counts, not its glyphs.
@@ -165,7 +150,7 @@ Run in this order: lint, check, snapshot while building, then render, then verif
    Move flagged text out of the band. Do not add `data-layout-allow-caption-zone` to silence verify; that attribute is for deliberate lower-thirds.
    The audit has a hard 120 s limit, so on a long film `check_runtime_failure` can be the limit and not a bug in your scenes.
 
-3. Snapshot, only to look at your own work while building. The wrapper forces `--describe false`. Snapshots are never review evidence; review frames come from the MP4. Look at one snapshot of every new scene before moving on: lint passes CSS that fails to parse (a stray `{{` left by a template gives tiny, unstyled text), and a snapshot is the only thing that catches it. Files land in `scenes/.hyperframes/artifacts/snapshots/<run-id>/`.
+3. Snapshot, only to look at your own work while building. The wrapper forces `--describe false`. Snapshots are never review evidence; review frames come from the MP4. Look at one snapshot of every new scene before moving on: lint passes CSS that fails to parse (a stray `{{` left by a template gives tiny, unstyled text), and a snapshot is the only thing that catches it. Files land in `scenes/.hyperframes/artifacts/snapshots/<run-id>/`. A long `--at` list splits the contact sheet into `contact-sheet-1.jpg`, `contact-sheet-2.jpg` and so on, so list the run folder rather than assume `contact-sheet.jpg`.
 
    ```bash
    python3 "$SKILL_DIR/scripts/hf.py" --project "$P" -- snapshot --at 0,1.5,4 "$P/scenes"

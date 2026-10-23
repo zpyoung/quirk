@@ -34,6 +34,8 @@ LEVELING_CHAIN = (
     "acompressor=threshold=-24dB:ratio=3:attack=5:release=100:makeup=4,"
     "alimiter=limit=-14dB:attack=2:release=40:level=0"
 )
+# hyperframes upmixes a mono clip to both channels at full level (+3 dB in ebur128), so ship stereo at -3 dB a side
+STEREO_UPMIX = "pan=stereo|c0=0.7071*c0|c1=0.7071*c0"
 FFMPEG_TIMEOUT_S = 600
 EXIT_MISSING_TOOL = 3
 CLIP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -129,17 +131,19 @@ def _loudnorm(ffmpeg: str, src: Path, prefilter: str, measured: "dict | None", d
             f":offset={measured['target_offset']}:linear=true"
         )
     argv = ["-hide_banner", "-nostats", "-y", "-i", str(src), "-af", f"{prefilter}loudnorm={options}:print_format=json"]
-    argv += ["-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(dst)] if dst else ["-f", "null", "-"]
+    argv += ["-ar", str(rate), "-ac", "2", "-c:a", "pcm_s16le", str(dst)] if dst else ["-f", "null", "-"]
     return parse_loudnorm(_run_ffmpeg(ffmpeg, argv, src))
 
 
 def _level_only(ffmpeg: str, src: Path, dst: Path, rate: int) -> None:
-    argv = ["-hide_banner", "-nostats", "-y", "-i", str(src), "-af", LEVELING_CHAIN]
-    _run_ffmpeg(ffmpeg, argv + ["-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(dst)], src)
+    argv = ["-hide_banner", "-nostats", "-y", "-i", str(src), "-af", f"{LEVELING_CHAIN},{STEREO_UPMIX}"]
+    _run_ffmpeg(ffmpeg, argv + ["-ar", str(rate), "-ac", "2", "-c:a", "pcm_s16le", str(dst)], src)
 
 
 def normalize_clip(ffmpeg: str, raw: Path, out: Path, rate: int) -> dict:
-    """Write ``out`` as ``raw`` compressed and loudness-normalized to -16 LUFS, and measure the result.
+    """Write ``out`` as ``raw`` compressed, made stereo and loudness-normalized to -16 LUFS, and measure the result.
+
+    The stereo clip measures what the renderer will mix: placed at ``data-volume="1"`` it ships at -16 LUFS.
 
     Two loudnorm passes (measure, then apply the measurement as a linear gain) so the clip keeps its
     dynamics; ffmpeg falls back to dynamic mode on its own when a linear gain would break the peak
@@ -149,11 +153,11 @@ def normalize_clip(ffmpeg: str, raw: Path, out: Path, rate: int) -> dict:
     ``out``, where a level that is not finite is ``None``. Intermediates live in a private temporary
     directory beside ``out``, never under a name a clip id could take.
     """
-    first = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", None, None, rate)
+    first = _loudnorm(ffmpeg, raw, f"{LEVELING_CHAIN},{STEREO_UPMIX},", None, None, rate)
     with tempfile.TemporaryDirectory(prefix=".normalize-", dir=out.parent) as scratch:
         tmp = Path(scratch) / "leveled.wav"
         if _measurable(first):
-            kind = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", first, tmp, rate).get("normalization_type", "unknown")
+            kind = _loudnorm(ffmpeg, raw, f"{LEVELING_CHAIN},{STEREO_UPMIX},", first, tmp, rate).get("normalization_type", "unknown")
             extra: dict = {}
         else:
             _level_only(ffmpeg, raw, tmp, rate)

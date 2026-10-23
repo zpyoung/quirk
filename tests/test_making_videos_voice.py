@@ -1052,6 +1052,7 @@ def test_normalize_clip_measures_then_applies_a_linear_gain(stdlib_worker, tmp_p
     assert "measured_I" not in " ".join(measure)
     filt = apply[apply.index("-af") + 1]
     assert filt.startswith("acompressor=") and "alimiter=" in filt
+    assert stdlib_worker.STEREO_UPMIX in filt and apply[apply.index("-ac") + 1] == "2"
     assert "I=-16.0" in filt and "linear=true" in filt
     assert "measured_I=-27.50" in filt and "measured_TP=-9.00" in filt and "offset=0.20" in filt
     assert "acompressor" not in check[check.index("-af") + 1]
@@ -1093,7 +1094,8 @@ def test_normalize_clip_skips_loudnorm_when_the_measurement_is_not_finite(stdlib
     passes = (tmp_path / "ffmpeg.log").read_text().splitlines()
     assert "measured_I" not in " ".join(passes)
     leveled = passes[1].split()
-    assert leveled[leveled.index("-af") + 1] == stdlib_worker.LEVELING_CHAIN
+    assert leveled[leveled.index("-af") + 1] == f"{stdlib_worker.LEVELING_CHAIN},{stdlib_worker.STEREO_UPMIX}"
+    assert leveled[leveled.index("-ac") + 1] == "2"
 
 
 def test_normalize_clip_survives_a_silent_clip(stdlib_worker, tmp_path):
@@ -1157,7 +1159,25 @@ def _ebur128(ffmpeg: str, path: Path) -> "tuple[float, float]":
     )
 
 
-@pytest.mark.skipif(_real_ffmpeg() is None, reason="needs an ffmpeg with loudnorm, alimiter and acompressor")
+def _channels(path: Path) -> int:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return int(out.strip())
+
+
+# hyperframes 0.8.185 prepares each clip this way before amix (STEREO_CHANNEL_FILTER); re-check on a version bump
+def _renderer_upmix(channels: int) -> str:
+    return "pan=stereo|FL=FL+FC|FR=FR+FC" if channels == 1 else "aformat=channel_layouts=stereo"
+
+
+@pytest.mark.skipif(
+    _real_ffmpeg() is None or shutil.which("ffprobe") is None,
+    reason="needs ffprobe and an ffmpeg with loudnorm, alimiter and acompressor",
+)
 def test_normalized_clips_mix_to_minus_16_lufs_at_unity_gain(stdlib_worker, tmp_path):
     ffmpeg = _real_ffmpeg()
     starts = [0.3, 4.2, 8.9]
@@ -1175,7 +1195,10 @@ def test_normalized_clips_mix_to_minus_16_lufs_at_unity_gain(stdlib_worker, tmp_
     argv = [ffmpeg, "-y", "-v", "error"]
     for wav in clips:
         argv += ["-i", str(wav)]
-    graph = ";".join(f"[{i}:a]aresample=48000,adelay={int(s * 1000)}[a{i}]" for i, s in enumerate(starts))
+    graph = ";".join(
+        f"[{i}:a]aresample=48000,{_renderer_upmix(_channels(wav))},adelay={int(s * 1000)}|{int(s * 1000)}[a{i}]"
+        for i, (wav, s) in enumerate(zip(clips, starts))
+    )
     graph += ";" + "".join(f"[a{i}]" for i in range(len(clips))) + f"amix=inputs={len(clips)}:normalize=0[m]"
     mix = tmp_path / "mix.wav"
     subprocess.run(argv + ["-filter_complex", graph, "-map", "[m]", str(mix)], check=True)

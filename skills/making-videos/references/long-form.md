@@ -1,8 +1,9 @@
 # Long-form: videos over about 60 seconds
 
-For a video over about 60 s (up to the 3 min cap), lock the scene kit first, let subagents build scenes in
-parallel from the kit only, then assemble, render once, and verify the assembled MP4. Under about 60 s,
-build the scenes yourself in sequence; the overhead of parallel work does not pay off.
+Handing scenes to subagents is optional. It can pay off over about 60 s (up to the 3 min cap); under
+that, the overhead of parallel work does not, and building every scene yourself in sequence is fine at
+any length. When you do hand scenes off, lock the scene kit first, let subagents build scenes in
+parallel from the kit only, then assemble, render once, and verify the assembled MP4.
 
 Contents:
 - Why the kit is locked first

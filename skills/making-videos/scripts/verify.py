@@ -11,12 +11,17 @@ Every run is recorded as ``{n, ts, passed}`` and ``attempt`` is their total, but
 failures only: ``failed_attempts`` is how many recorded runs failed, and ``stop`` is true when that reaches
 three on a run that itself failed, so a passing run never moves an MP4 toward the stop.
 
+Without ``--check-json`` it runs the four edge-band ``hf.py check`` runs itself on the MP4's scenes folder and
+saves them as ``<vN>/check-<band>.json`` (``check-<band>-9x16.json`` for a 9:16 cut). Without ``--at`` it
+takes one still per storyboard scene, 0.5 s before the next scene starts, falling back to six evenly spaced
+stills when ``storyboard.md`` has no scene table.
+
 Beats are per render size: without ``--beats``, ``<project>/beats-9x16.json`` or ``beats-1x1.json`` is used
 for an MP4 named ``*-9x16.mp4`` or ``*-1x1.mp4`` when that file exists, otherwise ``<project>/beats.json``.
 
 Prints exactly one JSON object to stdout (this run's result plus ``mp4``); diagnostics go to stderr.
 Exit codes: 0 every check passed or was skipped; 1 a check failed, or the MP4 is missing
-(``{"error": "missing_render"}``); 2 usage error (missing project, version or flag, ambiguous MP4,
+(``{"error": "missing_render"}``), or a band check could not run (no attempt is recorded); 2 usage error (missing project, version or flag, ambiguous MP4,
 unreadable input); 3 ffmpeg or ffprobe is missing.
 """
 from __future__ import annotations
@@ -29,6 +34,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -47,6 +53,7 @@ from _mv_common import (  # noqa: E402
     studio_root,
     venv_python,
 )
+from review_page import parse_scenes  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 HF_PY = SCRIPTS_DIR / "hf.py"
@@ -509,6 +516,44 @@ def check_title_safe(project: Path, version: str, docs: "list[tuple[Optional[str
     )
 
 
+def _band_file(vdir: Path, band: str, mp4: Path) -> Path:
+    match = _ASPECT_MP4.search(mp4.name)
+    return vdir / ("check-%s%s.json" % (band, "-%s" % match.group(1).lower() if match else ""))
+
+
+def _run_band(project: Path, scenes: Path, band: str, out: Path) -> "tuple[Optional[str], Path, object]":
+    """One ``check --caption-zone`` run for ``band``, saved to ``out``; raises ``RuntimeError`` when it cannot run."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(HF_PY), "--project", str(project), "--", "check", "--json",
+             "--caption-zone", BANDS[band], str(scenes)],
+            capture_output=True, text=True, timeout=600, env=scrubbed_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("the %s band check did not finish: %s" % (band, exc))
+    if proc.returncode == EXIT_MISSING_TOOL:
+        raise RuntimeError("hf.py reported a missing tool: %s" % (proc.stdout.strip() or proc.stderr.strip())[:200])
+    start = re.search(r"^\{", proc.stdout, re.M)
+    try:
+        doc = json.JSONDecoder().raw_decode(proc.stdout[start.start():])[0] if start else None
+    except ValueError:
+        doc = None
+    # check exits 1 when it has findings, so the JSON decides whether the run happened, not the exit code
+    if doc is None:
+        raise RuntimeError("the %s band check printed no JSON (exit %d): %s" % (band, proc.returncode, proc.stderr.strip()[-200:]))
+    out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return band, out, doc
+
+
+def run_band_checks(project: Path, vdir: Path, mp4: Path, scenes: Path) -> "list[tuple[Optional[str], Path, object]]":
+    """The four edge-band check runs for ``mp4``'s scenes folder, run in parallel and saved beside the MP4."""
+    if not scenes.is_dir():
+        raise RuntimeError("no scenes folder %s to check for %s" % (scenes, mp4.name))
+    with ThreadPoolExecutor(max_workers=len(BANDS)) as pool:
+        runs = [pool.submit(_run_band, project, scenes, band, _band_file(vdir, band, mp4)) for band in BANDS]
+        return [run.result() for run in runs]
+
+
 # blender and outside calls ---------------------------------------------------------------------
 
 def check_blender(project: Path) -> dict:
@@ -639,7 +684,26 @@ def check_loudness(mp4: Path, narrated: bool) -> dict:
     detail = "integrated %.1f LUFS, true peak %.1f dBTP" % (lufs, peak)
     if not ok:
         detail += "; target is -17 to -15 LUFS with true peak at or below -1.0 dBTP"
+    if not LUFS_RANGE[0] <= lufs <= LUFS_RANGE[1]:
+        factor = 10 ** ((sum(LUFS_RANGE) / 2 - lufs) / 20)
+        detail += "; multiply every narration clip's data-volume by %.3f and render again" % factor
     return make_check("loudness", "pass" if ok else "fail", {"lufs": lufs, "true_peak_dbtp": peak}, threshold, detail)
+
+
+def check_captions(project: Path, mp4: Path, narrated: bool) -> dict:
+    """A narrated MP4 needs its ``<stem>.srt`` beside it; ``voice.py captions`` also checks reading speed."""
+    srt = mp4.with_suffix(".srt")
+    if not narrated:
+        return make_check("captions", "skip", None, None, "silent video (brief.narration is false)")
+    if srt.is_file() and srt.stat().st_size > 0:
+        return make_check("captions", "pass", {"srt": srt.name}, {"srt": srt.name}, "%s is beside the MP4" % srt.name)
+    cmd = " ".join(shlex.quote(a) for a in [
+        "python3", str(SCRIPTS_DIR / "voice.py"), "captions", "--project", str(project),
+        "--lines", str(project / "assets" / "lines.json"), "--out", str(srt)])
+    return make_check(
+        "captions", "fail", None, {"srt": srt.name},
+        "no %s beside the MP4; run `%s` (a 9:16 or 1:1 cut also burns them in, see audio.md)" % (srt.name, cmd),
+    )
 
 
 def load_beats(path: Path) -> "list[dict]":
@@ -874,6 +938,19 @@ def extract_frames(mp4: Path, vdir: Path, info: dict, at: "Optional[list[float]]
     return {"sheet": str(sheet), "stills": stills}
 
 
+def scene_stills(project: Path, duration: float) -> "Optional[list[float]]":
+    """One still time per storyboard scene, 0.5 s before the next scene starts (or the film ends)."""
+    try:
+        scenes = parse_scenes((project / "storyboard.md").read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    starts = [float(s.start) for s in scenes or [] if s.start is not None]
+    if not starts:
+        return None
+    ends = starts[1:] + [duration]
+    return [round(max(start, end - 0.5), 2) for start, end in zip(starts, ends)]
+
+
 # attempts and main -----------------------------------------------------------------------------
 
 def read_runs(path: Path, vdir: Path) -> "dict[str, dict]":
@@ -914,11 +991,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beats", help="beats file (default: <project>/beats-9x16.json or beats-1x1.json for an "
                         "MP4 of that size when present, else <project>/beats.json)")
     parser.add_argument("--check-json", action="append", default=[], metavar="[BAND=]FILE",
-                        help="hf.py check --json output; BAND is top|bottom|left|right for a --caption-zone run")
+                        help="hf.py check --json output; BAND is top|bottom|left|right for a --caption-zone run "
+                        "(default: verify runs the four band checks itself)")
     parser.add_argument("--render-log", help="render log (default: <project>/<version>/render.log)")
     parser.add_argument("--audio-json", action="append", default=[], metavar="CLIP=FILE",
                         help="precomputed hyperframes audio --json for a beat clip; skips running it")
-    parser.add_argument("--at", help="comma-separated seconds for stills (default: six evenly spaced)")
+    parser.add_argument("--at", help="comma-separated seconds for stills (default: one per storyboard scene, 0.5 s before the "
+                        "next starts; six evenly spaced without a scene table)")
     return parser
 
 
@@ -965,12 +1044,17 @@ def main(argv: Optional["list[str]"] = None) -> int:
         render_log = Path(args.render_log) if args.render_log else vdir / "render.log"
         narrated = bool(brief.get("narration"))
         scenes = scenes_dir_for(project, mp4)
+        if not check_docs:
+            check_docs = run_band_checks(project, vdir, mp4, scenes)
+        if at is None:
+            at = scene_stills(project, info["duration"])
         checks = [
             check_fonts(project, brief, render_log, args.version, mp4),
             check_render_log(project, args.version, mp4, render_log),
             check_contrast(project, args.version, check_docs, scenes),
             check_title_safe(project, args.version, check_docs, scenes),
             check_loudness(mp4, narrated),
+            check_captions(project, mp4, narrated),
             check_sync(project, mp4, info, beats, supplied, narrated, beats_path, create),
             check_blender(project),
             check_outside_calls(project, brief),

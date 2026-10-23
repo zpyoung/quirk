@@ -48,8 +48,8 @@ python3 "$SKILL_DIR/scripts/voice.py" say   --project "$PROJECT" --lines "$PROJE
 python3 "$SKILL_DIR/scripts/voice.py" align --project "$PROJECT"
 ```
 
-- `say` writes `assets/voice/<id>.wav` (24 kHz mono) ready to mix: a gentle compressor and peak limiter,
-  then a two-pass `loudnorm` to -16 LUFS with true peak at or below -1.5 dBTP (linear gain when the
+- `say` writes `assets/voice/<id>.wav` (24 kHz stereo, the same signal 3 dB down on each side) ready to
+  mix: a gentle compressor and peak limiter, then a two-pass `loudnorm` to -16 LUFS with true peak at or below -1.5 dBTP (linear gain when the
   clip allows it). The untouched synthesis stays beside it as `<id>.raw.wav`; `align` and the project
   copy skip the `.raw.wav` files. It prints
   `{"clips": [{"id", "wav", "raw", "duration_s", "lufs", "true_peak_dbtp", "normalization"}]}` with the
@@ -119,15 +119,17 @@ publish a LUFS target, so treat -14 as a convention and -16 as the conservative 
 (-23 LUFS) is out of scope.
 
 - Measure: `ffmpeg -hide_banner -nostats -i "$MP4" -af ebur128=peak=true:framelog=quiet -f null - 2>&1 | grep -E ' I:|Peak:'`.
-- `say` normalizes each clip, so no per-clip gain math is needed. A 90 s placement of twelve clips with
-  gaps, at `data-volume="1"` and no fx chain, mixed to -15.9 LUFS (sample peak -3.8 dBFS) with ffmpeg,
-  inside the -17 to -15 window.
+- `say` normalizes each clip as the stereo file the renderer mixes, so no per-clip gain math is needed.
+  HyperFrames 0.8.185 upmixes a mono clip into both channels at full level (`pan=stereo|FL=FL+FC|FR=FR+FC`),
+  which measures 3 dB louder. Two narrated runs with the old mono clips came out near -13 LUFS at
+  `data-volume="1"` and needed 0.71 to pass. Stereo clips at -3 dB a side take the renderer's plain
+  stereo path. After any `HYPERFRAMES_VERSION` bump, re-check that path: the voice tests mix the clips
+  the way the renderer does.
 - Raw Kokoro clips sit near -22 LUFS with peaks at -1.5 dBFS, so any gain on a raw clip raises the peak
   and the renderer answers by lowering the whole track ("Audio lowered by 6.4 dB to stay under -1 dBTP"),
   which ends quieter than before. Do not place `<id>.raw.wav`.
 - Order: place at `data-volume="1"`, render, then read the `loudness` check in `verify.py`. If the mix is
-  off, change one gain on every clip by the measured difference (`data-volume` times 10^(difference / 20))
-  and render again.
+  off, multiply every clip's `data-volume` by the factor the check's detail names and render again.
 - `hf.py normalize-audio` caps its gain at the peak limit, so it cannot lift a quiet mix. Do not use it
   for this.
 - The renderer can still lower the track a little to hold -1 dBTP (the t2 log said "Audio lowered by 1.1 dB
@@ -154,7 +156,7 @@ another service.
 
 ## Captions
 
-Burn captions into 9:16 and 1:1 renders and write a `.srt` sidecar for 16:9.
+Burn captions into 9:16 and 1:1 renders and write a `.srt` sidecar for 16:9. Every narrated MP4 needs `<mp4 stem>.srt` beside it in its version folder, or verify's `captions` check fails; write it again into each new version.
 
 ```bash
 python3 "$SKILL_DIR/scripts/voice.py" captions --project "$PROJECT" --lines "$PROJECT/assets/lines.json" \

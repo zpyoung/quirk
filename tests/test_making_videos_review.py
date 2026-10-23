@@ -223,9 +223,37 @@ def test_bare_project_still_builds(tmp_path: Path, env: dict) -> None:
     proj = tmp_path / "bare"
     proj.mkdir()
     src, page = build_ok(proj, env)
-    assert '"title": "Video review, no versions yet"' in src.splitlines()[0]
+    assert '"title": "Video review, storyboard"' in src.splitlines()[0]
     assert "brief.json" in page and "storyboard.md" in page
-    assert "no versions" in page.lower()
+    assert "Nothing is rendered yet" in page
+
+
+def test_a_project_at_the_storyboard_stop_shows_the_plan_and_style_frames(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    (proj / "storyboard.md").write_text(STORYBOARD)
+    frames = proj / "frames-storyboard"
+    frames.mkdir()
+    for name in ("z-hook-3s.png", "a-frame-01-at-8.5s.png"):
+        (frames / name).write_bytes(b"png")
+    src, page = build_ok(proj, env)
+    header = json.loads(src.splitlines()[0][len("<!-- quirk-src "):-len(" -->")])
+    assert header["title"] == "Video review, storyboard"
+    assert header["interactions"] == []
+    plan = section(page, "Storyboard")
+    assert "s2 payoff" in plan and "Second spoken line" in plan
+    assert ESCAPED_INJECTION in plan and INJECTION not in plan
+    style = section(page, "Style frames")
+    assert style.index('src="frames-storyboard/z-hook-3s.png"') < style.index('src="frames-storyboard/a-frame-01-at-8.5s.png"')
+    assert "s1 hook, 3 s" in style and "s2 payoff, 8.5 s" in style
+    assert "verify.json" not in section(page, "How this page was built")
+    assert "nothing to review" not in page and "data-seek" not in page
+
+
+def test_a_storyboard_without_style_frames_says_so(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    (proj / "storyboard.md").write_text(STORYBOARD)
+    _, page = build_ok(proj, env)
+    assert "no style frames in frames-storyboard/" in section(page, "Style frames")
 
 
 def test_header_is_one_json_line(built: "tuple[str, str]") -> None:

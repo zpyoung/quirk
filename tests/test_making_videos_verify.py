@@ -43,6 +43,19 @@ FAKE_FFPROBE = """#!/bin/sh
 echo '{"streams": [{"avg_frame_rate": "30/1", "r_frame_rate": "30/1", "width": 1920, "height": 1080, "duration": "6.0"}], "format": {"duration": "6.0"}}'
 """
 
+# stands in for `pnpm dlx hyperframes check`: prints FAKE_CHECK_FILE, exits 1 like check does on findings
+FAKE_PNPM = """#!{python}
+import os, sys
+if os.environ.get("FAKE_PNPM_LOG"):
+    with open(os.environ["FAKE_PNPM_LOG"], "a") as fh:
+        fh.write(" ".join(sys.argv[1:]) + "\\n")
+if os.environ.get("FAKE_PNPM_NO_JSON"):
+    sys.stderr.write("audit crashed\\n")
+    sys.exit(2)
+sys.stdout.write("Checking...\\n" + open(os.environ["FAKE_CHECK_FILE"]).read())
+sys.exit(int(os.environ.get("FAKE_CHECK_EXIT", "0")))
+"""
+
 BANDS = ("top", "bottom", "left", "right")
 SEEK = "seek=.05,.15,.25,.35,.45,.55,.65,.75,.85,.95,1"
 
@@ -102,8 +115,14 @@ class Studio:
             path.write_text(body)
             path.chmod(0o755)
 
+    def install_fake_pnpm(self) -> None:
+        path = self.bin / "pnpm"
+        path.write_text(FAKE_PNPM.format(python=sys.executable))
+        path.chmod(0o755)
+
     def env(self, **extra: str) -> dict:
         env = {
+            "FAKE_CHECK_FILE": str(FIX / "check_clean.json"),
             "PATH": "%s:/usr/bin:/bin" % self.bin,
             "HOME": str(self.tmp / "home"),
             "QUIRK_STUDIO": str(self.studio),
@@ -133,7 +152,9 @@ def studio(tmp_path: Path) -> Studio:
 
 @pytest.fixture()
 def narrated(tmp_path: Path) -> Studio:
-    return Studio(tmp_path, narration=True)
+    s = Studio(tmp_path, narration=True)
+    (s.vdir / "demo-16x9.srt").write_text("1\n00:00:00,300 --> 00:00:01,000\nHello.\n")
+    return s
 
 
 def add_aspect(s: Studio, aspect: str, scenes: str = "scenes_inline", render: bool = True) -> Path:
@@ -168,7 +189,7 @@ def test_everything_passes_and_verify_json_is_written(studio):
     statuses = {c["name"]: c["status"] for c in out["checks"]}
     assert statuses == {
         "fonts": "pass", "render_log": "pass", "contrast": "pass", "title_safe": "pass", "loudness": "skip",
-        "sync": "skip", "blender": "skip", "outside_calls": "pass",
+        "captions": "skip", "sync": "skip", "blender": "skip", "outside_calls": "pass",
     }
     for check in out["checks"]:
         assert set(check) == {"name", "status", "measured", "threshold", "detail"}
@@ -219,6 +240,30 @@ def test_rerunning_with_other_still_times_removes_the_previous_stills(studio):
     assert sorted(p for p in frames.glob("still-*.png")) == sorted(Path(p) for p in second["frames"]["stills"])
     assert not any(p.is_file() for p in old if p not in map(Path, second["frames"]["stills"]))
     assert other.is_file()
+
+
+STORYBOARD = """# Demo
+
+| Scene | Time (s) | On screen |
+|---|---|---|
+| s1 hook | 0.0-2.0 | title |
+| s2 demo | 2.0-4.5 | demo |
+| s3 end | 4.5-6.0 | end card |
+"""
+
+
+def test_default_stills_land_half_a_second_before_each_next_scene(studio):
+    (studio.project / "storyboard.md").write_text(STORYBOARD)
+    code, out = studio.run()
+    assert code == 0
+    assert [Path(p).name for p in out["frames"]["stills"]] == [
+        "still-01-1.50s.png", "still-02-4.00s.png", "still-03-5.50s.png"]
+
+
+def test_a_storyboard_without_a_scene_table_keeps_six_even_stills(studio):
+    (studio.project / "storyboard.md").write_text("# Demo\n\nNo table yet.\n")
+    code, out = studio.run()
+    assert code == 0 and len(out["frames"]["stills"]) == 6
 
 
 def test_stills_at_given_times(studio):
@@ -388,16 +433,50 @@ def test_an_aspect_mp4_fails_on_its_own_folders_fonts(tmp_path):
 
 # contrast and title_safe ------------------------------------------------------------------------
 
-def test_contrast_and_title_safe_fail_with_commands_when_no_check_json(studio):
-    code, out = studio.run(check_args=[])
+def test_verify_runs_the_four_band_checks_when_none_are_passed(studio):
+    studio.install_fake_pnpm()
+    log = studio.tmp / "pnpm.log"
+    code, out = studio.run(check_args=[], env=studio.env(FAKE_PNPM_LOG=str(log)))
+    assert code == 0, out
+    assert check_of(out, "contrast")["status"] == "pass" and check_of(out, "title_safe")["status"] == "pass"
+    calls = log.read_text().splitlines()
+    assert len(calls) == 4
+    for zone in ("x0=0;y0=0;x1=1;y1=.05", "x0=0;y0=.95;x1=1;y1=1", "x0=0;y0=0;x1=.05;y1=1", "x0=.95;y0=0;x1=1;y1=1"):
+        assert sum(zone + ";severity=error;" + SEEK in c for c in calls) == 1, zone
+    assert all("check --json --caption-zone" in c and c.endswith(str(studio.project / "scenes")) for c in calls)
+    for band in BANDS:
+        saved = json.loads((studio.vdir / ("check-%s.json" % band)).read_text())
+        assert saved == json.loads((FIX / "check_clean.json").read_text())
+
+
+def test_generated_band_checks_still_fail_title_safe_on_a_finding(studio):
+    studio.install_fake_pnpm()
+    code, out = studio.run(check_args=[], env=studio.env(FAKE_CHECK_FILE=str(FIX / "check_band_top.json"), FAKE_CHECK_EXIT="1"))
+    assert code == 1 and check_of(out, "title_safe")["status"] == "fail"
+    assert "Top edge text" in check_of(out, "title_safe")["detail"]
+
+
+def test_a_9x16_cut_checks_its_own_folder_and_saves_by_aspect(tmp_path):
+    s = Studio(tmp_path)
+    nine = add_aspect(s, "9x16")
+    s.install_fake_pnpm()
+    log = tmp_path / "pnpm.log"
+    code, out = s.run("--mp4", nine, check_args=[], env=s.env(FAKE_PNPM_LOG=str(log)))
+    assert code == 0, out
+    assert all(c.endswith(str(s.project / "scenes-9x16")) for c in log.read_text().splitlines())
+    assert sorted(p.name for p in s.vdir.glob("check-*.json")) == sorted("check-%s-9x16.json" % b for b in BANDS)
+
+
+@pytest.mark.parametrize("broken", ["no_pnpm", "no_json"])
+def test_a_band_check_that_cannot_run_exits_1_without_an_attempt(studio, broken):
+    extra = {}
+    if broken == "no_json":
+        studio.install_fake_pnpm()
+        extra["FAKE_PNPM_NO_JSON"] = "1"
+    code, out = studio.run(check_args=[], env=studio.env(**extra))
     assert code == 1
-    contrast, safe = check_of(out, "contrast"), check_of(out, "title_safe")
-    assert contrast["status"] == "fail" and safe["status"] == "fail"
-    assert "hf.py" in contrast["detail"] and "check --json" in contrast["detail"]
-    for needle in ("x0=0;y0=0;x1=1;y1=.05", "x0=0;y0=.95;x1=1;y1=1", "x0=0;y0=0;x1=.05;y1=1",
-                   "x0=.95;y0=0;x1=1;y1=1", "severity=error", "--caption-zone"):
-        assert needle in safe["detail"], needle
-    assert safe["detail"].count(";" + SEEK) == 4
+    assert ("missing tool" if broken == "no_pnpm" else "printed no JSON") in out["error"]
+    assert not (studio.vdir / "verify.json").exists()
 
 
 def test_contrast_fails_with_count_and_worst_ratio(studio):
@@ -532,6 +611,33 @@ def test_an_invalid_band_document_does_not_count_as_covered(studio, tmp_path):
     assert "left.json" in safe["detail"]
 
 
+# captions ---------------------------------------------------------------------------------------
+
+def test_a_narrated_video_with_its_srt_passes_captions(narrated):
+    code, out = narrated.run()
+    assert check_of(out, "captions")["status"] == "pass"
+
+
+@pytest.mark.parametrize("srt", ["missing", "empty"])
+def test_a_narrated_video_without_captions_fails_and_names_the_command(narrated, srt):
+    sidecar = narrated.vdir / "demo-16x9.srt"
+    sidecar.unlink()
+    if srt == "empty":
+        sidecar.write_text("")
+    code, out = narrated.run()
+    captions = check_of(out, "captions")
+    assert code == 1 and captions["status"] == "fail"
+    assert "voice.py captions" in captions["detail"] and str(sidecar) in captions["detail"]
+
+
+def test_a_9x16_cut_needs_its_own_srt(tmp_path):
+    s = Studio(tmp_path, narration=True)
+    nine = add_aspect(s, "9x16")
+    (s.vdir / "demo-16x9.srt").write_text("1\n00:00:00,300 --> 00:00:01,000\nHello.\n")
+    code, out = s.run("--mp4", nine)
+    assert check_of(out, "captions")["status"] == "fail" and "demo-9x16.srt" in check_of(out, "captions")["detail"]
+
+
 # loudness ---------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -546,6 +652,17 @@ def test_loudness_thresholds(narrated, lufs, peak, status):
     assert loud["status"] == status
     assert loud["measured"] == {"lufs": float(lufs), "true_peak_dbtp": float(peak)}
     assert loud["threshold"] == {"lufs": [-17.0, -15.0], "true_peak_dbtp_max": -1.0}
+
+
+@pytest.mark.parametrize("lufs,factor", [("-13.0", "0.708"), ("-19.0", "1.413")])
+def test_a_loudness_miss_names_the_data_volume_factor(narrated, lufs, factor):
+    code, out = narrated.run(env=narrated.env(FAKE_LUFS=lufs, FAKE_TP="-3.0"))
+    assert "multiply every narration clip's data-volume by %s" % factor in check_of(out, "loudness")["detail"]
+
+
+def test_a_peak_only_miss_names_no_data_volume_factor(narrated):
+    code, out = narrated.run(env=narrated.env(FAKE_LUFS="-16.0", FAKE_TP="-0.5"))
+    assert "data-volume" not in check_of(out, "loudness")["detail"]
 
 
 def test_loudness_fails_when_ffmpeg_exits_nonzero_even_with_a_summary(narrated):
@@ -721,7 +838,7 @@ def test_top_level_passed_needs_every_run_to_pass(tmp_path):
     s = Studio(tmp_path)
     nine = add_aspect(s, "9x16")
     s.run("--mp4", s.vdir / "demo-16x9.mp4")
-    code, out = s.run("--mp4", nine, check_args=[])
+    code, out = s.run("--mp4", nine, check_args=["top=%s" % (FIX / "check_band_top.json")])
     assert code == 1 and out["passed"] is False
     saved = json.loads((s.vdir / "verify.json").read_text())
     assert saved["passed"] is False
@@ -734,7 +851,7 @@ def test_the_three_attempt_stop_counts_per_mp4(tmp_path):
     nine = add_aspect(s, "9x16")
     stops = []
     for _ in range(3):
-        code, out = s.run("--mp4", nine, check_args=[])
+        code, out = s.run("--mp4", nine, check_args=["top=%s" % (FIX / "check_band_top.json")])
         assert code == 1
         stops.append(out["stop"])
         code, wide = s.run("--mp4", s.vdir / "demo-16x9.mp4")
