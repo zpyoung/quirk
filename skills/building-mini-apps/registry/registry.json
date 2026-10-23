@@ -1,0 +1,46 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "mini-apps",
+  "homepage": "https://github.com/zpyoung/quirk/tree/main/skills/building-mini-apps",
+  "items": [
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "base",
+      "type": "registry:block",
+      "title": "Mini-app base",
+      "description": "House-style tokens, IndexedDB collection store with JSON export/import, app shell, and empty/loading/error states.",
+      "dependencies": [
+        "idb-keyval",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "button",
+        "skeleton",
+        "sonner",
+        "tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/styles/mini-tokens.css",
+          "type": "registry:file",
+          "target": "src/styles/mini-tokens.css"
+        },
+        {
+          "path": "src/lib/mini/store.ts",
+          "type": "registry:file",
+          "target": "src/lib/mini/store.ts"
+        },
+        {
+          "path": "src/components/mini/app-shell.tsx",
+          "type": "registry:file",
+          "target": "src/components/mini/app-shell.tsx"
+        },
+        {
+          "path": "src/components/mini/states.tsx",
+          "type": "registry:file",
+          "target": "src/components/mini/states.tsx"
+        }
+      ]
+    }
+  ]
+}
