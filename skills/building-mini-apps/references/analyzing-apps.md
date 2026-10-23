@@ -14,7 +14,7 @@ Output goes into this skill's own library:
 
 Run this guide when the user asks to analyze an app as a mini app, study an app for patterns, or plan a close clone of one. It does not build the clone. When the user later asks for "a Sentry-like error tracker", the normal build flow in `SKILL.md` reads the blueprint first.
 
-A close clone matches the app's screens, layout, navigation, keys and states. It keeps the neutral house style, and its UI never names the studied app or uses its brand assets.
+A close clone matches the app's screens, layout, navigation, keys and states. It uses one of the skill's styles, Neutral House by default, carrying character only and never the studied app's exact look, and its UI never names the studied app or uses its brand assets.
 
 The run has six steps and two stops where the user decides:
 
@@ -187,7 +187,7 @@ A run can pause at a stop or end with the session. State lives on disk, so resum
 
 ## Rules
 
-- A clone matches screens, layout, navigation, keys and states, and keeps the house style.
+- A clone matches screens, layout, navigation, keys and states, and uses one of the skill's styles, Neutral House by default, carrying character only and never the studied app's exact look.
 - No brand assets, and the clone's UI never names the studied app.
 - A component needed by two patterns is copied into each block. No cross-pattern imports.
 - Dependencies are proposed in the blueprint, approved at Stop 2, and land in that pattern's registry item only.

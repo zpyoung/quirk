@@ -300,6 +300,21 @@ def test_video_keeps_scene_frames_at_exactly_five(rig: Rig) -> None:
     assert len(_frames(rig.media())) == 5
 
 
+def test_video_reruns_at_one_fps_when_scene_frames_collapse_to_under_five_seconds(rig: Rig) -> None:
+    # six scene frames, but only seconds 1, 2 and 3 would be published
+    result = rig.run(
+        "video", "sentry", "S3", "u",
+        FAKE_SCENE_TIMES="1.1,1.5,2.1,2.5,3.1,3.5",
+        FAKE_FPS_TIMES="0,1,2,3,4,5,6,7",
+    )
+    assert result.returncode == 0, result.stderr
+    filters = [c[c.index("-vf") + 1] for c in rig.calls() if c[0] == "ffmpeg"]
+    assert len(filters) == 2
+    assert filters[1].startswith("fps=1")
+    assert _frames(rig.media()) == [f"S3-t000{n}.png" for n in range(8)]
+    assert (rig.media() / "S3-t0001.png").read_bytes() == b"png 1"
+
+
 def test_video_fails_when_no_frames_come_out(rig: Rig) -> None:
     result = rig.run("video", "sentry", "S1", "u", FAKE_SCENE_TIMES="", FAKE_FPS_TIMES="")
     assert result.returncode == 1
