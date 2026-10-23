@@ -54,10 +54,10 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 | Type | Filters the list; selection resets to the first match | Substring match on title plus any extra search text; title prefix matches rank first (our design) |
 | ↑ / ↓ | Moves the selection | Works while the search input has focus. Stops at the ends |
 | ⌘K (Ctrl K) | Opens the panel for the selected row; closes it if open | Fires even while typing in the search input. Does nothing when no row is selected or the row has no actions |
-| ↵ | Runs the primary action of the selected row | With the panel open, runs the highlighted action instead |
-| ⌘↵ (Ctrl ↵) | Runs the secondary action | Only when the row has a second action; otherwise ignored |
-| Action chord, such as ⇧⌘F | Runs that action on the selected row | Works with the panel open or closed. Chords are ignored while focus is in any other text field |
-| Esc | Backs out one level: sub-menu, then panel, then a non-empty query | With an empty query and no panel it does nothing |
+| ↵ | Runs the primary action of the selected row | With the panel open, runs the highlighted action instead. A primary action that has `children` opens the panel on its sub-menu instead of running |
+| ⌘↵ (Ctrl ↵) | Runs the secondary action | Only when the row has a second action; otherwise ignored. Inside an open sub-menu it does nothing |
+| Action chord, such as ⇧⌘F | Runs that action on the selected row | Works with the panel open or closed, including while typing in the search or panel input. Sub-menu actions can carry chords too. Chords are ignored while focus is in a text field outside the block |
+| Esc | Backs out one level: sub-menu, then panel, then a non-empty query | With an empty query and no panel it does nothing. Works while typing in the search or panel input |
 | / | Focuses the search input | Our design; only when focus is not in a text field |
 
 **Focus rules**
@@ -77,10 +77,10 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 | Loading | `LoadingState` in the list area. The search input stays enabled and ⌘K does nothing |
 | Error | `ErrorState` with a retry button when `onRetry` is given |
 | Action running | Footer left slot shows a spinner and the action's `pending` label; the list stays usable (S1-0060) |
-| Action done or failed | Success shows a `sonner` toast; a rejected `run` shows an error toast and keeps the panel closed. Failure feedback is our design (S2 and S1 showed only success) |
+| Action done or failed | Success shows a `sonner` toast when `successMessage` is set; a rejected `run` shows an error toast with the error message and keeps the panel closed. Failure feedback is our design (S2 and S1 showed only success) |
 | Long titles | Rows and the panel header truncate to one line with an ellipsis; the full title is in the `title` attribute. Action titles truncate the same way |
 | Many items | The list scrolls inside `ScrollArea`; only the first 200 matches render, with a final row "Showing 200 of N. Keep typing to narrow". Our design |
-| Many actions | Panel body scrolls, about 8 rows tall (S2-0015); the filter input stays pinned at the bottom |
+| Many actions | Panel body scrolls, about 8 rows tall (S2-0015); the filter input stays pinned at the bottom. Destructive actions sort last, below a separator |
 | No matching action | One muted row "No actions match" in the panel; ↵ does nothing. Not seen in sources, our design |
 | Item has no actions | The footer shows only the primary label if any, and no Actions chip (S1-0075) |
 
@@ -114,7 +114,7 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 
 ## Block API
 
-Files in `src/patterns/action-palette/`: `index.ts` re-exports the items below; `demo.tsx` default-exports `Demo`.
+Files in `src/patterns/action-palette/`: `index.ts` re-exports `ActionPalette`, `ActionPanel`, `ShortcutKeys`, `formatShortcut` and the types `PaletteItem`, `PaletteAction`, `ActionPaletteProps` and `ActionPanelProps`; `demo.tsx` default-exports `Demo`. `registry-item.json` declares `dependencies` `react-hotkeys-hook` and `sonner`.
 
 ```ts
 // CONTRACT: item and action types
@@ -142,14 +142,15 @@ type ActionPaletteProps<T extends PaletteItem> = {
   getSubtitle?: (item: T) => string | undefined;
   getMeta?: (item: T) => string | undefined;    // right-aligned type label
   getSearchText?: (item: T) => string;          // extra words matched besides title
-  getSection?: (item: T) => string | undefined; // row group headings
+  getSection?: (item: T) => string | undefined; // row group headings, shown while the query is empty
   onCreate?: (query: string) => void;           // enables the "Create “…”" row
   placeholder?: string;
   footerLabel?: string;                         // left footer slot, default none
   emptyState?: { title: string; description?: string; action?: ReactNode };
 };
 
-// CONTRACT: <ActionPanel<T extends PaletteItem> item={T} actions={PaletteAction<T>[]} onClose={() => void} onRun={(a: PaletteAction<T>) => void} />
+// CONTRACT: type ActionPanelProps<T extends PaletteItem> = { item: T; actions: PaletteAction<T>[]; onClose: () => void; onRun: (action: PaletteAction<T>) => void }
+// CONTRACT: <ActionPanel<T extends PaletteItem> {...ActionPanelProps<T>} />   the card ActionPalette renders; usable on its own
 // CONTRACT: <ShortcutKeys shortcut={string} />       renders one keycap per key, glyphs by platform
 // CONTRACT: formatShortcut(shortcut: string): string[]   e.g. ["⌘", "⇧", "F"] on macOS, ["Ctrl", "Shift", "F"] elsewhere
 ```
@@ -165,12 +166,14 @@ shadcn components, all from the pre-installed list:
 - `input` for search.
 - `command` (cmdk) for the panel's filtered list and bottom input.
 - `kbd` for keycaps.
-- `scroll-area`, `separator`, `badge` (type label), `skeleton`.
-- `sonner` for toasts.
-- `tooltip` for the footer chip.
-- `button` for retry.
+- `scroll-area`, `separator`, `badge` (type label).
+- `sonner` for toasts; the app's single `AppShell` mounts the `Toaster`.
+- `tooltip` for the footer chip; `AppShell` also mounts the `TooltipProvider`.
+- `toggle-group` in the demo only, for the state preview.
 
-`demo.tsx` shows a "saved links" app with 12 seed items stored through `useCollection("action-palette-links", seed)`. Each has a title, a domain subtitle and a "Link" or "Note" type label. Actions are Open (primary), Copy URL (secondary), Pin, "Move to…" (sub-menu of three folders), and Delete (destructive). Two titles are very long to show truncation. A small toggle row above the demo switches the status to loading or error to show the state components.
+Neither the block nor the demo renders `AppShell`, `Toaster` or `TooltipProvider`.
+
+`demo.tsx` shows a "saved links" app with 12 seed items stored through `useCollection("action-palette-demo", seed)`. Each has a title, a domain subtitle, a "Link" or "Note" type label, and sits under a "Pinned" or "Saved" heading. Actions are Open (primary), Copy URL (secondary), Pin or Unpin (⇧⌘P), "Move to…" (sub-menu of three folders), and Delete (⌘⌫, destructive, with a short pending state). Typing a title with no match offers "Create …", which adds a link. Two titles are very long to show truncation. A "Preview state" toggle group above the demo (live, empty, loading, error) switches the block to each state.
 
 ## Sources
 

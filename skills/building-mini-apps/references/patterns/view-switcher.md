@@ -46,7 +46,7 @@ Do not use it when:
 
 ## Interaction
 
-Key bindings come from `useHotkeys` and do not fire while focus is in an input, textarea or contenteditable, except Esc. All keys are our design; none of the sources show keyboard use inside a view.
+Key bindings come from `useHotkeys` and do not fire while focus is in an input, textarea or contenteditable, or while a dialog, menu or listbox is open, except Esc. Up, Down, Left, Right and Enter act only when focus is on the page body, the content area, a record or the panel title. All keys are our design; none of the sources show keyboard use inside a view.
 
 | Key | Does | Notes |
 |-----|------|-------|
@@ -59,7 +59,7 @@ Key bindings come from `useHotkeys` and do not fire while focus is in an input, 
 | `f` | Open the filter popover | Linear uses a one-letter filter key |
 | `s` | Open the sort popover | |
 | `/` | Focus the search field | Only when search is shown (3 or more records) |
-| `n` | New record | Gets defaults from the active column or day |
+| `n` | New record | Gets defaults from the active column or day. Needs `onCreate` |
 | `t` | Calendar: jump to the current month | |
 | Shift+Left / Shift+Right | Calendar: previous / next month | |
 
@@ -114,7 +114,7 @@ Leave out:
 
 ## Block API
 
-Files: `gallery/src/patterns/view-switcher/index.ts`, `view-switcher.tsx` (plus internal layout files), `demo.tsx`.
+Files: `gallery/src/patterns/view-switcher/index.ts`, `view-switcher.tsx` (plus internal layout files), `demo.tsx`. `index.ts` exports `ViewSwitcher`, `ViewSwitcherProps`, `applyView` and the types `Layout`, `FieldType`, `FieldDef`, `FilterOp`, `FilterRule`, `SortRule` and `ViewConfig`.
 
 ```ts
 CONTRACT: type Layout = "table" | "board" | "list" | "calendar"
@@ -124,7 +124,7 @@ CONTRACT: type FilterOp = "contains" | "is" | "isNot" | "anyOf" | "onOrBefore" |
 CONTRACT: interface FilterRule { field: string; op: FilterOp; value: string | string[] }
 CONTRACT: interface SortRule { field: string; dir: "asc" | "desc" }
 CONTRACT: interface ViewConfig { id: string; name: string; layout: Layout; filters: FilterRule[]; sort?: SortRule; groupBy?: string; dateField?: string }
-CONTRACT: ViewSwitcher<T extends { id: string; title: string }>(props: {
+CONTRACT: interface ViewSwitcherProps<T extends { id: string; title: string }> {
   items: T[]
   fields: FieldDef<T>[]                               // beyond id and title, which are always shown
   storageKey: string                                  // views persist via useCollection<ViewConfig>(`${storageKey}-views`, defaultViews)
@@ -139,7 +139,8 @@ CONTRACT: ViewSwitcher<T extends { id: string; title: string }>(props: {
   renderPanel?: (item: T, ctx: { close: () => void }) => ReactNode   // replaces the default property list
   activeViewId?: string                               // controlled mode
   onActiveViewChange?: (id: string) => void
-}): JSX.Element
+}
+CONTRACT: ViewSwitcher<T extends { id: string; title: string }>(props: ViewSwitcherProps<T>): JSX.Element
 CONTRACT: applyView<T extends { id: string; title: string }>(items: T[], view: ViewConfig, fields: FieldDef<T>[], query?: string): T[]   // pure filter + search + sort, exported for tests and reuse
 ```
 
@@ -152,11 +153,11 @@ Behavior the signature does not show:
 - Deleting the only remaining view is not allowed.
 - View writes that reject show a `sonner` toast; the tab strip keeps the last good views.
 
-Base pieces used: `useCollection` (views), `AppShell` (in the demo only), `EmptyState`, `LoadingState`, `ErrorState`, and `useHotkeys` from `react-hotkeys-hook` for every key above.
+Base pieces used: `useCollection` (views), `EmptyState`, `LoadingState`, `ErrorState`, and `useHotkeys` from `react-hotkeys-hook` for every key above. Neither the block nor the demo renders `AppShell`, `Toaster` or `TooltipProvider`; the app's single `AppShell` provides them.
 
-shadcn components (all from the pre-installed list): `tabs`, `button`, `input`, `badge`, `popover`, `select`, `checkbox`, `dropdown-menu`, `dialog`, `table`, `scroll-area`, `tooltip`, `kbd`, `separator`, `sonner`. No new npm dependencies.
+shadcn components (all from the pre-installed list): `tabs`, `button`, `input`, `badge`, `popover`, `select`, `checkbox`, `dropdown-menu`, `dialog`, `table`, `tooltip`, `kbd`. `registry-item.json` declares the npm `dependencies` `react-hotkeys-hook` and `sonner`; no others.
 
-`demo.tsx` shows a workshop planner with 14 records on `useCollection("workshops", seed)`: fields Title, Stage (Idea, Planned, Confirmed, Done), Host (three names), Date (spread over the current month, built from today's date), Seats (number). Two records have no date, one has no host, and one has a title of about 100 characters. Seeded views: "All" (table), "Calendar" (by Date), "By stage" (board by Stage), "Upcoming" (list, Stage any of Planned and Confirmed, sorted by Date). It wires `onCreate`, `onUpdate` and `onDelete` to the store.
+`demo.tsx` shows a "Workshop planner" with 14 records on `useCollection("view-switcher-demo", seed)` (the views are stored under `view-switcher-demo-views`): fields Title, Stage (Idea, Planned, Confirmed, Done), Host (three names), Date (spread over the current month, built from today's date), Seats (number). Two records have no date, one has no host, and one has a title of about 100 characters. A "Preview state" button group (live, empty, loading, error) in the header forces each state. Seeded views: "All" (table), "Calendar" (by Date), "By stage" (board by Stage), "Upcoming" (list, Stage any of Planned and Confirmed, sorted by Date). It wires `onCreate` (new records start at stage Idea), `onUpdate` and `onDelete` to the store, and reports a rejected write as a toast.
 
 ## Sources
 

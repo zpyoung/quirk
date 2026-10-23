@@ -62,6 +62,7 @@ Keys. Obsidian's ⌘T, ⌘W and ⌃Tab cannot be intercepted by a web page (the 
 | Alt+B | Show or hide the sidebar | Our design; Granola and Figma also toggle a sidebar by key |
 | Alt+O | Focus the sidebar filter ("Go to item") | Our design |
 | Alt+N | Create a new record and open it in the active tab | Obsidian ⌘N (S2-0016 link label); only when `onCreate` is given |
+| Esc in the sidebar filter | Clears the filter and blurs the input | Our design |
 | (tab and view chords above) | Alt+T, Alt+W, Alt+E, Alt+[ and Alt+] also fire while focus is in the raw textarea | Alt chords insert no text there, so these opt in to form tags; verify on macOS, where Option+letter types a character |
 | Click a sidebar row | Opens the record in the active tab, replacing what it showed | Obsidian: a link click navigates the active tab (S5); same for rows is our design |
 | Mod-click a row | Opens in a new tab | S5 (⌘-click) |
@@ -78,18 +79,18 @@ Focus rules (S2-0049 and S2-0050 do not show where focus lands after close, so t
 
 | State | What shows |
 |---|---|
-| Empty, no records | Sidebar: `EmptyState` "No items yet" with a New item action. Pane area: the empty pane with the "Create new item" link only |
+| Empty, no records | Sidebar: `EmptyState` "No items yet" with a New item action when `onCreate` is given. Pane area: the empty pane with the "Create new item" link only |
 | Empty, records but no tab open | Empty pane: "Create new item (Alt+N)", "Go to item (Alt+O)", "See recent items", "Close" as plain text links (S2-0016); no illustration |
 | Loading | Sidebar: five `Skeleton` rows. Pane area: `LoadingState`. Tab strip hidden. Layout restore waits for items |
-| Error | `ErrorState` with Retry in place of the sidebar list and the pane. A layout restore failure alone falls back to one group with one empty tab, no error |
+| Error | `ErrorState` with Retry replaces the whole block, sidebar included. A layout restore failure alone falls back to one group with one empty tab, no error |
 | Raw text does not parse | Inline message under the textarea naming the problem; text stays as typed, the record is not changed, Structured view shows the last good record (our design) |
 | Record deleted while a tab shows it | Tab title becomes "Deleted" in muted text; pane shows `EmptyState` with Close tab (our design; S1 gives no deleted-file case) |
 | Very long title | Tab and sidebar row truncate with an ellipsis (S1-0016); full title in a `title` tooltip. Pane header title truncates, never wraps |
 | Many tabs | Strip scrolls horizontally with the active tab kept in view; the chevron lists all tabs (S1-0014) |
-| Many records | Sidebar scrolls inside `ScrollArea`; the filter narrows the list and the footer shows "n of m" |
+| Many records | Sidebar scrolls inside `ScrollArea`; the filter narrows the list ("No items match." when nothing does) and the footer shows "n of m" |
 | Long content | The pane body scrolls; the content column stays about 560 px (S1-0019); Raw view uses the full pane width with monospace text |
 | Same record in two tabs | Allowed, with no de-duplication (S1-0017); this is how Structured and Raw sit side by side |
-| Narrow window | Below about 720 px the second group is not offered; Alt+\ opens a tab instead (our design) |
+| Narrow window | Below about 720 px only the active group is shown and a second group is not offered; Alt+\ and Mod+Alt-click open a tab instead (our design) |
 
 ## Borrow / Leave out
 
@@ -117,7 +118,7 @@ Leave out:
 
 ## Block API
 
-Folder `gallery/src/patterns/workspace-panes/`. `index.ts` exports the names below. The block uses `useCollection` from `src/lib/mini/store.ts` only for its own layout (collection `workspace-panes-layout`, one record with id `"layout"`); the records come in through props so the host app owns its data. It uses `EmptyState`, `LoadingState` and `ErrorState` from `states.tsx`, `AppShell` only in `demo.tsx`, and `useHotkeys` from `react-hotkeys-hook`.
+Folder `gallery/src/patterns/workspace-panes/`. `index.ts` exports `WorkspacePanes`, `WorkspacePanesProps`, `ItemList`, `TabStrip`, `RawEditor`, `useWorkspaceLayout` and the types `WorkspaceItem`, `PaneMode`, `WorkspaceTab`, `TabGroup` and `WorkspaceLayout`. The block uses `useCollection` from `src/lib/mini/store.ts` only for its own layout (collection `workspace-panes-layout`, one record with id `"layout"`); the records come in through props so the host app owns its data. It uses `EmptyState`, `LoadingState` and `ErrorState` from `states.tsx` and `useHotkeys` from `react-hotkeys-hook`. Neither the block nor the demo renders `AppShell`, `Toaster` or `TooltipProvider`; the app's single `AppShell` provides them. `registry-item.json` declares `sonner` as a dependency for the demo's save-error toast.
 
 shadcn components: resizable, scroll-area, button, input, textarea, badge, separator, tooltip, kbd, skeleton, dropdown-menu, context-menu, toggle-group.
 
@@ -133,7 +134,7 @@ type WorkspaceTab = { tabId: string; itemId: string | null; mode: PaneMode }; //
 type TabGroup = { groupId: string; tabs: WorkspaceTab[]; activeTabId: string };
 type WorkspaceLayout = { id: "layout"; groups: TabGroup[]; activeGroupId: string; sidebarOpen: boolean; recent: string[] }; // groups.length is 1 or 2
 
-// CONTRACT: WorkspacePanes<T extends WorkspaceItem>(props: {
+// CONTRACT: type WorkspacePanesProps<T extends WorkspaceItem> = {
 //   items: T[];
 //   status: "loading" | "ready" | "error";
 //   error?: Error;
@@ -147,13 +148,14 @@ type WorkspaceLayout = { id: "layout"; groups: TabGroup[]; activeGroupId: string
 //   tooltip?: (item: T) => string | undefined;           // sidebar hover text, e.g. created and modified times
 //   storeName?: string;                                  // layout collection name, default "workspace-panes-layout"
 //   maxContentWidth?: number;                            // structured column width in px, default 560
-// }): JSX.Element
+// }
+// CONTRACT: WorkspacePanes<T extends WorkspaceItem>(props: WorkspacePanesProps<T>): JSX.Element
 
 // CONTRACT: pieces, exported for apps that rearrange the layout
 // ItemList<T extends WorkspaceItem>(props: { items: T[]; activeId?: string; onOpen: (id: string, how: "here" | "tab" | "split") => void; badge?; tooltip? })
-// TabStrip(props: { group: TabGroup; titleOf: (itemId: string | null) => string; onSelect; onClose; onNew })
+// TabStrip(props: { group: TabGroup; titleOf: (itemId: string | null) => string; mutedOf?: (itemId: string | null) => boolean; onSelect: (tabId) => void; onClose: (tabId) => void; onNew: () => void; onSplit?: (tabId) => void; onCloseOthers?: (tabId) => void })
 // RawEditor(props: { value: string; onCommit: (raw: string) => void; error?: string })
-// useWorkspaceLayout(storeName?: string): { layout: WorkspaceLayout; status; openItem(id, how); closeTab(tabId); reopenTab(); newTab(); split(); setMode(tabId, mode); toggleSidebar() }
+// useWorkspaceLayout(storeName?: string): { layout: WorkspaceLayout; status: "loading" | "ready"; openItem(id, how); closeTab(tabId); closeOthers(tabId); reopenTab(); newTab(); split(tabId?); setMode(tabId, mode); toggleSidebar(); selectTab(tabId); activateGroup(groupId); goBack(tabId); goForward(tabId); closedCount; history; focusRequest }
 ```
 
 Behavior the block guarantees:
@@ -162,8 +164,9 @@ Behavior the block guarantees:
 - Structured edits call `update`, which calls `onChange`; the Raw view of any other open tab on the same record re-renders from `toRaw`.
 - A tab whose `itemId` no longer exists in `items` shows the deleted state.
 - A rejected `onChange` or `update` keeps the last good record and surfaces the error through `sonner` in the host app; the block only rethrows.
+- The sidebar and the empty pane use `onCreate` for their New item links; without it they are hidden.
 
-`demo.tsx` default-exports `Demo`: a recipe notebook with about 12 recipes (title, servings, ingredient list, steps). Structured view is a small form plus lists; raw view is the same recipe as a Markdown file with a front-matter block. `toRaw` and `parseRaw` convert between them, and one recipe has deliberately long title text. The demo opens with two groups, the second showing a recipe in Raw view, and uses `useCollection("recipes", seed)`. It also shows the empty, loading and error states through a small control row.
+`demo.tsx` default-exports `Demo`: a recipe notebook with 12 recipes (title, servings, ingredient list, steps). Structured view is a small form plus lists; raw view is the same recipe as a Markdown file with a front-matter block. `toRaw` and `parseRaw` convert between them, and one recipe has deliberately long title text. The demo opens with two groups, the second showing a recipe in Raw view; it seeds collection `workspace-panes-demo` for the recipes and `workspace-panes-layout` for the layout. A "Preview state" toggle group (live, empty, loading, error) shows each state; New item from the empty preview returns to live.
 
 ## Sources
 

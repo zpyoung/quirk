@@ -38,23 +38,24 @@ Do not use it when:
                      [ footer bar: swaps its buttons while a card is open ]
 ```
 
-- **Collapsed row**: checkbox or marker, one-line title, trailing glyphs (notes, checklist) for fields that have a value.
+- **Collapsed row**: done checkbox, one-line title, trailing glyphs (notes, checklist) for fields that have a value.
 - **Open card**: raised panel, no border, soft shadow, slightly wider than the column. Holds the title field, a notes field, and one row for each field that has a value.
 - **Field rows**: stacked below notes in a fixed order. A filled row shows its value; hovering it shows a remove (x) control.
 - **Icon strip**: bottom right of the card, one icon per field that is still empty. Filling a field removes its icon.
 - **Field editor**: a popover (date, picker) anchored to the icon or row that opened it.
-- **Footer bar**: optional; its buttons change while a card is open.
+- **Footer bar**: sticky at the bottom. It shows "New item" (N) while no card is open and "Done" (⌘Enter) while one is.
 
 ## Interaction
 
 | Key | Does | Notes |
 |---|---|---|
-| Enter | Opens the selected row | Our design; no source shows the trigger. Ignored while typing in an input |
+| Enter | Opens the selected row | Our design; no source shows the trigger. Ignored while typing in an input; a focused row opens through its own click |
 | Click on a row | Opens that row; any open card collapses first | Our design (one card open at a time) |
+| Click the row checkbox | Toggles the item's `done` | Our design. Does not open the row |
 | Esc | Closes an open field popover first, otherwise collapses the card | Our design. Works while typing in the card; never discards edits |
-| ⌘Enter | Collapses the card | Our design. Works while typing in the card |
-| N | Adds a new item and opens its card at the end of the list | Things uses ⌘N (hint text in S1-0003); `n` is our design because the browser reserves ⌘N. Ignored while typing in an input |
-| ↑ / ↓ | Moves row selection | Our design. Ignored while typing in an input |
+| ⌘Enter (Ctrl+Enter off macOS) | Collapses the card | Our design. Works while typing in the card |
+| N | Adds a new item and opens its card at the end of the list | Things uses ⌘N (hint text in S1-0003); `n` is our design because the browser reserves ⌘N. Ignored while typing in an input; works with a card open, which collapses first |
+| ↑ / ↓ | Moves row selection and focuses the row | Our design. Active only while no card is open; ignored while typing in an input |
 | Click an icon in the strip | Opens that field's editor and focuses it | The icon becomes a labeled field with a popover (S1-0107, S1-0040) |
 | Click an x on a field row | Clears the field; its icon returns to the strip | Chip shows the x on hover only (S3-0020, S3-0021) |
 
@@ -69,9 +70,9 @@ Focus rules:
 
 | State | Shows |
 |---|---|
-| Empty | `EmptyState` with the title, one line of hint ("Press N to add an item"), and an add button. S1-0002 shows a nearly blank list and S1-0003 a grey italic hint; the button is our design |
+| Empty | `EmptyState` with `emptyTitle`, one line of hint ("Press N to add an item"), and an "Add item" button. S1-0002 shows a nearly blank list and S1-0003 a grey italic hint; the button is our design |
 | Loading | `LoadingState` in place of the list; the footer bar and page title stay |
-| Error | `ErrorState` with retry in place of the list. A failed save keeps the card open with the last good values and raises a toast. Both are our design; no source shows an error |
+| Error | `ErrorState` in place of the list; Retry reloads the page. A failed save keeps the card open with the last good values and calls `onError` (default: a sonner toast). Both are our design; no source shows an error |
 | Long title | Collapsed row truncates to one line with an ellipsis; the open card wraps the title over several lines. Our design |
 | Long notes or checklist | The card grows with its content up to a max height of about 70% of the viewport, then scrolls inside. Our design; no source shows it |
 | Many items | The list column scrolls; the open card scrolls into view when opened. Our design. Rows are not virtualized (under about 500 items) |
@@ -105,7 +106,7 @@ Leave out:
 Files in `gallery/src/patterns/expand-in-place/`: `index.ts`, `demo.tsx`, `registry-item.json`, plus component files. `dependencies` is empty (uses `react-hotkeys-hook` from the base). `registryDependencies`: `button`, `input`, `textarea`, `popover`, `calendar`, `checkbox`, `badge`, `tooltip`, `kbd`, `scroll-area`.
 
 ```ts
-CONTRACT: type ExpandItem = { id: string; title: string; notes?: string }
+CONTRACT: type ExpandItem = { id: string; title: string; notes?: string; done?: boolean }
 
 CONTRACT: type ExpandField<T extends ExpandItem> = {
   key: string                                        // unique, used for strip order
@@ -126,10 +127,10 @@ CONTRACT: ExpandList<T extends ExpandItem>(props: {
   collection: string                                 // useCollection name
   seed?: T[]
   fields: ExpandField<T>[]                           // strip and row order follows this array
-  newItem(): T                                       // defaults for N, including context pre-fill
+  newItem(): T                                       // defaults for N and the add buttons, including context pre-fill
   renderRow?(item: T): ReactNode                     // replaces the default one-line title
   emptyTitle?: string
-  onError?(error: Error): void                       // called when a write rejects; default is a sonner toast
+  onError?(error: Error): void                       // called when a write rejects; default is a sonner toast, so the app must mount a Toaster
 })
 
 CONTRACT: ExpandCard<T extends ExpandItem>(props: {
@@ -145,11 +146,11 @@ CONTRACT: TextField<T extends ExpandItem>(key: keyof T & string, label: string, 
 
 - `ExpandList` owns selection, which card is open, and the hotkeys (`useHotkeys` from `react-hotkeys-hook`, disabled while focus is in an input, textarea or contenteditable). It reads and writes through `useCollection<T>`.
 - `ExpandCard` is exported separately so another block's app code can render the card without the list. It never imports another pattern.
-- Status handling: `status === "loading"` renders `LoadingState`, `"error"` renders `ErrorState` with a reload callback, and an empty `items` array renders `EmptyState`.
+- Status handling: `status === "loading"` renders `LoadingState`, `"error"` renders `ErrorState` whose Retry reloads the page, and an empty `items` array renders `EmptyState`.
 - `DateField` uses `popover` plus `calendar`; `TextField` uses `popover` plus `input`. A checklist field is an app-supplied `ExpandField` and not shipped.
-- Shadcn components used: button, input, textarea, popover, calendar, checkbox, badge, tooltip, kbd, scroll-area. `separator` and `card` are not required.
+- Shadcn components used: button, input, textarea, popover, calendar, checkbox, badge, tooltip, kbd, scroll-area. `separator` and `card` are not required. The default `onError` calls `toast` from `sonner`; the app's single `AppShell` mounts the `Toaster` and `TooltipProvider`, and neither the block nor the demo renders them.
 
-`demo.tsx` default-exports `Demo`, a task list of about 8 items inside `AppShell` titled "Errands". Items have `title`, `notes`, `due` and `tags`: three have a due date, two have tags, one has notes, and the rest are title-only so most rows collapse to a bare line. One item has a very long title to show truncation. Two fields are configured (`due` as `DateField`, `tags` as `TextField`). The seed is passed to `useCollection("expand-demo", seed)`, so the demo needs no setup.
+`demo.tsx` default-exports `Demo` and renders no `AppShell`; the app provides it. It shows a task list of 8 items under an "Errands" header. Items have `title`, `notes`, `due` and `tags`: three have a due date, two have tags, one has notes, and the rest are title-only so most rows collapse to a bare line. One item has a very long title to show truncation. Two fields are configured (`due` as `DateField`, `tags` as `TextField`). The block reads collection `expand-in-place-demo` and is seeded through its `seed` prop, so the demo needs no setup. The header also holds a "Preview state" group (live, empty, loading, error) that swaps the list for the matching base state component, and a "Reset sample data" button.
 
 ## Sources
 

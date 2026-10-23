@@ -56,7 +56,7 @@ Full (window, 100% of the app area)
 - **Month grid:** small, pinned. Dots mark days with items, today is a filled circle, the selected date is outlined, adjacent-month days are dimmed.
 - **Upcoming list:** date headers, then rows of dot, time, title. Past items are dimmed.
 - **Footer:** expand/collapse toggle, count, Today button.
-- **Full toolbar and content:** step back/forward, Today, a List | Month segmented control, a filter field. List and Month are the only two views.
+- **Full toolbar and content:** step back/forward (a day in List, a month in Month), Today, the current date or month as a heading, a List | Month segmented control, and a "Find" field that filters by title. List and Month are the only two views.
 
 ## Interaction
 
@@ -73,7 +73,7 @@ Bare-letter keys are ignored while focus is in an input, textarea or contentedit
 | `e` | Toggle mini / full | Our design. Fantastical uses ⌘0 (S1-0012), which the browser reserves |
 | `t` | Go to today: grid month, selected date and list scroll | S5 ⌘T |
 | ← / → | Full Month view only: previous / next month | S5 (arrows jump a month) |
-| Backspace / Delete | Remove the selected row, with an Undo toast | S5 for delete; the Undo is our design (undo is unseen) |
+| Backspace / Delete | Remove the selected row, with an Undo toast | S5 for delete; the Undo is our design (undo is unseen). Needs a selected row and `onRemove`; Undo adds the item back under a new id |
 | Double-click a grid day | Put that date in the input as text and focus it | Text-sourced (S6) |
 
 **Focus rules**
@@ -95,7 +95,7 @@ Bare-letter keys are ignored while focus is in an input, textarea or contentedit
 | Nothing parsed | The whole text is the title and the other fields show "None". Add stays enabled. The partial-parse look is unseen, so this is our design |
 | Loading | `LoadingState` in the list region (and the full content area). The input stays visible, Add is disabled until `status` is `ready`. Our design, no source shows loading |
 | Error (load) | `ErrorState` with `onRetry` in place of the list. Grid and input stay, Add is disabled |
-| Error (write) | `add` rejects: keep the text in the input and show a toast. Our design, matching the base contract |
+| Error (write) | `onAdd` rejects: keep the text in the input and show a toast. A rejected `onRemove` also toasts and keeps the row. Our design, matching the base contract |
 | Long title | One line with an ellipsis in rows, grid cells and the footer (S1-0004, S2-0002). The parse card wraps the title to at most two lines |
 | Many items | The list scrolls inside its region and the grid stays pinned (S1-0010). A grid cell shows at most 3 dots (S1-0004). A month cell truncates overflow with no "+N more" (S2-0002) |
 
@@ -150,21 +150,23 @@ CONTRACT: type MiniFullProps<T> = {
   defaultDurationMinutes?: number
   emptyHint?: string
 }
-CONTRACT: QuickAdd(props: { value: string; onChange(v: string): void; onSubmit(): void; entry: ParsedEntry; disabled?: boolean; tags?: string[] }): JSX.Element
+CONTRACT: QuickAdd(props: { value: string; onChange(v: string): void; onSubmit(): void; entry: ParsedEntry; disabled?: boolean; tags?: string[]; inputRef?: RefObject<HTMLInputElement | null> }): JSX.Element
 CONTRACT: ParsePreview(props: { entry: ParsedEntry; onSubmit(): void; disabled?: boolean }): JSX.Element
-CONTRACT: UpcomingList<T>(props: { items: T[]; getStart: (item: T) => Date | undefined; selectedId?: string; onSelect(id: string): void; onOpen(id: string): void; renderRow?: MiniFullProps<T>["renderRow"] }): JSX.Element
-CONTRACT: MonthGrid(props: { month: Date; selected: Date; marked: Map<string, number>; onSelectDate(d: Date): void; onDoubleClickDate?(d: Date): void }): JSX.Element
+CONTRACT: UpcomingList<T extends { id: string; title: string }>(props: { items: T[]; getStart: (item: T) => Date | undefined; getEnd?: (item: T) => Date | undefined; getTag?: (item: T) => string | undefined; selectedId?: string; selectedDate?: Date; onSelect(id: string): void; onOpen(id: string): void; onTopDateChange?(d: Date): void; renderRow?: MiniFullProps<T>["renderRow"]; today?: Date; className?: string }): JSX.Element
+CONTRACT: MonthGrid(props: { month: Date; selected: Date; marked: Map<string, number>; onSelectDate(d: Date): void; onDoubleClickDate?(d: Date): void; today?: Date }): JSX.Element
 ```
 
-- `index.ts` also exports `MiniFullProps` and `ParsedEntry`.
+- `index.ts` exports `MiniFull`, `MiniFullProps`, `QuickAdd`, `ParsePreview`, `UpcomingList`, `MonthGrid`, `parseEntry` and `ParsedEntry`.
 - `parseEntry` is a small built-in parser, our design. It handles `today`, `tomorrow`, weekday names, `M/D`, `at 3pm` or `10am`, ranges like `10-11`, `/tag`, and quoted text that the parser leaves alone (S6, typing-sheet). Without a time the entry is all-day. With a start and no end, the end is `defaultDurationMinutes` later (default 30).
 - `MiniFull` holds its own state for input text, selected id, selected date and month. Mode is uncontrolled unless `mode` is passed.
-- Full mode renders inside `AppShell` with the panel as `sidebar`, the segmented control as `toolbar`, and the list or month as `children`. Mini mode renders the panel alone at a fixed width.
-- Base pieces: `useCollection` (in the demo, not the block), `EmptyState`, `LoadingState`, `ErrorState`, `AppShell`, and `useHotkeys` for the keys table.
-- shadcn components: `input`, `button`, `card`, `checkbox`, `label`, `badge`, `scroll-area`, `calendar` (for the month grid, with a custom day cell for dots; if that is awkward, a plain button grid is fine), `toggle-group`, `popover`, `command` (tag picker), `kbd`, `tooltip`, `sonner`, `separator`.
+- Full mode lays out the panel as a left column and the toolbar and content beside it, inside whatever box the app gives the block. It renders no `AppShell`: the app wraps everything in one, which also mounts the `Toaster` and `TooltipProvider`. Mini mode renders the panel alone, 320 px wide.
+- A parsed entry with no date lands all-day on the selected date. An item is all-day when `getStart` is local midnight and `getEnd` is undefined; a past item is one that ended before now.
+- `getTag` supplies the tag shown on list rows. `parse` replaces the built-in parser.
+- Base pieces: `EmptyState`, `LoadingState`, `ErrorState` and `useHotkeys`. `useCollection` is used in the demo, not the block.
+- shadcn components: `badge`, `button`, `card`, `input`, `kbd`, `separator`, `toggle-group`, `tooltip`, plus `sonner` for add and remove toasts. The month grid is a plain button grid.
 - No other pattern is imported and no new dependency is needed.
 
-**`demo.tsx`** default-exports `Demo`: a personal appointments and errands tracker with `useCollection<DemoEvent>("mini-full-demo", seed)`, `DemoEvent = { id; title; start: string; end?: string; allDay: boolean; tag?: "home" | "work" | "health" }`. About 12 seed items dated relative to the day of first load: one past item (dimmed), two on today, one all-day, two sharing a day, one with a very long title, and a few spread over the next month. It shows the mini panel on first render, an Expand button that switches to the full view, and ParsePreview filling as the user types. A small "simulate loading / error" toggle shows the other two states.
+**`demo.tsx`** default-exports `Demo`: a personal appointments and errands tracker with `useCollection<DemoEvent>("mini-full-demo", seed)`, `DemoEvent = { id; title; start: string; end?: string; allDay: boolean; tag?: "home" | "work" | "health" }`. Twelve seed items dated relative to the day of first load: one past item (dimmed), three on today (one all-day), two sharing tomorrow, one with a very long title, and a few spread over the next month. It shows the mini panel on first render, an Expand button that switches to the full view, and ParsePreview filling as the user types. It renders no `AppShell`; the app provides it. A "Preview state" toggle (Live, Empty, Loading, Error) shows the other states; adding an item from the empty preview returns to live.
 
 ## Sources
 

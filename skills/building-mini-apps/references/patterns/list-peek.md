@@ -56,7 +56,7 @@ Do not use it when:
 | / | Focuses the filter input | |
 | Home / End | Highlights first / last row | |
 
-All list keys are ignored while focus is in the filter input, any textarea, or a contenteditable (the base `useHotkeys` default), except Esc and ArrowDown in the filter input: Esc clears then blurs it, ArrowDown moves focus to the list and highlights the first row.
+List keys act only when focus is on the page body or inside the block, and never while typing in the filter input, a textarea or a contenteditable (the base `useHotkeys` default). Keys do nothing while focus is inside the open panel, except Esc, which closes it. The filter input has two keys of its own: Esc clears the text, then blurs the input; ArrowDown moves focus to the list and highlights the first row.
 
 **Focus rules.**
 
@@ -116,7 +116,7 @@ CONTRACT: type ListPeekProps<T extends ListPeekItem> = {
   renderLead?: (item: T) => ReactNode               // fixed-width leading column, e.g. an ID
   renderMeta?: (item: T) => ReactNode               // right-aligned, truncates first
   groupBy?: (item: T) => string                     // group band per distinct value, in first-seen order
-  filterText?: (item: T) => string                  // enables the filter input; default searches title
+  filterText?: (item: T) => string                  // text the filter input matches; default is the title
   onOpen?: (item: T) => void                        // Enter
   highlightedId?: string | null                     // controlled; omit for internal state
   onHighlightedIdChange?: (id: string | null) => void
@@ -136,9 +136,9 @@ Uses from the base:
 - `useCollection` in the demo only; `ListPeek` takes `items` and `status` as props and does not read the store.
 - `EmptyState`, `LoadingState`, `ErrorState` from `src/components/mini/states.tsx` for all list-area states.
 - `useHotkeys` from `react-hotkeys-hook` for all keys. Hold detection uses its `keydown` and `keyup` options, ignores `event.repeat`, and clears on window blur.
-- shadcn components, all pre-installed: `scroll-area`, `input`, `button`, `kbd`, `badge`, `separator`, `tooltip`. No new dependencies.
+- shadcn components, all pre-installed: `scroll-area`, `input`, `button` in the block; `badge` and `kbd` in the demo. No new dependencies.
 
-`demo.tsx`: a reading list of about 14 books stored with `useCollection("list-peek-books", seed)`. Fields: `id` ("BK-01"), `title`, `author`, `status` ("To read", "Reading", "Done"), `added` date, `notes`. Grouped by status; one title is deliberately very long; one group has a single item. `renderLead` shows the ID, `renderMeta` the author, `renderPeek` the title, a badge row, notes and dates. A small footer lists the keys with `kbd`. Buttons to simulate loading, error and empty make the state components visible.
+`demo.tsx` renders neither `AppShell` nor a toaster; the app wraps everything in one `AppShell`. It shows a reading list of 14 books stored with `useCollection("list-peek-demo", seed)`. Fields: `id` ("BK-01"), `title`, `author`, `status` ("To read", "Reading", "Done"), `added` date, `notes`. Grouped by status; one title is deliberately very long; one group has a single item. `renderLead` shows the ID, `renderMeta` the author, `renderPeek` the title, a badge row, notes and dates. A line under the list reports the item Enter opened, and a footer lists the keys with `kbd`. A "State preview (demo only)" button group (live, empty, loading, error) forces each state; the empty state offers "Restore sample books", and Retry in the error state returns to live.
 
 ## Sources
 

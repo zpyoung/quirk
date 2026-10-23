@@ -39,6 +39,7 @@ The block never calls an AI service. The app supplies a generator, which can be 
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
+- Notes list: a narrow column of note titles at the left of the block, with a New note button. The selected note fills the rest.
 - Header: title input and a two-segment toggle, `Mine` (user lines only) and `Enhanced` (both).
 - Body: one row per segment. User rows are editable and full color. Generated rows are read-only, muted, with a left rule and a hidden `Generated` label for screen readers.
 - Source button: appears on hover or keyboard focus of a generated row and opens the source popover.
@@ -53,7 +54,7 @@ The block never calls an AI service. The app supplies a generator, which can be 
 | `Mod+Enter` | Generate, or regenerate | Also fires inside the note text areas; this is the one binding that does |
 | `M` | Toggle Mine / Enhanced | Ignored while typing in an input or text area |
 | `ArrowDown` / `ArrowUp` | Move focus to next / previous row | Rows are focusable; inside a text area it moves the caret instead until the first or last line |
-| `Enter` on a user row | New empty user row below | Plain Enter in a text area; `Shift+Enter` is a line break |
+| `Enter` on a user row | New empty user row below | Plain Enter in a text area; `Shift+Enter` is a line break. In the title, Enter moves focus to the first row |
 | `Enter` on a generated row | Open its source popover | Same as clicking Source |
 | `Backspace` on an empty user row | Delete the row, focus the previous row | |
 | `Esc` | Close the popover; else cancel generation; else blur the row | One layer per press |
@@ -63,17 +64,18 @@ Focus rules:
 - Generate keeps focus on the button. When generation finishes, focus stays where it was and a polite live region reads `N lines added`.
 - Switching view keeps the focused row if it exists in the new view; otherwise focus goes to the title.
 - A new note focuses the first user row, showing the placeholder `Write notes...`.
+- A note opens in Enhanced when it already has generated lines, otherwise in Mine; each note remembers its own view for the session.
 
 | State | Shows |
 |---|---|
-| Collection empty | `EmptyState` with a `New note` action |
+| Collection empty | `EmptyState` with a `New note` action; the notes list also has a New note button |
 | Collection loading | `LoadingState` with the label `Loading notes` |
-| Collection load error | `ErrorState` with Retry that reloads the collection |
+| Collection load error | `ErrorState` with Retry, which reloads the page |
 | Note with no lines | One empty user row with the placeholder `Write notes...`; Generate is disabled |
 | Mine view, no user lines | Placeholder only, the same as a new note |
 | Enhanced view, nothing generated yet | Muted text `Nothing generated yet` and a Generate button in place of the body |
-| Generating | A status banner under the title, `Analyzing...` with Cancel; user rows stay editable; generated rows stream in below as the generator resolves |
-| Generation failed or cancelled | The banner turns into a one-line message with Retry; user lines are untouched and any previous generated lines are kept |
+| Generating | A status banner under the title, `Analyzing...` with Cancel; user rows stay editable; the generated rows replace the old ones all at once when the generator resolves |
+| Generation failed or cancelled | The banner turns into a one-line error message ("Generation cancelled" after Cancel) with Retry; user lines are untouched and any previous generated lines are kept |
 | Generated line with no source | Row shows a `No source` badge instead of the Source button |
 | Very long title | Wraps to two lines in the header, then truncates with the full title in a tooltip; the list in the demo truncates to one line |
 | Very long line | Wraps within the column; rows never scroll sideways |
@@ -101,7 +103,7 @@ Leave out:
 
 ## Block API
 
-Public exports of `index.ts`. Types:
+Public exports of `index.ts`: `AssistedNotes`, `AssistedNotesProps`, `NoteView`, `NoteViewProps`, `SourcePopover` and the types `NoteOrigin`, `SourceRef`, `NoteSegment`, `AssistedNoteItem` and `NoteViewMode`. Types:
 
 ```
 CONTRACT: type NoteOrigin = "user" | "generated"
@@ -118,24 +120,29 @@ CONTRACT: type AssistedNoteItem = { id: string; title: string; segments: NoteSeg
 Components:
 
 ```
-CONTRACT: AssistedNotes<T extends AssistedNoteItem>(props: {
+CONTRACT: type NoteViewMode = "mine" | "enhanced"
+
+CONTRACT: type AssistedNotesProps<T extends AssistedNoteItem> = {
   collection: string                         // useCollection name
   seed?: T[]
   onGenerate?: (note: T, signal: AbortSignal) => Promise<NoteSegment[]>
-  newNote?: () => T                          // factory for the empty state's New note action
+  newNote?: () => T                          // factory for the New note actions
   className?: string
-})
-CONTRACT: NoteView<T extends AssistedNoteItem>(props: {
+}
+CONTRACT: AssistedNotes<T extends AssistedNoteItem>(props: AssistedNotesProps<T>): JSX.Element
+
+CONTRACT: type NoteViewProps<T extends AssistedNoteItem> = {
   note: T
-  view: "mine" | "enhanced"
-  onViewChange: (v: "mine" | "enhanced") => void
+  view: NoteViewMode
+  onViewChange: (v: NoteViewMode) => void
   onChange: (patch: Partial<T>) => void      // title and user-segment edits
   onGenerate?: () => Promise<void>
   onCancel?: () => void
   generating?: boolean
   error?: Error
-})
-CONTRACT: SourcePopover(props: { segment: NoteSegment; onKeep?: (id: string) => void; children: ReactNode })
+}
+CONTRACT: NoteView<T extends AssistedNoteItem>(props: NoteViewProps<T>): JSX.Element
+CONTRACT: SourcePopover(props: { segment: NoteSegment; onKeep?: (id: string) => void; children: ReactNode })   // children is the trigger; without segment.source it renders children alone
 ```
 
 Rules the block enforces:
@@ -143,11 +150,11 @@ Rules the block enforces:
 - Generated lines are never editable. `Keep as mine` in the popover rewrites that segment to `origin: "user"` and drops its `source`.
 - The block writes through `useCollection(collection, seed).update`; a rejected write surfaces as a `sonner` toast and the on-screen note stays as typed.
 
-Base pieces: `useCollection` for items and `status`; `EmptyState`, `LoadingState`, `ErrorState` for the three collection states; `useHotkeys` from `react-hotkeys-hook` for the keys table (`enableOnFormTags` only on `mod+enter`). `AppShell` is the app's, not the block's.
+Base pieces: `useCollection` for items and `status`; `EmptyState`, `LoadingState`, `ErrorState` for the three collection states; `useHotkeys` from `react-hotkeys-hook` for the keys table (`enableOnFormTags` only on `mod+enter`). `AppShell`, with the `Toaster` and `TooltipProvider` it mounts, is the app's, not the block's or the demo's.
 
-shadcn components used (all pre-installed): `button`, `textarea`, `input`, `toggle-group`, `popover`, `scroll-area`, `badge`, `kbd`, `tooltip`, `separator`, `sonner`.
+shadcn components used (all pre-installed): `button`, `textarea`, `toggle-group`, `popover`, `scroll-area`, `badge`, `kbd`, `tooltip`. `registry-item.json` declares the npm `dependencies` `react-hotkeys-hook` and `sonner`.
 
-`demo.tsx` default-exports `Demo`: a volunteer garden-day planning log with 6 notes of 6 to 14 segments each, mixing user and generated lines. Each note carries a `transcript` string; the demo's `onGenerate` is a local function that waits about 1.2 s (honoring `signal`), then builds generated lines from sentences of that transcript, each with the sentence as `source.excerpt`. One note starts empty and one has a generated line with no source, so the demo shows both states.
+`demo.tsx` default-exports `Demo`: a volunteer garden-day planning log with 6 notes of up to 12 segments each, mixing user and generated lines, stored under collection `assisted-notes-demo`. Each note carries a `transcript` string; the demo's `onGenerate` is a local function that waits about 1.2 s (honoring `signal`), then builds generated lines from sentences of that transcript, each with the sentence as `source.excerpt`. One note starts empty, one has a generated line with no source, and one has a very long title, so the demo shows each state. A "Preview state" toggle group (live, empty, loading, error) swaps the block for the matching base state component.
 
 ## Sources
 
