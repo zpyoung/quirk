@@ -60,6 +60,10 @@ SELECTOR_RE = re.compile(rf"^{_COMPOUND}(?: +{_COMPOUND})*$")
 HEADER_RE = re.compile(r"^/\* mini-style: ([a-z0-9-]+) sha256=([0-9a-f]{64}) \*/$")
 COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 DECLARATION_RE = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+ROOT_BLOCK_RE = re.compile(r"(?<![\w.#\]:-])html:root\s*\{([^}]*)\}")
+DARK_BLOCK_RE = re.compile(r"(?<![\w.#\]:-])html\.dark\s*\{([^}]*)\}")
+
+MAX_CHROMA = 0.5
 
 AA_TEXT = 4.5
 AA_UI = 3.0
@@ -113,11 +117,15 @@ def parse_oklch(value: str) -> Tuple[float, float, float, float]:
         raise StyleError(f"not an oklch(L C H) or oklch(L C H / A%) colour: {value!r}")
     lightness, chroma, hue = (float(match.group(i)) for i in (1, 2, 3))
     alpha = float(match.group(4)) if match.group(4) is not None else 100.0
+    if not all(math.isfinite(n) for n in (lightness, chroma, hue, alpha)):
+        raise StyleError(f"oklch components must be finite numbers: {value!r}")
     if not 0.0 <= lightness <= 1.0:
         raise StyleError(f"oklch lightness must be 0-1: {value!r}")
-    if hue > 360.0:
+    if not 0.0 <= chroma <= MAX_CHROMA:
+        raise StyleError(f"oklch chroma must be 0-{MAX_CHROMA}: {value!r}")
+    if not 0.0 <= hue <= 360.0:
         raise StyleError(f"oklch hue must be 0-360: {value!r}")
-    if alpha > 100.0:
+    if not 0.0 <= alpha <= 100.0:
         raise StyleError(f"oklch alpha must be 0-100%: {value!r}")
     return lightness, chroma, hue, alpha / 100.0
 
@@ -237,6 +245,13 @@ def _check_value(source: str, field: str, value: Any) -> str:
     return text
 
 
+def _check_font_stack(source: str, field: str, stack: str) -> None:
+    lowered = " ".join(stack.lower().split())
+    for banned in BANNED_FONTS:
+        if banned in lowered:
+            raise _fail(source, field, f"must not name {banned!r}")
+
+
 def _check_tokens(source: str, mode: str, tokens: Any) -> None:
     if not isinstance(tokens, dict):
         raise _fail(source, mode, "must be an object of tokens")
@@ -265,6 +280,8 @@ def _check_extra_css(source: str, rules: Any) -> None:
         selector = rule["selector"]
         if not isinstance(selector, str) or "[data-mini=" not in selector:
             raise _fail(source, f"{field}.selector", "must contain [data-mini=")
+        if "\\" in selector:
+            raise _fail(source, f"{field}.selector", "must not contain a backslash")
         if not SELECTOR_RE.match(selector):
             raise _fail(
                 source, f"{field}.selector",
@@ -279,7 +296,12 @@ def _check_extra_css(source: str, rules: Any) -> None:
         for prop, value in declarations.items():
             if prop not in EXTRA_CSS_PROPERTIES:
                 raise _fail(source, f"{field}.declarations.{prop}", "property is not allowed")
-            _check_value(source, f"{field}.declarations.{prop}", value)
+            checked = _check_value(source, f"{field}.declarations.{prop}", value)
+            if "\\" in checked:
+                raise _fail(source, f"{field}.declarations.{prop}",
+                            "must not contain a backslash (CSS escapes can hide url( and fonts)")
+            if prop == "font-family":
+                _check_font_stack(source, f"{field}.declarations.{prop}", checked)
 
 
 def validate_style(data: Any, source: str, stem: Optional[str] = None) -> None:
@@ -308,10 +330,7 @@ def validate_style(data: Any, source: str, stem: Optional[str] = None) -> None:
     if not isinstance(fonts, dict) or set(fonts) != set(FONT_ROLES):
         raise _fail(source, "fonts", f"must have exactly {', '.join(FONT_ROLES)}")
     for role in FONT_ROLES:
-        stack = _check_value(source, f"fonts.{role}", fonts[role])
-        for banned in BANNED_FONTS:
-            if banned in stack.lower():
-                raise _fail(source, f"fonts.{role}", f"must not name {banned!r}")
+        _check_font_stack(source, f"fonts.{role}", _check_value(source, f"fonts.{role}", fonts[role]))
     packages = data["font_packages"]
     if not isinstance(packages, list):
         raise _fail(source, "font_packages", "must be a list")
@@ -451,14 +470,20 @@ def parse_header(text: str) -> Tuple[Optional[str], bool]:
 # --- hand-edited tokens files ---
 
 def parse_tokens_css(text: str, label: str) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Read the light (`html:root`) and dark (`html.dark`) token values from an app tokens file."""
+    """Read the effective light (`html:root`) and dark (`html.dark`) token values from a tokens file.
+
+    Every block of a selector is applied in file order, so a later declaration overrides an earlier one
+    as it does in CSS.
+    """
     stripped = COMMENT_RE.sub("", text)
     found: List[Dict[str, str]] = []
-    for selector, name in ((r"html:root", "html:root"), (r"html\.dark", "html.dark")):
-        match = re.search(selector + r"\s*\{([^}]*)\}", stripped)
-        if not match:
+    for pattern, name in ((ROOT_BLOCK_RE, "html:root"), (DARK_BLOCK_RE, "html.dark")):
+        blocks = pattern.findall(stripped)
+        if not blocks:
             raise StyleError(f"{label}: no {name} block")
-        values = {k[2:]: v.strip() for k, v in DECLARATION_RE.findall(match.group(1))}
+        values: Dict[str, str] = {}
+        for body in blocks:
+            values.update({k[2:]: v.strip() for k, v in DECLARATION_RE.findall(body)})
         missing = [k for k in TOKEN_KEYS if k not in values]
         if missing:
             raise StyleError(f"{label}: {name} is missing token(s): {', '.join(missing)}")

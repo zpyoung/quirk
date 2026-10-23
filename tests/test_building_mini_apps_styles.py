@@ -191,6 +191,42 @@ def _bad_important(d: Dict[str, Any]) -> None:
     d["extra_css"] = [_rule('[data-mini="row"]', opacity="0.5 !important")]
 
 
+def _bad_extra_css_sf_pro(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="title"]', font_family="'SF Pro Text', sans-serif")]
+
+
+def _bad_extra_css_new_york_cased(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="title"]', font_family="  'NEW   York', serif")]
+
+
+def _bad_escaped_url(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image=r"u\72l(https://example.com/pixel)")]
+
+
+def _bad_escaped_selector(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule(r'[data-mini="row"] [data-mini=a\62]', opacity="1")]
+
+
+def _bad_huge_chroma(d: Dict[str, Any]) -> None:
+    d["light"]["primary"] = "oklch(0.5 " + "9" * 400 + " 205)"
+
+
+def _bad_chroma_above_range(d: Dict[str, Any]) -> None:
+    d["light"]["primary"] = "oklch(0.5 0.51 205)"
+
+
+def _bad_hue_above_range(d: Dict[str, Any]) -> None:
+    d["dark"]["primary"] = "oklch(0.5 0.1 361)"
+
+
+def _bad_alpha_above_range(d: Dict[str, Any]) -> None:
+    d["dark"]["border"] = "oklch(0.5 0.1 200 / 101%)"
+
+
+def _bad_lightness_above_range(d: Dict[str, Any]) -> None:
+    d["dark"]["primary"] = "oklch(1.01 0.1 200)"
+
+
 def _bad_mode(d: Dict[str, Any]) -> None:
     d["extra_css"] = [_rule('[data-mini="row"]', mode="sepia", opacity="1")]
 
@@ -207,7 +243,10 @@ def _bad_missing_key(d: Dict[str, Any]) -> None:
     _bad_missing_token, _bad_extra_token, _bad_unparsable, _bad_alpha_background, _bad_package,
     _bad_remote_package, _bad_sf_pro, _bad_selector_without_hook, _bad_selector_comma,
     _bad_selector_class, _bad_selector_child_combinator, _bad_property, _bad_url, _bad_important,
-    _bad_mode, _bad_unknown_key, _bad_missing_key,
+    _bad_mode, _bad_unknown_key, _bad_missing_key, _bad_extra_css_sf_pro,
+    _bad_extra_css_new_york_cased, _bad_escaped_url, _bad_escaped_selector, _bad_huge_chroma,
+    _bad_chroma_above_range, _bad_hue_above_range, _bad_alpha_above_range,
+    _bad_lightness_above_range,
 ])
 def test_validation_rejects_bad_source(
     styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, mutate: Any
@@ -474,3 +513,34 @@ def test_check_file_on_a_missing_path_is_a_usage_error(build_styles: ModuleType,
 
 def test_conflicting_flags_are_a_usage_error(build_styles: ModuleType) -> None:
     assert build_styles.main(["--check", "--check-file", "x.css"], skill_root=SKILL_DIR) == 2
+
+
+def test_check_file_applies_a_later_override_block(
+    build_styles: ModuleType, tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
+) -> None:
+    text = (SKILL_DIR / "styles" / "dist" / "neutral-house.css").read_text()
+    path = tmp_path / "tokens.css"
+    path.write_text(text + "\nhtml:root { --muted-foreground: oklch(0.8 0.01 250); }\n", encoding="utf-8")
+    assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 1
+    assert "light: muted-foreground on background" in capsys.readouterr().err
+    path.write_text(text + "\nhtml.dark { --ring: oklch(0.25 0.01 250); }\n", encoding="utf-8")
+    assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 1
+    assert "dark: ring on background" in capsys.readouterr().err
+
+
+def test_later_override_can_repair_an_earlier_weak_block(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    css = styles.render_app_css(neutral)
+    weak = css.replace("--muted-foreground: oklch(0.5 0.01 250)", "--muted-foreground: oklch(0.8 0.01 250)", 1)
+    assert styles.tokens_failures(weak, "t.css", "neutral-house")
+    fixed = weak + "\nhtml:root { --muted-foreground: oklch(0.5 0.01 250); }\n"
+    assert styles.tokens_failures(fixed, "t.css", "neutral-house") == []
+
+
+def test_check_file_rejects_out_of_range_colours_quickly(
+    build_styles: ModuleType, tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
+) -> None:
+    text = (SKILL_DIR / "styles" / "dist" / "neutral-house.css").read_text()
+    path = tmp_path / "tokens.css"
+    path.write_text(text + "\nhtml:root { --primary: oklch(0.5 " + "9" * 400 + " 205); }\n", encoding="utf-8")
+    assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 1
+    assert "finite" in capsys.readouterr().err
