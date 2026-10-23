@@ -8,6 +8,30 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/** The value stored under `key` itself, never one inherited from Object.prototype ("constructor", "toString"). */
+export function ownValue<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined
+}
+
+/**
+ * Scroll offset that keeps the followed row in view, or null when it already is.
+ * With no row (playhead before the first entry) the list returns to the top.
+ */
+export function followScrollTop(
+  scrollTop: number,
+  clientHeight: number,
+  row: { top: number; height: number } | null
+): number | null {
+  if (!row) return scrollTop === 0 ? null : 0
+  if (row.top >= scrollTop && row.top + row.height <= scrollTop + clientHeight) {
+    return null
+  }
+  const target =
+    row.top < scrollTop ? row.top : row.top + row.height - clientHeight
+  const next = Math.max(0, target)
+  return next === scrollTop ? null : next
+}
+
 /** Stable sort by `at`, so callers may pass events and snapshots in any order. */
 export function sortByTime<T extends { at: number }>(items: T[]): T[] {
   return items
