@@ -1,0 +1,256 @@
+import { useCallback, useEffect, useRef, useState } from "react"
+import { toast } from "sonner"
+
+import {
+  applyItemAction,
+  endExpiredSnoozes,
+  evaluateRules,
+  initialRuleMemory,
+} from "./attention"
+import type {
+  AttentionItem,
+  FlagRule,
+  ItemAction,
+  RefreshState,
+  RuleMemory,
+  Tile,
+  TimelineEvent,
+} from "./types"
+
+const TICK_MS = 30_000
+const DEFAULT_REFRESH_MS = 30_000
+
+const toError = (cause: unknown) =>
+  cause instanceof Error ? cause : new Error(String(cause))
+
+function reportWrite(what: string, cause: unknown) {
+  toast.error(`Couldn't ${what}`, { description: toError(cause).message })
+}
+
+/**
+ * Wires a command center to its data: opens, appends to and resolves items as
+ * tiles change, returns snoozed items when their time passes, and runs the
+ * optional refresh loop. Pass `tiles` and `items` together: rule memory is
+ * seeded from the first non-empty `tiles`, so items must already be loaded then.
+ * `rules` should be a stable array.
+ */
+export function useCommandCenter(opts: {
+  tiles: Tile[]
+  items: AttentionItem[]
+  rules: FlagRule[]
+  onTileUpdate: (id: string, patch: Partial<Tile>) => Promise<void>
+  onItemAdd: (item: AttentionItem) => Promise<void>
+  onItemUpdate: (
+    id: string,
+    patch: Pick<AttentionItem, "timeline">
+  ) => Promise<void>
+  onRefresh?: (
+    signal: AbortSignal
+  ) => Promise<Array<Pick<Tile, "id"> & Partial<Tile>>>
+  refreshMs?: number
+}): {
+  now: number
+  announcement: string
+  refresh: RefreshState
+  pause(): void
+  resume(): void
+  retry(): void
+  act(itemId: string, action: ItemAction): void
+} {
+  const { tiles, items, rules, refreshMs = DEFAULT_REFRESH_MS } = opts
+  const hasRefresh = opts.onRefresh !== undefined
+
+  const [now, setNow] = useState(() => Date.now())
+  const [announcement, setAnnouncement] = useState("")
+  const [paused, setPaused] = useState(false)
+  const [refresh, setRefresh] = useState<RefreshState>(() =>
+    hasRefresh ? { state: "live", at: Date.now() } : { state: "none" }
+  )
+
+  const latest = useRef({ ...opts })
+  const itemsRef = useRef(items)
+  const memory = useRef<RuleMemory | null>(null)
+  const evaluating = useRef(false)
+  const dirty = useRef(false)
+  const inflight = useRef<AbortController | null>(null)
+  const lastSuccess = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    latest.current = opts
+  })
+  useEffect(() => {
+    itemsRef.current = items
+  }, [items])
+
+  // writes go through the callbacks; the ref is advanced at once so a second write sees the first
+  const appendEvents = useCallback(
+    (id: string, events: TimelineEvent[]): Promise<void> => {
+      const item = itemsRef.current.find((candidate) => candidate.id === id)
+      if (!item || events.length === 0) return Promise.resolve()
+      const timeline = [...item.timeline, ...events]
+      itemsRef.current = itemsRef.current.map((candidate) =>
+        candidate.id === id ? { ...candidate, timeline } : candidate
+      )
+      return latest.current
+        .onItemUpdate(id, { timeline })
+        .catch((cause: unknown) => {
+          itemsRef.current = latest.current.items
+          throw cause
+        })
+    },
+    []
+  )
+
+  const evaluate = useCallback(async () => {
+    if (evaluating.current) {
+      dirty.current = true
+      return
+    }
+    evaluating.current = true
+    try {
+      do {
+        dirty.current = false
+        const current = latest.current
+        if (current.tiles.length === 0) break
+        const at = Date.now()
+        memory.current = {
+          ...initialRuleMemory(itemsRef.current, current.rules, current.tiles),
+          ...memory.current,
+        }
+        const result = evaluateRules({
+          tiles: current.tiles,
+          items: itemsRef.current,
+          rules: current.rules,
+          previous: memory.current,
+          now: at,
+          newId: () => crypto.randomUUID(),
+        })
+        itemsRef.current = [...itemsRef.current, ...result.add]
+        const writes = [
+          ...result.add.map((item) => current.onItemAdd(item)),
+          ...result.append.map(({ id, events }) => appendEvents(id, events)),
+        ]
+        const outcomes = await Promise.allSettled(writes)
+        const failed = outcomes.find((outcome) => outcome.status === "rejected")
+        if (failed) {
+          itemsRef.current = latest.current.items
+          reportWrite("update the needs-you queue", failed.reason)
+        } else {
+          memory.current = result.memory
+        }
+      } while (dirty.current)
+    } finally {
+      evaluating.current = false
+    }
+  }, [appendEvents])
+
+  useEffect(() => {
+    void evaluate()
+  }, [tiles, rules, now, evaluate])
+
+  useEffect(() => {
+    function tick() {
+      const at = Date.now()
+      setNow(at)
+      const ended = endExpiredSnoozes(itemsRef.current, at)
+      if (ended.length === 0) return
+      const names = ended.map(({ id }) => {
+        const item = itemsRef.current.find((candidate) => candidate.id === id)
+        const tile = latest.current.tiles.find(
+          (candidate) => candidate.id === item?.tileId
+        )
+        return tile?.name ?? item?.title ?? ""
+      })
+      setAnnouncement(names.map((name) => `${name} is back`).join(". "))
+      for (const { id, events } of ended) {
+        appendEvents(id, events).catch((cause: unknown) =>
+          reportWrite("return a snoozed item", cause)
+        )
+      }
+    }
+    const timer = setInterval(tick, TICK_MS)
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [appendEvents])
+
+  const runRefresh = useCallback(async () => {
+    const onRefresh = latest.current.onRefresh
+    if (!onRefresh || inflight.current) return
+    const controller = new AbortController()
+    inflight.current = controller
+    try {
+      const patches = await onRefresh(controller.signal)
+      if (controller.signal.aborted) return
+      const at = Date.now()
+      await Promise.all(
+        patches.map((patch) =>
+          latest.current.onTileUpdate(patch.id, {
+            ...patch,
+            updatedAt: patch.updatedAt ?? at,
+          })
+        )
+      )
+      lastSuccess.current = at
+      setRefresh({ state: "live", at })
+    } catch (cause) {
+      if (controller.signal.aborted) return
+      setRefresh({
+        state: "stale",
+        since: lastSuccess.current,
+        error: toError(cause),
+      })
+    } finally {
+      if (inflight.current === controller) inflight.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasRefresh || paused) return
+    lastSuccess.current ??= Date.now()
+    const first = setTimeout(() => void runRefresh(), 0)
+    const timer = setInterval(() => void runRefresh(), refreshMs)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+      inflight.current?.abort()
+      inflight.current = null
+    }
+  }, [hasRefresh, paused, refreshMs, runRefresh])
+
+  const pause = useCallback(() => {
+    if (!hasRefresh) return
+    setPaused(true)
+    setRefresh({ state: "paused", at: lastSuccess.current })
+  }, [hasRefresh])
+
+  const resume = useCallback(() => {
+    if (!hasRefresh) return
+    setPaused(false)
+    setRefresh({ state: "live", at: lastSuccess.current ?? Date.now() })
+  }, [hasRefresh])
+
+  const retry = useCallback(() => {
+    void runRefresh()
+  }, [runRefresh])
+
+  const act = useCallback(
+    (itemId: string, action: ItemAction) => {
+      const item = itemsRef.current.find((candidate) => candidate.id === itemId)
+      if (!item) return
+      const at = Date.now()
+      setNow(at)
+      appendEvents(itemId, applyItemAction(item, action, at)).catch(
+        (cause: unknown) => reportWrite("save that change", cause)
+      )
+    },
+    [appendEvents]
+  )
+
+  return { now, announcement, refresh, pause, resume, retry, act }
+}
