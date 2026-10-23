@@ -204,6 +204,34 @@ def _bad_escaped_url(d: Dict[str, Any]) -> None:
     d["extra_css"] = [_rule('[data-mini="row"]', background_image=r"u\72l(https://example.com/pixel)")]
 
 
+def _bad_image_set_string(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image='image-set("https://example.com/pixel.png" 1x)')]
+
+
+def _bad_image_function(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image="image(oklch(0.5 0 0))")]
+
+
+def _bad_cross_fade(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image="-webkit-cross-fade(none, none, 50%)")]
+
+
+def _bad_element_function(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image="element(#other)")]
+
+
+def _bad_src_function(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image="src(var(--x))")]
+
+
+def _bad_quoted_string_outside_font_family(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background_image="linear-gradient('https://example.com/a.png')")]
+
+
+def _bad_single_quote_string(d: Dict[str, Any]) -> None:
+    d["extra_css"] = [_rule('[data-mini="row"]', background="'https://example.com/a.png'")]
+
+
 def _bad_escaped_selector(d: Dict[str, Any]) -> None:
     d["extra_css"] = [_rule(r'[data-mini="row"] [data-mini=a\62]', opacity="1")]
 
@@ -247,7 +275,9 @@ def _bad_missing_key(d: Dict[str, Any]) -> None:
     _bad_mode, _bad_unknown_key, _bad_missing_key, _bad_extra_css_sf_pro,
     _bad_extra_css_new_york_cased, _bad_escaped_url, _bad_escaped_selector, _bad_huge_chroma,
     _bad_chroma_above_range, _bad_hue_above_range, _bad_alpha_above_range,
-    _bad_lightness_above_range,
+    _bad_lightness_above_range, _bad_image_set_string, _bad_image_function, _bad_cross_fade,
+    _bad_element_function, _bad_src_function, _bad_quoted_string_outside_font_family,
+    _bad_single_quote_string,
 ])
 def test_validation_rejects_bad_source(
     styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, mutate: Any
@@ -258,6 +288,12 @@ def test_validation_rejects_bad_source(
     with pytest.raises(styles.StyleError) as err:
         styles.load_style(path)
     assert path.name in str(err.value)
+
+
+def test_font_family_may_quote_font_names(styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path) -> None:
+    data = _variant(neutral)
+    data["extra_css"] = [_rule('[data-mini="title"]', font_family='"Inter Variable", sans-serif')]
+    styles.load_style(_write(tmp_path, data))
 
 
 def test_neutral_house_must_have_empty_extra_css(
@@ -564,6 +600,53 @@ def test_check_file_passes_on_generated_css(
     assert f"{path}: passes AA" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("slug", sorted(p.stem for p in (STYLES_DIR / "dist").glob("*.css")))
+def test_check_file_passes_every_shipped_tokens_file(
+    build_styles: ModuleType, no_subprocess: List[str], capsys: pytest.CaptureFixture, slug: str
+) -> None:
+    path = STYLES_DIR / "dist" / f"{slug}.css"
+    assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 0, capsys.readouterr().err
+
+
+def test_every_slug_has_a_shipped_tokens_file(styles: ModuleType) -> None:
+    assert sorted(p.stem for p in (STYLES_DIR / "dist").glob("*.css")) == sorted(styles.SLUGS)
+
+
+def test_check_file_fails_when_split_tone_sidebar_remap_is_weakened(
+    build_styles: ModuleType, tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
+) -> None:
+    text = (STYLES_DIR / "dist" / "split-tone.css").read_text()
+    weak = text.replace("{ color: oklch(0.78 0.008 280); }", "{ color: oklch(0.4 0.008 280); }")
+    assert weak != text
+    path = tmp_path / "split-tone.css"
+    path.write_text(weak, encoding="utf-8")
+    assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 1
+    assert "light: muted-foreground on sidebar" in capsys.readouterr().err
+
+
+def test_parse_extra_css_round_trips_the_rendered_rules(styles: ModuleType) -> None:
+    source = styles.load_style(STYLES_DIR / "split-tone.json")
+    parsed = styles.parse_extra_css(styles.render_app_css(source))
+    assert parsed[2:] == source["extra_css"]
+
+
+def test_trailing_declaration_without_semicolon_is_gated(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    css = styles.render_app_css(neutral)
+    assert styles.tokens_failures(css + "\nhtml:root { --muted-foreground: oklch(0.8 0.01 250) }\n",
+                                  "t.css", "neutral-house")
+    assert styles.tokens_failures(css + "\nhtml.dark { --ring: oklch(0.25 0.01 250) }", "t.css", "neutral-house")
+
+
+def test_declaration_separator_forms_are_all_read(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    css = styles.render_app_css(neutral)
+    for block in (
+        "html:root { --a: 1;; --muted-foreground: oklch(0.8 0.01 250); }",
+        "html:root{--muted-foreground:oklch(0.8 0.01 250)}",
+        "html:root {\n  --muted-foreground :\n    oklch(0.8 0.01 250)\n}",
+    ):
+        assert styles.tokens_failures(css + "\n" + block + "\n", "t.css", "neutral-house"), block
+
+
 def test_check_file_fails_on_a_weak_hand_edit(
     build_styles: ModuleType, tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
 ) -> None:
@@ -651,6 +734,25 @@ def test_real_source_validates_and_passes_the_gate(styles: ModuleType, slug: str
     style = styles.load_style(STYLES_DIR / f"{slug}.json")
     assert style["slug"] == slug
     assert styles.contrast_failures(style) == []
+
+
+@pytest.mark.parametrize("slug", list(STUDIED_FROM))
+def test_extra_css_rules_that_set_both_colours_keep_text_readable(styles: ModuleType, slug: str) -> None:
+    for rule in styles.load_style(STYLES_DIR / f"{slug}.json")["extra_css"]:
+        declared = rule["declarations"]
+        if "color" in declared and "background-color" in declared:
+            ratio = styles.contrast_ratio(declared["color"], declared["background-color"])
+            assert ratio >= styles.AA_TEXT, f"{slug} {rule['selector']}: {ratio:.2f}:1"
+
+
+def test_dense_dark_selected_cells_set_a_background_with_their_text_colour(styles: ModuleType) -> None:
+    # staged-table tints selected cells with bg-accent, which is pale in light mode
+    style = styles.load_style(STYLES_DIR / "dense-dark.json")
+    rules = [r for r in style["extra_css"]
+             if r["selector"] == '[data-mini="row"][aria-selected="true"] [data-mini="cell"]']
+    assert len(rules) == 1 and rules[0]["mode"] == "both"
+    declared = rules[0]["declarations"]
+    assert styles.contrast_ratio(declared["color"], declared["background-color"]) >= styles.AA_TEXT
 
 
 @pytest.mark.parametrize("slug", list(STUDIED_FROM))
