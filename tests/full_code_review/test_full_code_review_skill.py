@@ -1,5 +1,7 @@
 import fnmatch
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import resolve_policy
@@ -13,6 +15,7 @@ RUN_WHEN = {"always", "has_description", "code_changed", "source_or_config_chang
 MODELS = {"sonnet", "opus", "haiku"}
 LENS_COUNT = 14
 DEEP_PROMPTS = ("_area-finder", "_contract", "_checker")
+ADJUDICATION_PROMPTS = ("_adjudicator", "_prover")
 
 
 def _front_matter(text):
@@ -114,6 +117,77 @@ def test_every_lens_opens_with_its_id_and_dimension():
         assert "You are the `%s` lens" % lens_id in text, lens_id
         if lens_id != "risk":  # risk returns a rating block, not findings
             assert '`dimension: "%s"`' % lens_id in text, lens_id
+
+
+def test_adjudication_prompts_are_agent_prompts_outside_the_lens_roster():
+    assert not set(ADJUDICATION_PROMPTS) & set(_lens_ids())
+    for lens_id, model in (("_adjudicator", "opus"), ("_prover", "sonnet")):
+        path = LENSES / (lens_id + ".md")
+        assert path.is_file(), path
+        meta = _front_matter(path.read_text(encoding="utf-8"))
+        assert meta["id"] == lens_id
+        assert meta["model"] == model
+        assert meta["escalate"] == "false"
+
+
+def test_adjudication_prompts_treat_input_as_untrusted_data():
+    for name in ADJUDICATION_PROMPTS:
+        assert "untrusted data" in _flat(LENSES / (name + ".md")), name
+
+
+def test_adjudication_step_is_described_before_cross_family_verification():
+    text = (SKILL_DIR / "references" / "orchestration.md").read_text(encoding="utf-8")
+    assert text.count("\n## Adjudication\n") == 1
+    assert text.index("\n## Adjudication\n") < text.index("\n## Cross-family verification")
+    section = text.split("\n## Adjudication\n", 1)[1].split("\n## ", 1)[0]
+    for term in ("_adjudicator", "_prover", "adjudication-input.json", "rulings.json",
+                 "prover-jobs.json", "verdicts.json", "adjudicated.json", "prv-"):
+        assert term in section, term
+
+
+def test_skill_md_points_at_adjudication_without_naming_its_prompts():
+    text = _flat(SKILL_MD)
+    for name in ADJUDICATION_PROMPTS:
+        assert "$REFS/lenses/" + name + ".md" not in text
+        assert name not in text
+    assert "apply_adjudication.py" not in text
+    assert 'follow "Adjudication" in `orchestration.md`' in text
+    assert "policy.adjudicator.enabled" in text
+
+
+def _adjudication_commands():
+    path = SKILL_DIR / "references" / "orchestration.md"
+    text = path.read_text(encoding="utf-8")
+    pattern = r'python3 "\$SCRIPTS/apply_adjudication\.py"([^`]*?)(?=python3 "\$SCRIPTS/|```|`|\Z)'
+    for match in re.finditer(pattern, text, re.S):
+        words = match.group(1).split()
+        yield words[0], match.group(1)
+
+
+def _defined_flags(subcommand):
+    script = SKILL_DIR / "scripts" / "apply_adjudication.py"
+    result = subprocess.run([sys.executable, str(script), subcommand, "--help"],
+                            capture_output=True, text=True, check=True)
+    return set(re.findall(r"(?<![\w-])--[a-z][a-z-]*", result.stdout))
+
+
+def test_adjudication_commands_use_subcommands_and_flags_the_script_defines():
+    required = {"prepare": {"--findings", "--out"},
+                "jobs": {"--input", "--rulings", "--out"},
+                "apply": {"--input", "--rulings", "--jobs", "--verdicts", "--out"}}
+    commands = list(_adjudication_commands())
+    assert {name for name, _ in commands} == set(required)
+    for name, command in commands:
+        used = set(re.findall(r"(?<!\S)--[a-z][a-z-]*", command))
+        assert used <= _defined_flags(name) | {"--help"}, (name, used)
+        assert required[name] <= used, (name, required[name] - used)
+
+
+def test_shell_guidance_reaches_every_adjudication_prompt():
+    for name in ADJUDICATION_PROMPTS:
+        text = (LENSES / (name + ".md")).read_text(encoding="utf-8")
+        assert "zsh" in text, name
+        assert ZSH_GUIDANCE in text, name
 
 
 def test_report_template_sections_match_the_markdown_renderer():

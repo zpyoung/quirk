@@ -27,6 +27,11 @@ With no paste, preselect every finding at or above the report's `run.severity_fl
 `comment_body.py` marks them `post: false` and the reviewer stager omits them. Show the
 proposed batch and obtain final approval.
 
+A finding the adjudicator marked Disputed (`adjudication.outcome: "disputed"`) is not
+preselected: `comment_body.py` lists it as not posted ("disputed finding (needs triage)")
+until triage selects it, and then it posts like any other finding. A plausible finding
+that is also Disputed still never posts.
+
 For a deep report, filter out plausible findings before proposing the batch;
 the poster independently blocks them if passed in `--ids`. The report's
 `repro` and `what_would_confirm` are review evidence, not permission to bypass
@@ -229,6 +234,8 @@ fp: 3f9a…
 
 Refunds issued after a rate change return a different amount than was charged.
 
+**In production:** Common path: any refund issued after a rate change.
+
 **Fix:** read the rate stored on the original charge.
 
 <details><summary>Details</summary>
@@ -238,7 +245,9 @@ Refunds issued after a rate change return a different amount than was charged.
 </details>
 ```
 
-No local `F#` or dimension tag is visible. Non-blocking and Question lead with their
+When a finding carries `production`, the visible section also holds one
+`**In production:** <label>: <path>` line between the reason and the fix (for the `N/A`
+label the path is the dimension). No local `F#` or dimension tag is visible. Non-blocking and Question lead with their
 disposition and add a fixed sentence under the lead. The overview is authored from
 Summary/verdict, tally, Risk, Assumptions, and any diff-only/head-movement limitation;
 its visible part is the verdict, tally, top blockers, and earlier-finding counts, and

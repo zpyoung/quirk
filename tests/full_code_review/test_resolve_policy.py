@@ -89,6 +89,7 @@ def test_builtin_roster_is_the_default_policy(tmp_path, monkeypatch):
     assert policy["severity_floor"] == "Should fix"
     assert policy["escalation"] is True
     assert policy["cross_family"] == {"enabled": False, "alias": None}
+    assert policy["adjudicator"] == {"enabled": True, "model": "opus"}
     assert _lens(policy, "risk")["batched"] is False
     assert _lens(policy, "risk")["source"] == "builtin"
     assert policy["sources"] == [{"kind": "builtin", "path": str(LENSES), "ref": None}]
@@ -204,6 +205,10 @@ def test_flow_mapping_is_rejected_with_file_and_line(tmp_path, monkeypatch):
     ("severity_floor: Blocker\n", "severity_floor"),
     ("models:\n  db: gpt\n", "models.db"),
     ("escalation: maybe\n", "escalation"),
+    ("adjudicator: maybe\n", "adjudicator"),
+    ("adjudicator: [a, b]\n", "adjudicator"),
+    ("adjudicator:\n  enabled: maybe\n", "adjudicator"),
+    ("models:\n  adjudicator: gpt\n", "models.adjudicator"),
 ])
 def test_invalid_values_exit_2(tmp_path, monkeypatch, text, fragment):
     repo = _repo(tmp_path)
@@ -639,3 +644,51 @@ def test_non_string_lens_id_exits_2_naming_the_file(tmp_path, monkeypatch):
 ])
 def test_matches_lets_double_star_segments_span_zero_directories(path, pattern, expected):
     assert m._matches(path, pattern) is expected
+
+
+def test_adjudicator_can_be_disabled_by_a_pack(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = tmp_path / "pack"
+    _write(pack / "pack.yaml", "adjudicator:\n  enabled: false\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, pack=pack, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["adjudicator"] == {"enabled": False, "model": "opus"}
+
+
+def test_review_md_overrides_a_pack_adjudicator_setting(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = tmp_path / "pack"
+    _write(pack / "pack.yaml", "adjudicator:\n  enabled: false\n")
+    _write(repo / "REVIEW.md", "---\nadjudicator:\n  enabled: true\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, pack=pack, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["adjudicator"]["enabled"] is True
+
+
+def test_adjudicator_unknown_subkey_warns_without_error(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nadjudicator:\n  enabled: false\n  strict: true\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["adjudicator"]["enabled"] is False
+    assert any("adjudicator" in w and "strict" in w for w in policy["warnings"])
+
+
+def test_models_adjudicator_lands_in_policy_without_an_unknown_lens_warning(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nmodels:\n  adjudicator: sonnet\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["adjudicator"] == {"enabled": True, "model": "sonnet"}
+    assert not any("adjudicator" in w for w in policy["warnings"])
+    assert "adjudicator" not in [lens["id"] for lens in policy["lenses"]]
+    assert "adjudicator" not in [entry["id"] for entry in policy["skipped"]]
+
+
+def test_escalation_false_leaves_the_adjudicator_model_opus(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nescalation: false\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["escalation"] is False
+    assert policy["adjudicator"]["model"] == "opus"
