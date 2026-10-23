@@ -212,3 +212,11 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P2
 - **Proposed owner**: unassigned
+
+## DEFER-26: making-videos: ship a scene-kit build helper
+- **Deferred**: 2026-10-23
+- **Session context**: Skill review after the 2026-10-23 stacking-prs explainer; the other five recommendations shipped on zpyoung/video-stack-trial
+- **Why deferred**: Two runs each hand-built their own way to expand a shared CSS head into every composition and write index.html audio tags from lines.json and scene times (2026-10-23 stacking-prs: kit/build.py with @@HEAD@@ substitution, kit/index.py, kit/scenes.json; the 2026-10-22 explainer did it differently). Two data points don't fix a shape; wait for a third run to confirm the pattern before building it.
+- **Estimated effort**: M
+- **Priority**: P3
+
