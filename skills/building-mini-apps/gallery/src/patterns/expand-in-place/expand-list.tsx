@@ -125,6 +125,8 @@ export function ExpandList<T extends ExpandItem>({
   const [failedSaves, setFailedSaves] = useState(0)
   const rowButtons = useRef(new Map<string, HTMLButtonElement>())
   const refocusId = useRef<string | null>(null)
+  // the store publishes an edit only after its write lands, so props lag what the user already typed
+  const typedTitles = useRef(new Map<string, string>())
 
   const ready = status === "ready"
   const selected = items.some((item) => item.id === selectedId) ? selectedId : null
@@ -141,13 +143,22 @@ export function ExpandList<T extends ExpandItem>({
   function closeOpenCard(): string | null {
     if (openId === null) return null
     const closing = items.find((item) => item.id === openId)
+    const title = typedTitles.current.get(openId) ?? closing?.title ?? ""
+    typedTitles.current.delete(openId)
     setOpenId(null)
     if (openId !== freshId) return openId
     setFreshId(null)
-    if (!closing || closing.title.trim() !== "") return openId
+    if (title.trim() !== "") return openId
+    // the remove queues behind any title write still in flight, so it lands last
     guard(remove(openId))
+    if (!closing) return items[items.length - 1]?.id ?? null
     const index = items.indexOf(closing)
     return (items[index - 1] ?? items[index + 1])?.id ?? null
+  }
+
+  function saveEdit(id: string, patch: Partial<T>) {
+    if (typeof patch.title === "string") typedTitles.current.set(id, patch.title)
+    guard(update(id, patch))
   }
 
   function collapse() {
@@ -169,11 +180,13 @@ export function ExpandList<T extends ExpandItem>({
     const created = newItem()
     closeOpenCard()
     refocusId.current = null
+    typedTitles.current.set(created.id, created.title)
     setFreshId(created.id)
     setSelectedId(created.id)
     setOpenId(created.id)
     add(created).catch((cause: unknown) => {
       onError(toError(cause))
+      typedTitles.current.delete(created.id)
       setOpenId(null)
       setFreshId(null)
     })
@@ -257,7 +270,7 @@ export function ExpandList<T extends ExpandItem>({
                 key={failedSaves}
                 item={item}
                 fields={fields}
-                onChange={(patch) => guard(update(item.id, patch))}
+                onChange={(patch) => saveEdit(item.id, patch)}
                 onClose={() => latest.current.collapse()}
               />
             </li>
