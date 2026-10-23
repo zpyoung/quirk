@@ -1,0 +1,6 @@
+{
+  "name": "conditional-status",
+  "title": "Conditional status",
+  "description": "A split button whose primary half changes state now and whose menu offers conditional variants, with a pure lifecycle that regresses a resolved item or escalates an archived one when its condition is met.",
+  "registryDependencies": ["button", "input", "popover"]
+}
