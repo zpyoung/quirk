@@ -336,6 +336,18 @@ def _why_and_fix(finding, warnings):
     return why, fix
 
 
+def _production_line(finding):
+    """The one-line production statement for a posted finding, or None when it has none."""
+    production = finding.get("production")
+    if not isinstance(production, dict):
+        return None
+    label = _text(production.get("label"))
+    path = _text(production.get("path"))
+    if not (label and path):
+        return None
+    return "**In production:** %s: %s" % (_line(label), _line(path))
+
+
 def _details_parts(finding, why, reviewer_note):
     body = _text(finding.get("body_md") or finding.get("issue"))
     if body and why and " ".join(body.split()) == why:
@@ -407,6 +419,9 @@ def finding_body(finding, *, seat, lead, note="", head_sha=None):
         parts.append("> **Reviewer note:** " + _quote(_md(note, inline=True))[2:])
     if why:
         parts.append(_paragraph(why))
+    production = _production_line(finding)
+    if production:
+        parts.append(production)
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, None))
@@ -427,6 +442,9 @@ def support_body(finding, *, disposition, discussion_id, note_id, note="", head_
     parts = ["**Agree · %s** · quirk full-code-review found this independently" % disposition]
     if why:
         parts.append(_paragraph(why))
+    production = _production_line(finding)
+    if production:
+        parts.append(production)
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, _text(note)))
@@ -715,6 +733,10 @@ def _author_bodies(raw, decisions=None):
                             "disposition": "Below floor", "fingerprint": memory.get("fingerprint")})
         elif finding.get("verification_status") == "plausible":
             omitted.append({"id": finding["id"], "reason": "plausible finding (never posted)",
+                            "file": finding["file"], "line": finding["line"],
+                            "severity": finding["severity"]})
+        elif decisions is None and (finding.get("adjudication") or {}).get("outcome") == "disputed":
+            omitted.append({"id": finding["id"], "reason": "disputed finding (needs triage)",
                             "file": finding["file"], "line": finding["line"],
                             "severity": finding["severity"]})
         elif decisions is None or row.get("slot") in _POSTED_SLOTS:

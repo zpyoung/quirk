@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.23
+
+### Changes
+- `quirk:full-code-review` now adjudicates every finding with an Opus pass and settles disagreements with Sonnet provers. Findings carry a production statement on the report and in posted comments. Turn it off per repo or org with `adjudicator: {enabled: false}` in a review pack or `REVIEW.md`.
+
 ## 2026.10.22
 
 ### Changes

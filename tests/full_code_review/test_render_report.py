@@ -1603,3 +1603,207 @@ def test_within_budget_run_shows_no_overrun_note():
     value["run"]["deep"]["elapsed_minutes"] = 10
     assert "exceeded its time budget" not in m.render_html(value, TEMPLATE)
     assert "exceeded its time budget" not in m.render_md(value)
+
+
+ADJ_TALLY = {"checked": 4, "agreed": 1, "dropped": 1, "fixes_replaced": 1, "unreachable": 1,
+             "survived": 1, "disputed": 1, "merged": 2}
+ADJ_LINE = ("Adjudicated 4: 1 agreed, 1 dropped, 1 fixes replaced, 1 unreachable, "
+            "1 survived, 1 disputed, 2 merged")
+
+
+def adjudicated_report(status="complete", **changes):
+    """report() with a production line on every finding and one finding per non-agreed outcome."""
+    value = report()
+    by_file = {item["file"]: item for item in value["findings"]}
+    for finding in value["findings"]:
+        finding["production"] = {"label": "Common path", "path": "POST /x -> handler <h> -> %s" % finding["file"]}
+    by_file["a.py"]["adjudication"] = {
+        "outcome": "disputed", "objection": "Guard <exists> upstream", "proof": None,
+        "what_would_settle": "Run <the> handler with empty input",
+        "severity_change": {"from": "Must fix", "to": "Must fix", "reason": "Kept at Must fix"}}
+    by_file["b.py"]["adjudication"] = {
+        "outcome": "fix_replaced", "objection": "Bound is off by one", "proof": "b.py:7 quote <x>",
+        "what_would_settle": None, "severity_change": None,
+        "original_fix": {"fix_md": "Old fix text.", "recommendation": "Add a bound."},
+        "merged_from": [{"file": "m.py", "line": "5", "dimension": "safety"}]}
+    by_file["z.py"]["adjudication"] = {"outcome": "unreachable", "objection": "No caller reaches it",
+                                       "proof": "grep shows no callers", "what_would_settle": None}
+    by_file["z.py"]["production"] = {"label": "Unreachable", "path": "no real entry point"}
+    adjudication = {"status": status, "model": "opus", "reason": None, "tally": dict(ADJ_TALLY),
+                    "checked_and_dropped": [{"file": "d<.py", "line": "8", "title": "Guarded <one>",
+                                             "reason": "A guard exists", "proof": "d.py:7 if x is None"}]}
+    if status != "complete":
+        adjudication.update(tally=None, checked_and_dropped=[],
+                            reason="turned off by policy" if status == "disabled" else "adjudicator <timed out>")
+    adjudication.update(changes)
+    value["run"]["adjudication"] = adjudication
+    return value
+
+
+def finding_chunk(rendered, file_name):
+    return next(chunk for chunk in re.findall(r'<article class="finding".*?</article>', rendered, re.S)
+                if 'data-file="%s:' % file_name in chunk)
+
+
+def test_adjudicated_finding_card_shows_production_badge_details_and_callout():
+    rendered = m.render_html(adjudicated_report(), TEMPLATE)
+    disputed = finding_chunk(rendered, "a.py")
+    assert '<span class="astryx-token" data-tone="yellow">Disputed</span>' in disputed
+    assert "POST /x -&gt; handler &lt;h&gt; -&gt; a.py" in disputed
+    assert '<div class="aside-note"><strong>What would settle this:</strong> Run &lt;the&gt; handler with empty input</div>' in disputed
+    assert 'class="adjudication"' in disputed and "Guard &lt;exists&gt; upstream" in disputed
+    assert "Kept at Must fix" in disputed
+    replaced = finding_chunk(rendered, "b.py")
+    assert '<span class="astryx-token" data-tone="blue">Fix replaced</span>' in replaced
+    assert "What would settle this" not in replaced
+    assert "b.py:7 quote &lt;x&gt;" in replaced and "Old fix text." in replaced and "Add a bound." in replaced
+    assert "m.py:5" in replaced and "safety" in replaced
+    unreachable = finding_chunk(rendered, "z.py")
+    assert '<span class="astryx-token" data-tone="gray">Unreachable</span>' in unreachable
+    assert "No caller reaches it" in unreachable and "grep shows no callers" in unreachable
+    assert "In production:</strong> Unreachable: no real entry point" in unreachable
+
+
+def test_production_line_follows_the_impact_paragraph():
+    value = adjudicated_report()
+    for finding in value["findings"]:
+        finding["impact"] = "Breaks it."
+    chunk = finding_chunk(m.render_html(value, TEMPLATE), "a.py")
+    assert chunk.index('class="f-impact"') < chunk.index('class="f-production"')
+
+
+def test_survived_gets_a_green_badge_and_agreed_gets_none():
+    value = adjudicated_report()
+    by_file = {item["file"]: item for item in value["findings"]}
+    by_file["a.py"]["adjudication"] = {"outcome": "survived", "objection": "Looks guarded",
+                                       "proof": "a.py:2 shows no guard"}
+    by_file["b.py"]["adjudication"] = {"outcome": "agreed"}
+    rendered = m.render_html(value, TEMPLATE)
+    survived = finding_chunk(rendered, "a.py")
+    assert '<span class="astryx-token" data-tone="green">Survived challenge</span>' in survived
+    assert "a.py:2 shows no guard" in survived
+    agreed = finding_chunk(rendered, "b.py")
+    assert "Survived challenge" not in agreed and "Disputed" not in agreed and "Fix replaced" not in agreed
+    assert 'class="adjudication"' not in agreed
+    assert 'class="f-production"' in agreed
+
+
+def test_findings_without_adjudication_fields_render_as_before():
+    rendered = m.render_html(report(), TEMPLATE)
+    assert '<p class="f-production"' not in rendered and '<details class="adjudication"' not in rendered
+    assert 'class="adjudication-summary"' not in rendered and "Not adjudicated" not in rendered
+    assert "Adjudicated" not in m.render_md(report())
+
+
+def test_template_styles_the_adjudication_elements():
+    assert ".f-production" in TEMPLATE
+    assert "details.adjudication" in TEMPLATE
+    assert ".dropped-proof" in TEMPLATE
+
+
+def test_checked_and_dropped_is_the_union_of_deep_and_adjudicator_entries():
+    value = adjudicated_report()
+    value["run"]["deep"] = {"enabled": True, "checked_and_dropped": [
+        {"file": "deep.py", "line": "1", "title": "Deep drop", "reason": "Expected"}]}
+    rendered = m.render_html(value, TEMPLATE)
+    assert "<summary>Checked and dropped (2)</summary>" in rendered
+    assert "deep.py:1" in rendered and "d&lt;.py:8" in rendered
+    assert "Guarded &lt;one&gt;" in rendered and "d.py:7 if x is None" in rendered
+    assert rendered.count("dropped-proof") >= 1
+    md = m.render_md(value)
+    assert "<details><summary>Checked and dropped (2)</summary>" in md
+    assert "- `deep.py:1` — **Deep drop**: Expected" in md
+    assert "- `d<.py:8` — **Guarded <one>**: A guard exists" in md
+    assert "Proof: d.py:7 if x is None" in md
+
+
+def test_adjudicator_only_dropped_entries_render_with_zero_findings():
+    value = adjudicated_report()
+    value["findings"] = []
+    rendered = m.render_html(value, TEMPLATE)
+    assert "Checked and dropped (1)" in rendered
+    assert not parse(rendered).find("article", "finding")
+    assert "Checked and dropped (1)" in m.render_md(value)
+
+
+def test_complete_summary_line_in_html_markdown_and_stdout(tmp_path):
+    value = adjudicated_report()
+    assert ADJ_LINE in m.render_html(value, TEMPLATE)
+    md = m.render_md(value)
+    assert md.index("**Tally:**") < md.index(ADJ_LINE) < md.index("**Verdict:**")
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 0 and payload["adjudication"] == ADJ_LINE
+
+
+def test_failed_and_disabled_summary_lines(tmp_path):
+    failed = adjudicated_report("failed")
+    assert "⚠️ Not adjudicated: adjudicator &lt;timed out&gt;" in m.render_html(failed, TEMPLATE)
+    assert "⚠️ Not adjudicated: adjudicator <timed out>" in m.render_md(failed)
+    rc, payload, _, _ = invoke(tmp_path, failed)
+    assert rc == 0 and payload["adjudication"] == "⚠️ Not adjudicated: adjudicator <timed out>"
+    disabled = adjudicated_report("disabled")
+    assert "Not adjudicated (turned off by policy)" in m.render_html(disabled, TEMPLATE)
+    assert "Not adjudicated (turned off by policy)" in m.render_md(disabled)
+    assert "⚠️ Not adjudicated" not in m.render_md(disabled)
+    rc, payload, _, _ = invoke(tmp_path, disabled)
+    assert payload["adjudication"] == "Not adjudicated (turned off by policy)"
+
+
+def test_failed_adjudication_carrying_a_tally_exits_2(tmp_path):
+    value = adjudicated_report("failed", tally=dict(ADJ_TALLY))
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 2 and "run.adjudication.tally" in payload["error"]
+
+
+def test_disabled_adjudication_carrying_a_dropped_entry_exits_2(tmp_path):
+    entry = {"file": "d.py", "line": "8", "title": "Guarded", "reason": "A guard exists"}
+    value = adjudicated_report("disabled", checked_and_dropped=[entry])
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 2 and "run.adjudication.checked_and_dropped" in payload["error"]
+
+
+def test_failed_adjudication_with_null_tally_and_empty_dropped_still_renders_the_warning(tmp_path):
+    value = adjudicated_report("failed", tally=None, checked_and_dropped=[])
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 0 and payload["adjudication"] == "⚠️ Not adjudicated: adjudicator <timed out>"
+    assert "Checked and dropped" not in m.render_md(value)
+
+
+def test_stdout_omits_adjudication_when_the_run_has_none(tmp_path):
+    rc, payload, _, _ = invoke(tmp_path, report())
+    assert rc == 0 and "adjudication" not in payload
+
+
+def test_summary_pane_exists_for_an_adjudication_line_without_a_standfirst():
+    value = adjudicated_report()
+    value["meta"].pop("standfirst_md")
+    value.pop("risk")
+    rendered = m.render_html(value, TEMPLATE)
+    assert 'id="pane-summary"' in rendered and ADJ_LINE in rendered
+
+
+def test_markdown_findings_carry_production_and_outcome():
+    md = m.render_md(adjudicated_report())
+    assert "**In production:** Common path: POST /x -> handler <h> -> a.py" in md
+    assert "**Adjudication:** Disputed" in md
+    assert "**What would settle this:** Run <the> handler with empty input" in md
+    assert "**Adjudication:** Fix replaced" in md
+    assert "**Adjudication:** Unreachable" in md
+    assert "What would settle this" not in md.split("### F2")[1]
+    assert "Agreed" not in md
+
+
+def test_handoff_payload_carries_production_and_adjudication():
+    prepared, _ = m._prepare_report(adjudicated_report())
+    first = m.handoff_payload(prepared)["findings"][0]
+    assert first["production"]["label"] == "Common path"
+    assert first["adjudication"]["outcome"] == "disputed"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_page_export_names_production_and_outcome():
+    paste = run_page_export(m.render_html(adjudicated_report(), TEMPLATE), {"__seat": "author"})
+    handoff = paste.split(validate_triage.HANDOFF_DELIM)[1]
+    assert "In production: Common path: POST /x -> handler &lt;h> -> a.py" in handoff
+    assert "Adjudication: Disputed" in handoff
+    assert "Adjudication: Fix replaced" in handoff

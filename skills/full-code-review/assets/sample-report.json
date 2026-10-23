@@ -46,7 +46,31 @@
     ],
     "source_access": "author-worktree",
     "mutation_consent": true,
-    "notes_md": "All twelve applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than the forge's file-contents API at `?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`abc123ab`) and the tree was clean for the whole run."
+    "notes_md": "All twelve applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than the forge's file-contents API at `?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`abc123ab`) and the tree was clean for the whole run.",
+    "adjudication": {
+      "status": "complete",
+      "model": "opus",
+      "reason": null,
+      "tally": {
+        "checked": 4,
+        "agreed": 2,
+        "dropped": 1,
+        "fixes_replaced": 0,
+        "unreachable": 0,
+        "survived": 1,
+        "disputed": 0,
+        "merged": 0
+      },
+      "checked_and_dropped": [
+        {
+          "file": "src/inventory/ledger.py",
+          "line": "140",
+          "title": "`_prune` may delete a live ledger",
+          "reason": "The prune only removes files whose mtime is older than the 90-day window.",
+          "proof": "ledger.py:131 skips any file whose mtime is inside the window before it unlinks."
+        }
+      ]
+    }
   },
   "risk": {
     "level": "Low",
@@ -136,7 +160,18 @@
         ]
       },
       "impact": "Branch and local reviews silently lose their memory, so every prior finding comes back as new and remembered decisions are dropped.",
-      "fix_md": "Add `--repo` to the `reconcile` and `check` subcommands and pass it through to `validate_snapshot`."
+      "fix_md": "Add `--repo` to the `reconcile` and `check` subcommands and pass it through to `validate_snapshot`.",
+      "production": {
+        "label": "Common path",
+        "path": "review.py reconcile and check subcommands, run on every branch or local review"
+      },
+      "adjudication": {
+        "outcome": "survived",
+        "objection": "Both subcommands may inherit --repo from the parent parser.",
+        "proof": "ledger.py:857 builds the reconcile and check subparsers without a --repo argument, so validate_snapshot falls back to the process cwd.",
+        "what_would_settle": null,
+        "severity_change": null
+      }
     },
     {
       "severity": "Should fix",
@@ -168,7 +203,14 @@
         "human_context": []
       },
       "impact": "Two unrelated reviews running at once block each other on every ledger save, and each save gets slower as the ledger grows.",
-      "fix_md": "Scope the lock per target and make `_prune` stat the file mtime instead of decoding every ledger."
+      "fix_md": "Scope the lock per target and make `_prune` stat the file mtime instead of decoding every ledger.",
+      "production": {
+        "label": "Edge case",
+        "path": "two reviews running at once against the same state directory"
+      },
+      "adjudication": {
+        "outcome": "agreed"
+      }
     },
     {
       "severity": "Nit",
@@ -210,7 +252,14 @@
         "human_context": []
       },
       "impact": "Callers have to read the body to learn when memory is discarded, which is the contract most likely to be broken by a later edit.",
-      "fix_md": "Add a docstring and `Sequence[str]` annotations to `load_snapshot`."
+      "fix_md": "Add a docstring and `Sequence[str]` annotations to `load_snapshot`.",
+      "production": {
+        "label": "N/A",
+        "path": "comments"
+      },
+      "adjudication": {
+        "outcome": "agreed"
+      }
     }
   ],
   "assumptions": [

@@ -320,12 +320,11 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Diff the Chrome child's environment, rlimits and process QoS under pytest against a plain python3 parent; until then, browser tests can be run by calling the test functions directly with hand-built fixtures.
 
-## BUG-39: Deep-sandbox timeout test fails under machine load
-- **Observed**: 2026-10-22
-- **File**: tests/full_code_review/test_deep_sandbox.py:358
-- **Description**: test_timeout_kills_descendants_instead_of_only_the_parent asserts the 1 s exec timeout returns within 4 s of wall time. During a full-suite run alongside other heavy work (renders, a second test run) it failed in two consecutive full-suite runs (load average about 7). Run alone it passed 8 of 8 times, and the whole tests/full_code_review/ directory passed (1599 tests); earlier full-suite runs the same day passed. The wall-clock bound is close enough to the real duration that load pushes it over.
-- **Introduced by**: pre-dates this session (full-code-review is untouched by the making-videos branch)
-- **Severity**: low
+## BUG-39: deep_sandbox timing tests flake under full-suite load
+- **Observed**: 2026-10-23
+- **File**: tests/full_code_review/test_deep_sandbox.py:362
+- **Description**: Full runs of tests/full_code_review failed spuriously three times during the adjudicator branch. Twice the failure was identified: once test_background_child_holding_pipes_does_not_mask_a_clean_exit, once test_timeout_kills_descendants_instead_of_only_the_parent (assert result["timed_out"] is True failed at :362). The third failing test was not captured. Each time, an immediate full rerun passed. The two identified tests pass when run alone (5/5 for :362), and deep_sandbox.py and its tests are unchanged on the branch. Timeout and elapsed-time bounds look load-sensitive, so wave gates and the adversarial-review prepass go red until rerun. On 2026-10-22 the :358 test also failed in two consecutive full-suite runs at load average about 7, while passing 8 of 8 alone; its 4 s wall-clock bound on a 1 s timeout sits close to the real duration.
+- **Severity**: medium
 - **Proposed fix**: Measure the timeout path with a generous bound (e.g. < 10 s) or assert on timed_out and the child marker only, not wall time.
 - **Blocker for**: a green full-suite gate on a busy machine
 

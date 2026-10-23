@@ -581,6 +581,18 @@ def test_inline_body_leads_with_impact_and_puts_fix_line_before_details():
     assert warnings == []
 
 
+def test_inline_body_puts_production_line_between_impact_and_fix():
+    finding = {"title": "Behavior", "impact": "Totals drift.", "body_md": "Observed behavior.",
+               "fix_md": "Round once.",
+               "production": {"label": "Edge case", "path": "refund with a zero-rated item"}}
+    entry, warnings = _plan_one(finding, slot="fix")
+    body = entry["body"]
+    line = "**In production:** Edge case: refund with a zero-rated item"
+    assert body.index("Totals drift.") < body.index(line) < body.index("**Fix:** Round once.")
+    assert body.index("**Fix:** Round once.") < body.index("<summary>Details")
+    assert warnings == []
+
+
 def test_inline_body_warnings_from_comment_body_reach_staging_warnings():
     entry, warnings = _plan_one({"title": "Behavior", "body_md": "Observed behavior."}, slot="fix")
     assert any("impact missing" in warning for warning in warnings)
