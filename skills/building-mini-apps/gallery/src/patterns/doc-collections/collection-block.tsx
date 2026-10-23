@@ -95,7 +95,7 @@ export function CollectionBlock<T extends DocRecord>({
   return (
     <section aria-label={def.name} className="my-4">
       <div className="flex h-[30px] items-center gap-2">
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{def.name}</h2>
+        <h2 data-mini="group-header" className="min-w-0 flex-1 truncate text-sm font-semibold">{def.name}</h2>
         <Input
           type="search"
           aria-label={`Search ${def.name}`}
@@ -145,14 +145,15 @@ export function CollectionBlock<T extends DocRecord>({
                 key={row.id}
                 id={rowDomId(row.id)}
                 role="row"
+                data-mini="row"
                 aria-selected={row.id === selectedId}
                 onClick={() => onSelect(row.id)}
                 className="h-[30px] border-b last:border-b-0 hover:bg-muted/50 aria-selected:bg-accent"
               >
-                <td role="gridcell" className="px-2 text-right text-xs text-muted-foreground tabular-nums">
+                <td role="gridcell" data-mini="cell" className="px-2 text-right text-xs text-muted-foreground tabular-nums">
                   {index + 1}
                 </td>
-                <td role="gridcell" className="max-w-56 px-2">
+                <td role="gridcell" data-mini="cell" className="max-w-56 px-2">
                   <div className="flex items-center gap-1">
                     <span className="min-w-0 flex-1 truncate" title={row.title}>
                       {row.title}
@@ -176,6 +177,7 @@ export function CollectionBlock<T extends DocRecord>({
                   <td
                     key={field.key}
                     role="gridcell"
+                    data-mini="cell"
                     className={cn("px-2 whitespace-nowrap", field.type === "number" && "text-right tabular-nums")}
                   >
                     <Cell field={field} value={row.props[field.key] ?? null} />

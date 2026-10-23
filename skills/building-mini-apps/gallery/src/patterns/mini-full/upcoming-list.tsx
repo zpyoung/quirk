@@ -144,6 +144,7 @@ export function UpcomingList<T extends { id: string; title: string }>({
       {groups.map((group) => (
         <section key={group.key} data-date={group.key} aria-label={formatHeader(group.date, today)}>
           <h3
+            data-mini="group-header"
             className={cn(
               "px-2 pt-2 pb-1 text-[0.65rem] font-medium tracking-wide text-muted-foreground",
               group.key < todayKey && "opacity-60"
@@ -166,6 +167,7 @@ export function UpcomingList<T extends { id: string; title: string }>({
                     <button
                       type="button"
                       data-row-id={item.id}
+                      data-mini="row"
                       aria-current={selected ? "true" : undefined}
                       onClick={() => onSelect(item.id)}
                       onDoubleClick={() => onOpen(item.id)}

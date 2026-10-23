@@ -32,7 +32,7 @@ export function BoardLayout(props: LayoutProps) {
           aria-label={`${column.label}, ${column.items.length}`}
           className="flex w-[260px] shrink-0 flex-col rounded-lg bg-muted/40"
         >
-          <header className="flex h-8 shrink-0 items-center gap-2 px-2 text-xs">
+          <header data-mini="group-header" className="flex h-8 shrink-0 items-center gap-2 px-2 text-xs">
             <span className="min-w-0 truncate font-medium">{column.label}</span>
             <span className="text-muted-foreground tabular-nums">
               {column.items.length}

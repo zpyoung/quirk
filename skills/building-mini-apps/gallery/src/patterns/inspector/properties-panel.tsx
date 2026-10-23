@@ -298,7 +298,7 @@ function Section<T extends InspectorItem>({
   if (!section.optional) {
     return (
       <section aria-label={section.title} className="flex flex-col gap-1.5">
-        <h3 className="text-xs font-semibold">{section.title}</h3>
+        <h3 data-mini="group-header" className="text-xs font-semibold">{section.title}</h3>
         {fields}
       </section>
     )
@@ -315,6 +315,7 @@ function Section<T extends InspectorItem>({
         <Button
           variant="ghost"
           size="xs"
+          data-mini="group-header"
           className={cn(
             "justify-start px-1 disabled:opacity-100",
             open ? "font-semibold text-foreground" : "text-muted-foreground"

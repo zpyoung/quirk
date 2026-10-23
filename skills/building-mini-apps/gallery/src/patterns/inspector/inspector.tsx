@@ -417,6 +417,7 @@ function Workspace<T extends InspectorItem>({
             >
               <div
                 data-region="panel"
+                data-mini="panel"
                 role="region"
                 aria-label="Properties"
                 className="h-full min-h-0"

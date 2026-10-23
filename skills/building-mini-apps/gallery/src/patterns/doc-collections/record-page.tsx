@@ -105,6 +105,7 @@ export function RecordPage<T extends DocRecord>({
       <div key={revision} className={`${columnClass} py-6`}>
         <Textarea
           data-record-title
+          data-mini="title"
           rows={1}
           aria-label="Title"
           value={title}

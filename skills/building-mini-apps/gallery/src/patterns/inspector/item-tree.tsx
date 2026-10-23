@@ -152,6 +152,7 @@ export function ItemTree<T extends InspectorItem>({
                 else rowEls.current.delete(item.id)
               }}
               role="treeitem"
+              data-mini="row"
               aria-level={depth + 1}
               aria-selected={isSelected}
               aria-expanded={hasChildren ? expanded : undefined}

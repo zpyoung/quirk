@@ -260,6 +260,7 @@ export function ActionPalette<T extends PaletteItem>({
               {group.heading ? (
                 <div
                   aria-hidden
+                  data-mini="group-header"
                   className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground"
                 >
                   {group.heading}
@@ -417,6 +418,7 @@ function Row({
       <div
         id={id}
         role="option"
+        data-mini="row"
         aria-selected={selected}
         onClick={onSelect}
         className="flex h-full min-w-0 flex-1 items-center gap-3 pl-3"
