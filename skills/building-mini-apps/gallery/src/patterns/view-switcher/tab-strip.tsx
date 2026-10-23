@@ -198,7 +198,10 @@ export function TabStrip(props: TabStripProps) {
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <div ref={listRef} className="hidden min-w-0 overflow-x-auto sm:block">
+      <div
+        ref={listRef}
+        className="hidden min-w-0 overflow-x-auto overflow-y-hidden py-0.5 [scrollbar-width:none] sm:block [&::-webkit-scrollbar]:hidden"
+      >
         <TabsList className="h-8 w-max gap-0.5 bg-transparent p-0">
           {views.map((view) => (
             <TabsTrigger
