@@ -23,6 +23,20 @@ const DEFAULT_REFRESH_MS = 30_000
 const toError = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause))
 
+/**
+ * Per-item write lane: `confirmed` is the timeline last known to be stored and
+ * `queued` holds the events of each write not yet settled, oldest first.
+ */
+type Lane = {
+  confirmed: TimelineEvent[]
+  queued: TimelineEvent[][]
+  tail: Promise<void>
+}
+
+function timelineOf(lane: Lane): TimelineEvent[] {
+  return [...lane.confirmed, ...lane.queued.flat()]
+}
+
 function reportWrite(what: string, cause: unknown) {
   toast.error(`Couldn't ${what}`, { description: toError(cause).message })
 }
@@ -69,6 +83,11 @@ export function useCommandCenter(opts: {
 
   const latest = useRef({ ...opts })
   const itemsRef = useRef(items)
+  const lanes = useRef(new Map<string, Lane>())
+  const pendingAdds = useRef(new Map<string, AttentionItem>())
+  const announceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
   const memory = useRef<RuleMemory | null>(null)
   const evaluating = useRef(false)
   const dirty = useRef(false)
@@ -78,27 +97,70 @@ export function useCommandCenter(opts: {
   useEffect(() => {
     latest.current = opts
   })
+  const setTimeline = useCallback((id: string, timeline: TimelineEvent[]) => {
+    itemsRef.current = itemsRef.current.map((candidate) =>
+      candidate.id === id ? { ...candidate, timeline } : candidate
+    )
+  }, [])
+
+  // props lag the writes in flight, so unsettled timelines and adds are laid back over each snapshot
   useEffect(() => {
-    itemsRef.current = items
+    const unsaved: AttentionItem[] = []
+    for (const added of pendingAdds.current.values()) {
+      if (items.some((item) => item.id === added.id)) {
+        pendingAdds.current.delete(added.id)
+      } else {
+        unsaved.push(added)
+      }
+    }
+    itemsRef.current = [...items, ...unsaved].map((item) => {
+      const lane = lanes.current.get(item.id)
+      return lane ? { ...item, timeline: timelineOf(lane) } : item
+    })
   }, [items])
 
-  // writes go through the callbacks; the ref is advanced at once so a second write sees the first
+  useEffect(
+    () => () => {
+      clearTimeout(announceTimer.current)
+    },
+    []
+  )
+
+  // one write at a time per item, each built on the last confirmed timeline, so a failed write drops only its own events
   const appendEvents = useCallback(
     (id: string, events: TimelineEvent[]): Promise<void> => {
       const item = itemsRef.current.find((candidate) => candidate.id === id)
       if (!item || events.length === 0) return Promise.resolve()
-      const timeline = [...item.timeline, ...events]
-      itemsRef.current = itemsRef.current.map((candidate) =>
-        candidate.id === id ? { ...candidate, timeline } : candidate
-      )
-      return latest.current
-        .onItemUpdate(id, { timeline })
-        .catch((cause: unknown) => {
-          itemsRef.current = latest.current.items
-          throw cause
-        })
+      let lane = lanes.current.get(id)
+      if (!lane) {
+        lane = {
+          confirmed: item.timeline,
+          queued: [],
+          tail: Promise.resolve(),
+        }
+        lanes.current.set(id, lane)
+      }
+      const owner = lane
+      owner.queued.push(events)
+      setTimeline(id, timelineOf(owner))
+
+      const write = owner.tail.then(async () => {
+        const timeline = [...owner.confirmed, ...events]
+        let failed = true
+        try {
+          await latest.current.onItemUpdate(id, { timeline })
+          owner.confirmed = timeline
+          failed = false
+        } finally {
+          owner.queued.shift()
+          if (owner.queued.length === 0) lanes.current.delete(id)
+          if (failed) setTimeline(id, timelineOf(owner))
+        }
+      })
+      owner.tail = write.catch(() => undefined)
+      return write
     },
-    []
+    [setTimeline]
   )
 
   const evaluate = useCallback(async () => {
@@ -125,15 +187,23 @@ export function useCommandCenter(opts: {
           now: at,
           newId: () => crypto.randomUUID(),
         })
+        for (const item of result.add) pendingAdds.current.set(item.id, item)
         itemsRef.current = [...itemsRef.current, ...result.add]
         const writes = [
-          ...result.add.map((item) => current.onItemAdd(item)),
+          ...result.add.map((item) =>
+            current.onItemAdd(item).catch((cause: unknown) => {
+              pendingAdds.current.delete(item.id)
+              itemsRef.current = itemsRef.current.filter(
+                (candidate) => candidate.id !== item.id
+              )
+              throw cause
+            })
+          ),
           ...result.append.map(({ id, events }) => appendEvents(id, events)),
         ]
         const outcomes = await Promise.allSettled(writes)
         const failed = outcomes.find((outcome) => outcome.status === "rejected")
         if (failed) {
-          itemsRef.current = latest.current.items
           reportWrite("update the needs-you queue", failed.reason)
         } else {
           memory.current = result.memory
@@ -161,7 +231,14 @@ export function useCommandCenter(opts: {
         )
         return tile?.name ?? item?.title ?? ""
       })
-      setAnnouncement(names.map((name) => `${name} is back`).join(". "))
+      // blank first so a repeat of the same text is still a change the live region announces
+      setAnnouncement("")
+      clearTimeout(announceTimer.current)
+      announceTimer.current = setTimeout(
+        () =>
+          setAnnouncement(names.map((name) => `${name} is back`).join(". ")),
+        100
+      )
       for (const { id, events } of ended) {
         appendEvents(id, events).catch((cause: unknown) =>
           reportWrite("return a snoozed item", cause)
@@ -196,6 +273,7 @@ export function useCommandCenter(opts: {
           })
         )
       )
+      if (controller.signal.aborted) return
       lastSuccess.current = at
       setRefresh({ state: "live", at })
     } catch (cause) {
@@ -225,6 +303,8 @@ export function useCommandCenter(opts: {
 
   const pause = useCallback(() => {
     if (!hasRefresh) return
+    inflight.current?.abort()
+    inflight.current = null
     setPaused(true)
     setRefresh({ state: "paused", at: lastSuccess.current })
   }, [hasRefresh])
