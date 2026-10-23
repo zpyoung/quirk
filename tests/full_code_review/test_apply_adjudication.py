@@ -4,6 +4,7 @@ import copy
 import importlib
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -831,6 +832,17 @@ def test_recommendation_diff_fence_tolerates_trailing_whitespace(tmp_path, capsy
                       [fix_wrong("A1", replacement={"fix_md": "x", "recommendation": recommendation})],
                       verdicts={"A1": "adjudicator"})
     assert result["findings"][0]["recommendation"] == recommendation.strip()
+
+
+def test_unclosed_diff_fences_are_rejected_in_linear_time(tmp_path, capsys):
+    recommendation = "```diff\n" * 20000
+    mod, paths = build(tmp_path, capsys, [finding(1)],
+                       [fix_wrong("A1", replacement={"fix_md": "x", "recommendation": recommendation})])
+    started = time.monotonic()
+    code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+                    "--out", paths["jobs"], "--seed", "1")
+    assert code == 2 and "recommendation" in out["error"]
+    assert time.monotonic() - started < 2
 
 
 def stale_apply(tmp_path, capsys, findings, rulings, changed_rulings=None, changed_findings=None):
