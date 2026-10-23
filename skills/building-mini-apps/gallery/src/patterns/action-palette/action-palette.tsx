@@ -88,6 +88,11 @@ export function ActionPalette<T extends PaletteItem>({
   }, [])
 
   async function run(item: T, action: PaletteAction<T>) {
+    if (action.children) {
+      setSelectedId(item.id)
+      setOpenFor(item.id)
+      return
+    }
     closePanel()
     setSelectedId(item.id)
     if (!action.run) return
@@ -111,7 +116,7 @@ export function ActionPalette<T extends PaletteItem>({
   function runAt(index: number) {
     if (!selectedItem) return
     const action = actions[index]
-    if (action?.run) void run(selectedItem, action)
+    if (action && (action.run || action.children)) void run(selectedItem, action)
   }
 
   function move(delta: number) {
