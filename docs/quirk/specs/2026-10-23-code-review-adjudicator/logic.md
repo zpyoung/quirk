@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: touches >3 source files across skill docs, scripts, and tests)
 
 **Amendments:** none yet.
 
