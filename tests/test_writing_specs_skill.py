@@ -85,7 +85,11 @@ def test_ownership_paragraph_has_one_home() -> None:
 def test_no_stale_skill_name_references() -> None:
     """`docs/` is excluded: shipped specs are historical records of the pre-split name."""
     candidates = [
-        *REPO_ROOT.joinpath("skills").rglob("*.md"),
+        *(
+            path
+            for path in REPO_ROOT.joinpath("skills").rglob("*.md")
+            if "node_modules" not in path.parts
+        ),
         *REPO_ROOT.joinpath("commands").rglob("*.md"),
         *REPO_ROOT.joinpath(".claude-plugin").glob("*.json"),
         REPO_ROOT / "README.md",

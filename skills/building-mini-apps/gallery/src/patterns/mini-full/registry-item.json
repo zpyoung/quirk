@@ -1,0 +1,7 @@
+{
+  "name": "mini-full",
+  "title": "Mini and full quick-add panel",
+  "description": "A quick-add input with a live parse card, month grid and upcoming list that expands into a full list or month view of the same items.",
+  "dependencies": ["sonner"],
+  "registryDependencies": ["badge", "button", "card", "input", "kbd", "separator", "toggle-group", "tooltip"]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "inspector",
+  "title": "Inspector",
+  "description": "Item tree, canvas slot and a properties panel whose fields follow the selection, with multi-select Mixed values, inline rename and undoable delete.",
+  "dependencies": ["lucide-react", "react-hotkeys-hook", "sonner"],
+  "registryDependencies": [
+    "button",
+    "checkbox",
+    "collapsible",
+    "input",
+    "kbd",
+    "popover",
+    "resizable",
+    "scroll-area",
+    "select",
+    "tooltip"
+  ]
+}

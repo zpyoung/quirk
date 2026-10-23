@@ -1,0 +1,6 @@
+{
+  "name": "list-peek",
+  "title": "List peek",
+  "description": "Dense one-line-per-row list with j/k highlight and a click-or-Space peek side panel that follows the highlight.",
+  "registryDependencies": ["badge", "button", "input", "scroll-area"]
+}

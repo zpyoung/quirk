@@ -1,0 +1,7 @@
+{
+  "name": "doc-collections",
+  "title": "Doc collections",
+  "description": "A page of text and collection blocks; opening a row shows its properties above a free-text body.",
+  "dependencies": ["sonner"],
+  "registryDependencies": ["badge", "button", "checkbox", "command", "input", "popover", "separator", "textarea"]
+}

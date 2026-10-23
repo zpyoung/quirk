@@ -1,0 +1,138 @@
+{
+  "slug": "calm-paper",
+  "name": "Calm Paper",
+  "studied_from": [
+    "granola",
+    "craft"
+  ],
+  "radius": "0.75rem",
+  "fonts": {
+    "sans": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "heading": "'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif",
+    "data": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+  },
+  "font_packages": [
+    "@fontsource-variable/source-serif-4"
+  ],
+  "light": {
+    "background": "oklch(0.975 0.008 85)",
+    "foreground": "oklch(0.2 0.01 80)",
+    "card": "oklch(0.985 0.006 85)",
+    "card-foreground": "oklch(0.2 0.01 80)",
+    "popover": "oklch(0.99 0.005 85)",
+    "popover-foreground": "oklch(0.2 0.01 80)",
+    "primary": "oklch(0.25 0.01 80)",
+    "primary-foreground": "oklch(0.975 0.008 85)",
+    "secondary": "oklch(0.95 0.012 85)",
+    "secondary-foreground": "oklch(0.28 0.01 80)",
+    "muted": "oklch(0.95 0.012 85)",
+    "muted-foreground": "oklch(0.47 0.012 80)",
+    "accent": "oklch(0.93 0.035 140)",
+    "accent-foreground": "oklch(0.25 0.02 140)",
+    "destructive": "oklch(0.52 0.17 27)",
+    "border": "oklch(0.9 0.012 85)",
+    "input": "oklch(0.88 0.014 85)",
+    "ring": "oklch(0.5 0.02 80)",
+    "chart-1": "oklch(0.55 0.07 145)",
+    "chart-2": "oklch(0.62 0.09 55)",
+    "chart-3": "oklch(0.5 0.02 80)",
+    "chart-4": "oklch(0.65 0.07 240)",
+    "chart-5": "oklch(0.35 0.01 80)",
+    "sidebar": "oklch(0.975 0.008 85)",
+    "sidebar-foreground": "oklch(0.25 0.01 80)",
+    "sidebar-primary": "oklch(0.25 0.01 80)",
+    "sidebar-primary-foreground": "oklch(0.975 0.008 85)",
+    "sidebar-accent": "oklch(0.93 0.035 140)",
+    "sidebar-accent-foreground": "oklch(0.25 0.02 140)",
+    "sidebar-border": "oklch(0.9 0.012 85)",
+    "sidebar-ring": "oklch(0.5 0.02 80)",
+    "mini-accent": "oklch(0.45 0.07 145)",
+    "mini-accent-soft": "oklch(0.93 0.035 140)",
+    "mini-pending": "oklch(0.95 0.05 90)",
+    "mini-added": "oklch(0.94 0.05 145)",
+    "mini-removed": "oklch(0.94 0.04 25)"
+  },
+  "dark": {
+    "background": "oklch(0.2 0.008 80)",
+    "foreground": "oklch(0.93 0.01 85)",
+    "card": "oklch(0.23 0.009 80)",
+    "card-foreground": "oklch(0.93 0.01 85)",
+    "popover": "oklch(0.25 0.009 80)",
+    "popover-foreground": "oklch(0.93 0.01 85)",
+    "primary": "oklch(0.9 0.01 85)",
+    "primary-foreground": "oklch(0.2 0.008 80)",
+    "secondary": "oklch(0.27 0.01 80)",
+    "secondary-foreground": "oklch(0.93 0.01 85)",
+    "muted": "oklch(0.27 0.01 80)",
+    "muted-foreground": "oklch(0.7 0.012 85)",
+    "accent": "oklch(0.32 0.04 140)",
+    "accent-foreground": "oklch(0.95 0.01 120)",
+    "destructive": "oklch(0.68 0.16 25)",
+    "border": "oklch(1 0 0 / 10%)",
+    "input": "oklch(1 0 0 / 14%)",
+    "ring": "oklch(0.7 0.02 85)",
+    "chart-1": "oklch(0.7 0.08 145)",
+    "chart-2": "oklch(0.72 0.09 55)",
+    "chart-3": "oklch(0.65 0.02 80)",
+    "chart-4": "oklch(0.72 0.07 240)",
+    "chart-5": "oklch(0.85 0.01 85)",
+    "sidebar": "oklch(0.2 0.008 80)",
+    "sidebar-foreground": "oklch(0.9 0.01 85)",
+    "sidebar-primary": "oklch(0.9 0.01 85)",
+    "sidebar-primary-foreground": "oklch(0.2 0.008 80)",
+    "sidebar-accent": "oklch(0.32 0.04 140)",
+    "sidebar-accent-foreground": "oklch(0.95 0.01 120)",
+    "sidebar-border": "oklch(1 0 0 / 10%)",
+    "sidebar-ring": "oklch(0.7 0.02 85)",
+    "mini-accent": "oklch(0.72 0.07 145)",
+    "mini-accent-soft": "oklch(0.32 0.04 140)",
+    "mini-pending": "oklch(0.3 0.04 90)",
+    "mini-added": "oklch(0.3 0.05 145)",
+    "mini-removed": "oklch(0.3 0.05 25)"
+  },
+  "extra_css": [
+    {
+      "selector": "[data-mini=\"title\"]",
+      "mode": "both",
+      "declarations": {
+        "font-weight": "600",
+        "letter-spacing": "-0.01em"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-sidebar\"]",
+      "mode": "both",
+      "declarations": {
+        "border-color": "transparent"
+      }
+    },
+    {
+      "selector": "[data-mini=\"shell-header\"]",
+      "mode": "both",
+      "declarations": {
+        "border-color": "transparent"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--accent)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][aria-current=\"true\"]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--accent)"
+      }
+    },
+    {
+      "selector": "[data-mini=\"row\"][data-active]",
+      "mode": "both",
+      "declarations": {
+        "background-color": "var(--accent)"
+      }
+    }
+  ]
+}
