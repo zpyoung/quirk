@@ -264,7 +264,8 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
   }
 
   async function saveAsNewView(): Promise<boolean> {
-    const merged = effectiveView(saved, draftsApi.drafts[saved.id])
+    const draft = draftsApi.drafts[saved.id]
+    const merged = effectiveView(saved, draft)
     const next: ViewConfig = {
       ...merged,
       id: crypto.randomUUID(),
@@ -278,7 +279,7 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
     }
     const added = await viewsApi.add(next)
     if (added) {
-      draftsApi.clear(saved.id)
+      if (draft) draftsApi.clear(saved.id, draft)
       switchTo(next)
       props.onViewSaved?.(next, "save-as-new")
     }
