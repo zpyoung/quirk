@@ -59,15 +59,17 @@ const displayName = (title: string) => title.replace(/…$/, "")
 /**
  * Card of filterable actions for one item. Leaf actions go to `onRun`;
  * actions with `children` replace the card's contents until Esc. Esc at the
- * top level and clicks outside call `onClose`.
+ * top level and clicks outside call `onClose`. `initialPath` opens the card
+ * already drilled into that chain of sub-menus.
  */
 export function ActionPanel<T extends PaletteItem>({
   item,
   actions,
+  initialPath,
   onClose,
   onRun,
 }: ActionPanelProps<T>) {
-  const [path, setPath] = useState<PaletteAction<T>[]>([])
+  const [path, setPath] = useState<PaletteAction<T>[]>(initialPath ?? [])
   const [filter, setFilter] = useState("")
   const [highlight, setHighlight] = useState("")
   const panelRef = useRef<HTMLDivElement>(null)
