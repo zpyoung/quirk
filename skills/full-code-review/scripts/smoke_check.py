@@ -58,12 +58,14 @@ def check(report, expected):
     for key in ("lens", "file", "line_min", "line_max"):
         if key not in expected:
             raise ValueError("expected.json is missing %s" % key)
-    absent = expected.get("absent", False)
+    absent = expected["absent"] if "absent" in expected else False
     if not isinstance(absent, bool):
         raise ValueError("expected.json absent must be true or false")
-    marker = expected.get("recommendation_contains")
-    if marker is not None and not isinstance(marker, str):
-        raise ValueError("expected.json recommendation_contains must be a string")
+    marker = None
+    if "recommendation_contains" in expected:
+        marker = expected["recommendation_contains"]
+        if not isinstance(marker, str) or not marker:
+            raise ValueError("expected.json recommendation_contains must be a non-empty string")
     findings = report.get("findings")
     if not isinstance(findings, list):
         raise ValueError("report has no findings list")
