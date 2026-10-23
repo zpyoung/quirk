@@ -4,7 +4,8 @@
 
 **Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: >3 files across capture, docs, registry and gallery)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-10-23: block sources move from `registry/` to `gallery/src/` (base files at their target paths, each pattern in `gallery/src/patterns/<pattern>/`). A prototype showed sources outside the gallery's `src/` can't resolve their npm imports when the gallery compiles them. `registry/` keeps `registry.json` and the built items in `registry/r/`. Approved by the user.
 
 I build a lot of small apps for my own local use, and an agent asked to "make it nice" produces a
 generic dashboard. This skill gives the agent proven interaction patterns to start from instead. The
@@ -37,8 +38,8 @@ skills/building-mini-apps/
   references/patterns/<pattern>.md
   references/apps/<app>.md
   references/media/<app>/       gitignored, never committed
-  registry/                     registry.json, block sources, built items in registry/r/
-  gallery/                      Vite app over the registry source
+  registry/                     registry.json and built items in registry/r/
+  gallery/                      Vite app; its src/ holds the base and block sources
 ```
 
 **A pattern** is one interaction you can name and reuse, taken from one app. A mini app usually
