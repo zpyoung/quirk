@@ -601,3 +601,157 @@ def test_jobs_execution_rejects_other_values(tmp_path, capsys):
     code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
                     "--out", paths["jobs"], "--execution", "maybe")
     assert code == 2 and "execution" in out["error"]
+
+
+def jobs_apply(tmp_path, capsys, findings, rulings, edit_jobs):
+    """Build real jobs, let `edit_jobs` tamper with the job list, then run apply."""
+    mod, paths = build(tmp_path, capsys, findings, rulings)
+    assert run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+               "--out", paths["jobs"], "--seed", "1")[0] == 0
+    doc = json.loads(Path(paths["jobs"]).read_text())
+    doc["jobs"] = edit_jobs(doc["jobs"])
+    write(Path(paths["jobs"]), doc)
+    write(Path(paths["verdicts"]), {"verdicts": []})
+    code, out = run(mod, capsys, "apply", "--input", paths["input"], "--rulings", paths["rulings"],
+                    "--jobs", paths["jobs"], "--verdicts", paths["verdicts"], "--out", paths["out"])
+    return code, out, paths
+
+
+def rejected(code, out, paths, *needles):
+    assert code == 2
+    assert "prover-jobs.json" in out["error"]
+    for needle in needles:
+        assert needle in out["error"]
+    assert not Path(paths["out"]).exists()
+
+
+def test_duplicate_job_id_is_rejected(tmp_path, capsys):
+    findings = [finding(1), finding(2), finding(3)]
+    rulings = [issue_wrong("A1"), issue_wrong("A2"), agree("A3")]
+
+    def duplicate(jobs):
+        jobs[1]["job"] = jobs[0]["job"]
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, findings, rulings, duplicate)
+    rejected(code, out, paths, "job id")
+
+
+def test_job_for_an_agreed_finding_is_rejected(tmp_path, capsys):
+    findings = [finding(1), finding(2)]
+    rulings = [issue_wrong("A1"), agree("A2")]
+
+    def retarget(jobs):
+        jobs.append({**jobs[0], "job": "J9", "finding": "A2"})
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, findings, rulings, retarget)
+    rejected(code, out, paths, "J9", "A2")
+
+
+def test_two_jobs_for_one_finding_are_rejected(tmp_path, capsys):
+    findings = [finding(1)]
+
+    def twice(jobs):
+        jobs.append({**jobs[0], "job": "J2"})
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, findings, [issue_wrong("A1")], twice)
+    rejected(code, out, paths, "J2", "A1")
+
+
+def test_missing_job_for_a_disagreement_is_rejected_when_others_exist(tmp_path, capsys):
+    findings = [finding(1), finding(2)]
+    rulings = [issue_wrong("A1"), fix_wrong("A2")]
+
+    def drop_one(jobs):
+        return [job for job in jobs if job["finding"] == "A1"]
+
+    code, out, paths = jobs_apply(tmp_path, capsys, findings, rulings, drop_one)
+    rejected(code, out, paths, "A2")
+
+
+@pytest.mark.parametrize("bad", ["both", None, ""])
+def test_bad_a_is_is_rejected(tmp_path, capsys, bad):
+    def corrupt(jobs):
+        jobs[0]["a_is"] = bad
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, [finding(1)], [issue_wrong("A1")], corrupt)
+    rejected(code, out, paths, "a_is")
+
+
+def test_job_ruling_that_differs_from_the_rulings_file_is_rejected(tmp_path, capsys):
+    def swap(jobs):
+        jobs[0]["ruling"] = {**jobs[0]["ruling"], "ruling": "fix_wrong"}
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, [finding(1)], [issue_wrong("A1")], swap)
+    rejected(code, out, paths, "J1", "A1")
+
+
+def test_unknown_finding_in_a_job_is_rejected(tmp_path, capsys):
+    def rename(jobs):
+        jobs[0]["finding"] = "A7"
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, [finding(1)], [issue_wrong("A1")], rename)
+    rejected(code, out, paths, "A7")
+
+
+def render_module():
+    return importlib.import_module("render_report")
+
+
+UNSAFE_CHARS = [" ", " ", "\r", "\n"]
+
+
+def one_line_cases():
+    return [
+        ("production.path", lambda ch: issue_wrong("A1", production={"label": "Common path", "path": "a%sb" % ch})),
+        ("fix_md", lambda ch: fix_wrong("A1", replacement={"fix_md": "a%sb" % ch, "recommendation": "r"})),
+        ("severity_reason", lambda ch: issue_wrong("A1", severity="Nit", severity_reason="a%sb" % ch)),
+        ("lens_trigger_path", lambda ch: {**unreachable("A1"), "lens_trigger_path": "a%sb" % ch}),
+    ]
+
+
+@pytest.mark.parametrize("char", UNSAFE_CHARS, ids=["u2028", "u2029", "cr", "lf"])
+@pytest.mark.parametrize("field,make", one_line_cases(), ids=[case[0] for case in one_line_cases()])
+@pytest.mark.parametrize("command", ["jobs", "apply"])
+def test_one_line_fields_reject_every_character_the_renderer_rejects(tmp_path, capsys, field, make, char, command):
+    mod, paths = build(tmp_path, capsys, [finding(1)], [make(char)])
+    if command == "jobs":
+        code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--out", paths["jobs"], "--seed", "1")
+    else:
+        write(Path(paths["jobs"]), {"seed": 1, "jobs": []})
+        write(Path(paths["verdicts"]), {"verdicts": []})
+        code, out = run(mod, capsys, "apply", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--jobs", paths["jobs"], "--verdicts", paths["verdicts"], "--out", paths["out"])
+    assert code == 2 and field in out["error"]
+
+
+@pytest.mark.parametrize("char", [" ", " "])
+def test_merge_reason_rejects_unicode_line_separators(tmp_path, capsys, char):
+    mod, paths = build(tmp_path, capsys, [finding(1), finding(2)], [agree("A1"), agree("A2")],
+                       merges=[{"ids": ["A1", "A2"], "anchor": "A1", "reason": "same%sbug" % char}])
+    code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+                    "--out", paths["jobs"], "--seed", "1")
+    assert code == 2 and "reason" in out["error"]
+
+
+def test_apply_accepts_exactly_what_the_renderer_accepts(tmp_path, capsys):
+    mod = module()
+    renderer = render_module()
+    assert mod.UNSAFE_LINE is renderer.UNSAFE_LINE
+    path = "POST /x‧ handler \u0085\u000b\u000c end"
+    fix_md = "Clamp​ the end\u0085 index"
+    rulings = [agree("A1", production={"label": "Common path", "path": path}),
+               fix_wrong("A2", replacement={"fix_md": fix_md, "recommendation": "r"})]
+    result = pipeline(tmp_path, capsys, [finding(1), finding(2)], rulings,
+                      verdicts={"A2": "adjudicator"})
+    for item in result["findings"]:
+        renderer._validate_production(item["production"], "finding")
+    assert result["findings"][0]["production"]["path"] == path
+    renderer._validate_posted_text(result["findings"][1], "finding")
+    assert result["findings"][1]["fix_md"] == fix_md

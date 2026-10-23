@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import jsonio
+from render_report import UNSAFE_LINE
 
 
 _SEVERITY_RANK = {"Nit": 0, "Should fix": 1, "Must fix": 2}
@@ -48,12 +49,12 @@ def _required_text(value: object, label: str) -> str:
     return value.strip()
 
 
-def _one_line(value: object, limit: int, label: str) -> str:
-    """Return `value` trimmed; it must be a non-empty single line of at most `limit` characters."""
+def _one_line(value: object, limit: int | None, label: str) -> str:
+    """Return `value` trimmed; it must be a non-empty line free of the characters the report renderer rejects, within `limit` if given."""
     text = _required_text(value, label)
-    if "\n" in text or "\r" in text:
+    if UNSAFE_LINE.search(text):
         raise ValueError("%s must be a single line" % label)
-    if len(text) > limit:
+    if limit is not None and len(text) > limit:
         raise ValueError("%s exceeds %d characters" % (label, limit))
     return text
 
@@ -162,7 +163,7 @@ def _validate_ruling(raw: dict, finding: dict) -> dict:
         objection = _required_text(objection, "%s: objection" % where)
         _reject_identity(objection, "%s: objection" % where)
     if kind == "unreachable":
-        trigger = _required_text(trigger, "%s: lens_trigger_path" % where)
+        trigger = _one_line(trigger, None, "%s: lens_trigger_path" % where)
         _reject_identity(trigger, "%s: lens_trigger_path" % where)
     else:
         _optional_absent(trigger, "%s: lens_trigger_path" % where, kind, "unreachable")
@@ -201,8 +202,8 @@ def _validate_rulings(findings: dict[str, dict], doc: dict) -> tuple[dict[str, d
         ids = merge.get("ids")
         if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
             raise ValueError("rulings.json merges[%d].ids must be an array of strings" % number)
-        _required_text(merge.get("anchor"), "rulings.json merges[%d].anchor" % number)
-        _required_text(merge.get("reason"), "rulings.json merges[%d].reason" % number)
+        _one_line(merge.get("anchor"), None, "rulings.json merges[%d].anchor" % number)
+        _one_line(merge.get("reason"), None, "rulings.json merges[%d].reason" % number)
     return {identifier: rulings[identifier] for identifier in findings}, merges
 
 
@@ -245,20 +246,28 @@ def build_jobs(input_doc: dict, rulings_doc: dict, seed: int, execution: str = "
 
 
 def _load_jobs(doc: dict, rulings: dict[str, dict]) -> dict[str, dict]:
-    """Return the jobs keyed by finding id; they must cover exactly the disagreement rulings."""
+    """Return the jobs keyed by finding id; they must cover exactly the disagreement rulings, one job each."""
     jobs = _items(doc.get("jobs"), "prover-jobs.json jobs")
     by_finding: dict[str, dict] = {}
+    seen: set[str] = set()
     for job in jobs:
         identifier = _required_text(job.get("job"), "prover-jobs.json job id")
+        if identifier in seen:
+            raise ValueError("prover-jobs.json repeats job id %s" % identifier)
+        seen.add(identifier)
         finding_id = job.get("finding")
         if job.get("a_is") not in ("lens", "adjudicator"):
             raise ValueError("prover-jobs.json job %s a_is must be lens or adjudicator" % identifier)
         if not isinstance(finding_id, str) or finding_id not in rulings:
             raise ValueError("prover-jobs.json job %s names unknown finding %r" % (identifier, finding_id))
-        if rulings[finding_id]["ruling"] == "agree":
+        kind = rulings[finding_id]["ruling"]
+        if kind == "agree":
             raise ValueError("prover-jobs.json job %s is for %s, which the rulings agree with" % (identifier, finding_id))
+        job_ruling = job.get("ruling")
+        if not isinstance(job_ruling, dict) or job_ruling.get("ruling") != kind:
+            raise ValueError("prover-jobs.json job %s ruling does not match the %s ruling for %s" % (identifier, kind, finding_id))
         if finding_id in by_finding:
-            raise ValueError("prover-jobs.json has two jobs for %s" % finding_id)
+            raise ValueError("prover-jobs.json job %s is a second job for %s" % (identifier, finding_id))
         by_finding[finding_id] = job
     for identifier, ruling in rulings.items():
         if ruling["ruling"] != "agree" and identifier not in by_finding:
