@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
@@ -35,12 +36,15 @@ export type ListPeekProps<T extends ListPeekItem> = {
   peekOpen?: boolean
   onPeekOpenChange?: (open: boolean) => void
   holdThresholdMs?: number
+  autoFocus?: boolean
   emptyTitle?: string
   emptyAction?: { label: string; onClick: () => void }
   "aria-label"?: string
 }
 
 type Section<T> = { name: string | null; rows: T[] }
+
+const heldFor = (since: number) => performance.now() - since
 
 /** State that follows `value` when the parent passes one and is held locally otherwise. */
 function useControllable<T>(
@@ -67,10 +71,16 @@ function toSections<T extends ListPeekItem>(rows: T[], groupBy?: (item: T) => st
   return [...byName].map(([name, grouped]) => ({ name, rows: grouped }))
 }
 
+const INTERACTIVE =
+  "a,button,input,select,textarea,summary,[role=button],[role=link],[contenteditable=true]"
+
 /**
  * Dense list with a keyboard highlight and a read-only side panel ("peek") that
- * follows it. Takes data as props and never reads the store. Keys act when focus
- * is on the page body or inside this block, never while typing in an input.
+ * follows it. Clicking a row highlights it and toggles the peek; Enter and
+ * double-click call `onOpen`, and the host decides what opening means. Takes data
+ * as props and never reads the store. Keys act when focus is on the page body or
+ * inside this block, never while typing in an input. `autoFocus` focuses the list
+ * on mount, for hosts that remount the block after a full view.
  */
 export function ListPeek<T extends ListPeekItem>({
   items,
@@ -88,6 +98,7 @@ export function ListPeek<T extends ListPeekItem>({
   peekOpen: peekOpenProp,
   onPeekOpenChange,
   holdThresholdMs = 250,
+  autoFocus = false,
   emptyTitle = "Nothing here yet",
   emptyAction,
   "aria-label": ariaLabel = "Items",
@@ -134,6 +145,31 @@ export function ListPeek<T extends ListPeekItem>({
     if (focusInPanel) focusList()
   }
 
+  const clickedControl = (event: ReactMouseEvent<HTMLElement>) => {
+    const control = (event.target as Element).closest(INTERACTIVE)
+    return control !== null && control !== event.currentTarget && event.currentTarget.contains(control)
+  }
+
+  const onRowClick = (event: ReactMouseEvent<HTMLElement>, item: T) => {
+    if (clickedControl(event)) return
+    focusList()
+    // the second click of a double-click must not undo the first click's toggle
+    if (event.detail > 1) {
+      setHighlightedId(item.id)
+    } else if (item.id === highlightedId && peekOpen) {
+      closePeek()
+    } else {
+      setHighlightedId(item.id)
+      setPeekOpen(true)
+    }
+  }
+
+  const onRowDoubleClick = (event: ReactMouseEvent<HTMLElement>, item: T) => {
+    if (clickedControl(event)) return
+    setHighlightedId(item.id)
+    onOpen?.(item)
+  }
+
   const highlightByKey = (id: string) => {
     setHighlightedId(id)
     if (document.activeElement !== listRef.current) focusList()
@@ -160,7 +196,7 @@ export function ListPeek<T extends ListPeekItem>({
   const releaseSpace = () => {
     const startedAt = pressStart.current
     pressStart.current = null
-    if (startedAt !== null && performance.now() - startedAt >= holdThresholdMs) closePeek()
+    if (startedAt !== null && heldFor(startedAt) >= holdThresholdMs) closePeek()
   }
   const releaseOnBlur = useEffectEvent(() => releaseSpace())
   useEffect(() => {
@@ -270,6 +306,10 @@ export function ListPeek<T extends ListPeekItem>({
   }, [showPeek])
 
   useEffect(() => {
+    if (autoFocus) listRef.current?.focus({ preventScroll: true })
+  }, [autoFocus])
+
+  useEffect(() => {
     if (highlightedId === null) return
     const element = document.getElementById(`${uid}-row-${encodeURIComponent(highlightedId)}`)
     element?.scrollIntoView({ block: "nearest" })
@@ -337,7 +377,8 @@ export function ListPeek<T extends ListPeekItem>({
           role="option"
           aria-selected={highlighted}
           title={item.title}
-          onClick={() => setHighlightedId(item.id)}
+          onClick={(event) => onRowClick(event, item)}
+          onDoubleClick={(event) => onRowDoubleClick(event, item)}
           onMouseEnter={() => {
             hoveredId.current = item.id
           }}
@@ -345,7 +386,7 @@ export function ListPeek<T extends ListPeekItem>({
             if (hoveredId.current === item.id) hoveredId.current = null
           }}
           className={cn(
-            "flex h-10 cursor-default items-center gap-3 border-b border-border/60 px-3",
+            "flex h-10 cursor-default select-none items-center gap-3 border-b border-border/60 px-3",
             highlighted ? "bg-accent" : "hover:bg-accent/50"
           )}
         >

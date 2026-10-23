@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useHotkeys } from "react-hotkeys-hook"
+import { ArrowLeftIcon } from "lucide-react"
 
 import { useCollection } from "@/lib/mini/store"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Kbd } from "@/components/ui/kbd"
 
 import { ListPeek } from "./list-peek"
 
@@ -44,10 +45,63 @@ const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone
 
 const formatDate = (iso: string) => dateFormat.format(new Date(`${iso}T00:00:00Z`))
 
+const nextStatus = (status: BookStatus) => STATUSES[(STATUSES.indexOf(status) + 1) % STATUSES.length]
+
+const HINTS = [
+  "Click or Space toggle peek",
+  "Hold Space peek while pressed",
+  "Enter or double-click open full view",
+  "j/k move",
+  "/ filter",
+  "Home/End first or last",
+  "Esc clear filter, close peek, then clear highlight",
+]
+
+function BookDetail({
+  book,
+  full = false,
+  onMove,
+  onRemove,
+}: {
+  book: Book
+  full?: boolean
+  onMove: () => void
+  onRemove: () => void
+}) {
+  const Heading = full ? "h1" : "h2"
+  return (
+    <article className="flex flex-col gap-3">
+      <Heading className={full ? "text-xl font-semibold" : "line-clamp-3 text-base font-semibold"}>
+        {book.title}
+      </Heading>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <Badge variant="secondary">{book.status}</Badge>
+        <span>{book.author}</span>
+        <span aria-hidden>·</span>
+        <span>Added {formatDate(book.added)}</span>
+        <span aria-hidden>·</span>
+        <span>{book.id}</span>
+      </div>
+      <p className="text-sm leading-relaxed whitespace-pre-line">{book.notes}</p>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" onClick={onMove}>
+          Move to {nextStatus(book.status)}
+        </Button>
+        <Button size="sm" variant="outline" onClick={onRemove}>
+          Remove
+        </Button>
+      </div>
+    </article>
+  )
+}
+
 export default function Demo() {
   const books = useCollection<Book>("list-peek-demo", SEED)
   const [preview, setPreview] = useState<Preview>("live")
-  const [opened, setOpened] = useState<Book | null>(null)
+  const [openedId, setOpenedId] = useState<string | null>(null)
+  const [highlightedId, setHighlightedId] = useState<string | null>(null)
+  const [peekOpen, setPeekOpen] = useState(false)
+  const fullViewRef = useRef<HTMLElement>(null)
 
   const ordered = useMemo(
     () => [...books.items].sort((a, b) => STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status)),
@@ -57,6 +111,23 @@ export default function Demo() {
   const restoreSamples = () => {
     setPreview("live")
     void books.replaceAll(SEED)
+  }
+
+  const opened = preview === "live" ? ordered.find((book) => book.id === openedId) : undefined
+
+  const backToList = () => setOpenedId(null)
+  const fullViewOpen = opened !== undefined
+  useHotkeys("esc", backToList, { enabled: fullViewOpen })
+  useEffect(() => {
+    if (fullViewOpen) fullViewRef.current?.focus()
+  }, [fullViewOpen])
+
+  const removeFromFullView = (book: Book) => {
+    const at = ordered.findIndex((item) => item.id === book.id)
+    setHighlightedId((ordered[at + 1] ?? ordered[at - 1])?.id ?? null)
+    setPeekOpen(false)
+    setOpenedId(null)
+    void books.remove(book.id)
   }
 
   const status = preview === "live" ? books.status : preview === "empty" ? "ready" : preview
@@ -83,64 +154,62 @@ export default function Demo() {
       </div>
 
       <div className="min-h-[24rem] flex-1 overflow-hidden rounded-lg border">
-        <ListPeek
-          aria-label="Reading list"
-          items={items}
-          status={status}
-          error={new Error("Could not read the reading list (simulated).")}
-          onRetry={() => setPreview("live")}
-          groupBy={(book) => book.status}
-          filterText={(book) => `${book.id} ${book.title} ${book.author}`}
-          renderLead={(book) => book.id}
-          renderMeta={(book) => book.author}
-          onOpen={setOpened}
-          emptyTitle="Your reading list is empty"
-          emptyAction={{ label: "Restore sample books", onClick: restoreSamples }}
-          renderPeek={(book) => (
-            <article className="flex flex-col gap-3">
-              <h2 className="line-clamp-3 text-base font-semibold">{book.title}</h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="secondary">{book.status}</Badge>
-                <span>{book.author}</span>
-                <span aria-hidden>·</span>
-                <span>Added {formatDate(book.added)}</span>
-                <span aria-hidden>·</span>
-                <span>{book.id}</span>
+        {opened ? (
+          <section
+            ref={fullViewRef}
+            tabIndex={-1}
+            aria-label={`Full view: ${opened.title}`}
+            className="flex h-full flex-col outline-none"
+          >
+            <div className="flex h-11 shrink-0 items-center gap-3 border-b px-3">
+              <Button size="sm" variant="ghost" onClick={backToList}>
+                <ArrowLeftIcon aria-hidden />
+                Back to list
+              </Button>
+              <span className="text-xs text-muted-foreground">or press Esc</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              <div className="max-w-2xl">
+                <BookDetail
+                  full
+                  book={opened}
+                  onMove={() => void books.update(opened.id, { status: nextStatus(opened.status) })}
+                  onRemove={() => removeFromFullView(opened)}
+                />
               </div>
-              <p className="text-sm leading-relaxed whitespace-pre-line">{book.notes}</p>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    void books.update(book.id, {
-                      status: STATUSES[(STATUSES.indexOf(book.status) + 1) % STATUSES.length],
-                    })
-                  }
-                >
-                  Move to {STATUSES[(STATUSES.indexOf(book.status) + 1) % STATUSES.length]}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void books.remove(book.id)}>
-                  Remove
-                </Button>
-              </div>
-            </article>
-          )}
-        />
+            </div>
+          </section>
+        ) : (
+          <ListPeek
+            autoFocus={highlightedId !== null}
+            aria-label="Reading list"
+            items={items}
+            status={status}
+            error={new Error("Could not read the reading list (simulated).")}
+            onRetry={() => setPreview("live")}
+            groupBy={(book) => book.status}
+            filterText={(book) => `${book.id} ${book.title} ${book.author}`}
+            renderLead={(book) => book.id}
+            renderMeta={(book) => book.author}
+            highlightedId={highlightedId}
+            onHighlightedIdChange={setHighlightedId}
+            peekOpen={peekOpen}
+            onPeekOpenChange={setPeekOpen}
+            onOpen={(book) => setOpenedId(book.id)}
+            emptyTitle="Your reading list is empty"
+            emptyAction={{ label: "Restore sample books", onClick: restoreSamples }}
+            renderPeek={(book) => (
+              <BookDetail
+                book={book}
+                onMove={() => void books.update(book.id, { status: nextStatus(book.status) })}
+                onRemove={() => void books.remove(book.id)}
+              />
+            )}
+          />
+        )}
       </div>
 
-      <p className="text-xs text-muted-foreground" aria-live="polite">
-        {opened ? `Enter opened ${opened.id}: ${opened.title}` : "Press Enter on a highlighted row to open it."}
-      </p>
-
-      <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-        <li><Kbd>j</Kbd> <Kbd>k</Kbd> move</li>
-        <li><Kbd>Space</Kbd> peek (hold to peek while pressed)</li>
-        <li><Kbd>Enter</Kbd> open</li>
-        <li><Kbd>/</Kbd> filter</li>
-        <li><Kbd>Home</Kbd> <Kbd>End</Kbd> first / last</li>
-        <li><Kbd>Esc</Kbd> close, then clear</li>
-      </ul>
+      <p className="text-xs text-muted-foreground">{HINTS.join(" · ")}</p>
     </div>
   )
 }
