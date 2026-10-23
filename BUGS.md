@@ -312,3 +312,13 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Raise when unlink fails and mark screenshot_withheld only after confirming the path is gone.
 - **Blocker for**: credential handling guarantee in references/safety.md
+
+## BUG-38: Deep-sandbox timeout test fails under machine load
+- **Observed**: 2026-10-22
+- **File**: tests/full_code_review/test_deep_sandbox.py:358
+- **Description**: test_timeout_kills_descendants_instead_of_only_the_parent asserts the 1 s exec timeout returns within 4 s of wall time. During a full-suite run alongside other heavy work (renders, a second test run) it failed once; run alone it passed 5 of 5 times in about 4.5 s, and a later full-suite run passed. The wall-clock bound is close enough to the real duration that load pushes it over.
+- **Introduced by**: pre-dates this session (full-code-review is untouched by the making-videos branch)
+- **Severity**: low
+- **Proposed fix**: Measure the timeout path with a generous bound (e.g. < 10 s) or assert on timed_out and the child marker only, not wall time.
+- **Blocker for**: a green full-suite gate on a busy machine
+
