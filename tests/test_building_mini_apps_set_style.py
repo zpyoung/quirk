@@ -398,6 +398,67 @@ def test_tokens_step_only_touches_the_first_theme_inline_block(tmp_path: Path) -
     assert text.count("--font-sans: var(--mini-font-sans);") == 1
 
 
+def _wired_block(block: str) -> str:
+    return _mini()._wire_fonts(block)
+
+
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        (
+            "\n  --font-sans: sans-serif; --color-background: var(--background);\n",
+            "\n  --font-sans: var(--mini-font-sans); --color-background: var(--background);\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --color-a: red; --font-sans: sans-serif; --color-b: blue;\n"
+            "  --font-heading: serif; --radius: 4px;\n",
+            "\n  --color-a: red; --font-sans: var(--mini-font-sans); --color-b: blue;\n"
+            "  --font-heading: var(--mini-font-heading); --radius: 4px;\n",
+        ),
+        (
+            "\n  --font-sans: 'Geist Variable',\n    system-ui, sans-serif;\n  --color-a: red;\n"
+            "  --font-heading: var(--font-sans);\n",
+            "\n  --font-sans: var(--mini-font-sans);\n  --color-a: red;\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --color-a: red;\n  --font-sans: serif;\n  --font-heading: serif",
+            "\n  --color-a: red;\n  --font-sans: var(--mini-font-sans);\n"
+            "  --font-heading: var(--mini-font-heading);",
+        ),
+        (
+            "\n  --font-sans: serif;\n  --font-heading: serif\n",
+            "\n  --font-sans: var(--mini-font-sans);\n  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --font-sans: \"a;b\", url(data:x;y); --color-a: red;\n  --font-heading: serif;\n",
+            "\n  --font-sans: var(--mini-font-sans); --color-a: red;\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+        (
+            "\n  --font-sans-extra: x; --font-sans: serif; --color-a: red;\n"
+            "  --font-heading: serif;\n",
+            "\n  --font-sans-extra: x; --font-sans: var(--mini-font-sans); --color-a: red;\n"
+            "  --font-heading: var(--mini-font-heading);\n",
+        ),
+    ],
+    ids=[
+        "neighbour-after",
+        "neighbours-before-and-after",
+        "value-spanning-two-lines",
+        "no-semicolon-at-block-end",
+        "no-semicolon-then-newline",
+        "semicolon-inside-quotes-and-parens",
+        "similarly-named-property",
+    ],
+)
+def test_wire_fonts_replaces_only_the_font_declarations(block: str, expected: str) -> None:
+    wired = _wired_block(block)
+    assert wired == expected
+    assert _wired_block(wired) == wired
+
+
 def test_tokens_step_fails_without_a_theme_inline_block(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
