@@ -384,7 +384,7 @@ html[data-mini-style="dense-dark"] [data-mini="cell"] { font-family: var(--mini-
 
 html[data-mini-style="dense-dark"] [data-mini="group-header"] { font-weight: 600; letter-spacing: 0.04em; }
 html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [data-mini="cell"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [data-mini="cell"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
 html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
 html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
 html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] [data-mini="cell"] { color: oklch(1 0 0); }

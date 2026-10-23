@@ -47,7 +47,10 @@ EXTRA_CSS_PROPERTIES = frozenset((
 ))
 FONT_PACKAGE_RE = re.compile(r"^@fontsource(-variable)?/[a-z0-9-]+$")
 BANNED_FONTS = ("sf pro", "sf compact", "sf mono", "new york")
-FORBIDDEN_VALUE_FRAGMENTS = ("url(", "@import", "!important", ";", "{", "}", "/*")
+FORBIDDEN_VALUE_FRAGMENTS = (
+    "url(", "image-set(", "image(", "cross-fade(", "element(", "src(",
+    "@import", "!important", ";", "{", "}", "/*",
+)
 
 _NUM = r"[0-9]*\.?[0-9]+"
 OKLCH_RE = re.compile(
@@ -59,7 +62,10 @@ _COMPOUND = rf"(?:{_ATTR})+(?::hover|:focus-visible|::before|::after|::placehold
 SELECTOR_RE = re.compile(rf"^{_COMPOUND}(?: +{_COMPOUND})*$")
 HEADER_RE = re.compile(r"^/\* mini-style: ([a-z0-9-]+) sha256=([0-9a-f]{64}) \*/$")
 COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
-DECLARATION_RE = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+IMPORT_RE = re.compile(r"@import\b[^;]*;")
+LIGHT_PREFIX = "html:not(.dark) "
+DARK_PREFIX = "html.dark "
 ROOT_BLOCK_RE = re.compile(r"(?<![\w.#\]:-])html:root\s*\{([^}]*)\}")
 DARK_BLOCK_RE = re.compile(r"(?<![\w.#\]:-])html\.dark\s*\{([^}]*)\}")
 
@@ -336,6 +342,10 @@ def _check_extra_css(source: str, rules: Any) -> None:
             if prop not in EXTRA_CSS_PROPERTIES:
                 raise _fail(source, f"{field}.declarations.{prop}", "property is not allowed")
             checked = _check_value(source, f"{field}.declarations.{prop}", value)
+            if prop != "font-family" and ('"' in checked or "'" in checked):
+                raise _fail(source, f"{field}.declarations.{prop}",
+                            "must not contain a quoted string (only font-family may); "
+                            "strings can name remote resources")
             if "\\" in checked:
                 raise _fail(source, f"{field}.declarations.{prop}",
                             "must not contain a backslash (CSS escapes can hide url( and fonts)")
@@ -508,6 +518,20 @@ def parse_header(text: str) -> Tuple[Optional[str], bool]:
 
 # --- hand-edited tokens files ---
 
+def _declaration_pairs(body: str) -> List[Tuple[str, str]]:
+    """(name, value) for each `name: value` in a declaration block body.
+
+    Declarations are separated by `;`; the last one needs no terminator, and empty segments
+    (`;;`) are skipped, as CSS does.
+    """
+    pairs = []
+    for part in body.split(";"):
+        name, colon, value = part.partition(":")
+        if colon and name.strip():
+            pairs.append((name.strip(), value.strip()))
+    return pairs
+
+
 def parse_tokens_css(text: str, label: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     """Read the effective light (`html:root`) and dark (`html.dark`) token values from a tokens file.
 
@@ -522,7 +546,7 @@ def parse_tokens_css(text: str, label: str) -> Tuple[Dict[str, str], Dict[str, s
             raise StyleError(f"{label}: no {name} block")
         values: Dict[str, str] = {}
         for body in blocks:
-            values.update({k[2:]: v.strip() for k, v in DECLARATION_RE.findall(body)})
+            values.update({k[2:]: v for k, v in _declaration_pairs(body) if k.startswith("--")})
         missing = [k for k in TOKEN_KEYS if k not in values]
         if missing:
             raise StyleError(f"{label}: {name} is missing token(s): {', '.join(missing)}")
@@ -530,10 +554,34 @@ def parse_tokens_css(text: str, label: str) -> Tuple[Dict[str, str], Dict[str, s
     return found[0], found[1]
 
 
+def parse_extra_css(text: str) -> List[Dict[str, Any]]:
+    """The `data-mini` hook rules of a tokens file, as extra_css entries in file order.
+
+    Reverses the mode prefixes `render_app_css` writes (`html:not(.dark) ` is light, `html.dark ` is
+    dark, none is both), so the contrast gate sees the same remaps a style source declares.
+    """
+    stripped = IMPORT_RE.sub("", COMMENT_RE.sub("", text))
+    rules = []
+    for selector, body in BLOCK_RE.findall(stripped):
+        selector = " ".join(selector.split())
+        mode = "both"
+        if selector.startswith(LIGHT_PREFIX):
+            mode, selector = "light", selector[len(LIGHT_PREFIX):]
+        elif selector.startswith(DARK_PREFIX):
+            mode, selector = "dark", selector[len(DARK_PREFIX):]
+        if "[data-mini=" not in selector:
+            continue
+        rules.append({"selector": selector, "mode": mode, "declarations": dict(_declaration_pairs(body))})
+    return rules
+
+
 def tokens_failures(text: str, label: str, slug: str) -> List[Failure]:
-    """Contrast failures for an app tokens file; StyleError on a missing or unparsable token."""
+    """Contrast failures for an app tokens file; StyleError on a missing or unparsable token.
+
+    Judged by the same rules as a style source, including the sidebar colour remaps in its hook rules.
+    """
     light, dark = parse_tokens_css(text, label)
-    style = {"slug": slug, "light": light, "dark": dark}
+    style = {"slug": slug, "light": light, "dark": dark, "extra_css": parse_extra_css(text)}
     for mode, tokens in (("light", light), ("dark", dark)):
         for key in TOKEN_KEYS:
             try:
