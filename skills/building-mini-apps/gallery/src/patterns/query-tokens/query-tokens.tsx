@@ -93,6 +93,9 @@ export function QueryTokens({
   const [active, setActive] = useState(-1)
   const [selected, setSelected] = useState<number | null>(null)
 
+  // a controlled query can drop the chip that was selected; a stale index would make Enter edit a missing chip
+  if (selected !== null && selected >= query.tokens.length) setSelected(null)
+
   // an outside change to the text (saved view, URL, clear) replaces what the input shows
   if (query.text !== syncedText) {
     setSyncedText(query.text)

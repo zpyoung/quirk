@@ -1,3 +1,4 @@
+import { serializeToken } from "./query"
 import type { QueryKey } from "./types"
 
 export type Suggestion =
@@ -37,7 +38,7 @@ export function suggest(input: {
       .map((value) => ({
         kind: "value",
         label: value,
-        word: `${head[1]}${def.key}:${/\s/.test(value) ? `"${value}"` : value}`,
+        word: serializeToken({ key: def.key, op: "eq", value, negated: head[1] === "-" }),
       }))
     if (items.length > 0) {
       return { sections: [{ id: "values", label: `Values for ${def.key}`, items }] }
