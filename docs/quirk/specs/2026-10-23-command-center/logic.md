@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved
 
 **Amendments:** none yet.
 
