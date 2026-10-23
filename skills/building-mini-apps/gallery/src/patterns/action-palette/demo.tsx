@@ -47,34 +47,42 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export default function Demo() {
   const links = useCollection<SavedLink>("action-palette-demo", seed)
   const [preview, setPreview] = useState<Preview>("live")
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   const live = preview === "live"
   const status =
     preview === "loading" ? "loading" : preview === "error" ? "error" : links.status
   const items = live ? [...links.items].sort((a, b) => Number(b.pinned) - Number(a.pinned)) : []
 
-  function getActions(link: SavedLink): PaletteAction<SavedLink>[] {
+  function getActions(link: SavedLink, selection: SavedLink[]): PaletteAction<SavedLink>[] {
+    const many = selection.length > 1
+    const allPinned = selection.every((item) => item.pinned)
+    const open: PaletteAction<SavedLink> = {
+      id: "open",
+      title: "Open",
+      section: "use",
+      run: (item) => void window.open(item.url, "_blank", "noopener,noreferrer"),
+    }
     return [
-      {
-        id: "open",
-        title: "Open",
-        section: "use",
-        run: (item) => void window.open(item.url, "_blank", "noopener,noreferrer"),
-      },
+      ...(many ? [] : [open]),
       {
         id: "copy",
-        title: "Copy URL",
+        title: many ? "Copy URLs" : "Copy URL",
         section: "use",
         pending: "Copying URL…",
-        successMessage: "URL copied",
+        successMessage: many ? `${selection.length} URLs copied` : "URL copied",
         run: (item) => navigator.clipboard.writeText(item.url),
+        runMany: (picked) => navigator.clipboard.writeText(picked.map((item) => item.url).join("\n")),
       },
       {
         id: "pin",
-        title: link.pinned ? "Unpin" : "Pin",
+        title: (many ? allPinned : link.pinned) ? "Unpin" : "Pin",
         section: "organize",
         shortcut: "mod+shift+p",
         run: (item) => links.update(item.id, { pinned: !item.pinned }),
+        runMany: async (picked) => {
+          for (const item of picked) await links.update(item.id, { pinned: !allPinned })
+        },
       },
       {
         id: "move",
@@ -83,13 +91,13 @@ export default function Demo() {
         children: FOLDERS.map((folder) => ({
           id: `move-${folder}`,
           title: folder,
-          successMessage: `Moved to ${folder}`,
+          successMessage: many ? `${selection.length} moved to ${folder}` : `Moved to ${folder}`,
           run: (item: SavedLink) => links.update(item.id, { folder }),
         })),
       },
       {
         id: "delete",
-        title: "Delete",
+        title: many ? `Delete ${selection.length}` : "Delete",
         destructive: true,
         shortcut: "mod+backspace",
         pending: "Deleting…",
@@ -97,6 +105,11 @@ export default function Demo() {
         run: async (item) => {
           await pause(600)
           await links.remove(item.id)
+        },
+        runMany: async (picked) => {
+          await pause(600)
+          for (const item of picked) await links.remove(item.id)
+          setSelectedIds([])
         },
       },
     ]
@@ -131,6 +144,8 @@ export default function Demo() {
           error={preview === "error" ? new Error("Could not read saved links") : links.error}
           onRetry={() => setPreview("live")}
           getActions={getActions}
+          selectedIds={live ? selectedIds : []}
+          onSelectedIdsChange={setSelectedIds}
           getSubtitle={(link) => hostOf(link.url)}
           getMeta={(link) => link.kind}
           getSearchText={(link) => `${link.url} ${link.folder}`}
@@ -156,6 +171,11 @@ export default function Demo() {
           }}
         />
       </div>
+
+      <p className="max-w-3xl text-xs text-muted-foreground">
+        ↑ ↓ move · ↵ run the first action · ⌘K actions · ⇧⌘X check the highlighted row · ⇧↑ ⇧↓ check
+        while moving · Esc backs out, then clears the query, then the checked rows
+      </p>
     </div>
   )
 }
