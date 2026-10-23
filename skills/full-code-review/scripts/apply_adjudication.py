@@ -20,7 +20,7 @@ _DISAGREEMENT_KIND = {"issue_wrong": "issue", "fix_wrong": "fix", "unreachable":
 _RULINGS = ("agree", *_DISAGREEMENT_KIND)
 _LABELS = ("Common path", "Edge case", "Unreachable", "Would miss", "N/A")
 _TEST_DIMENSIONS = {"tests", "test-adequacy", "test-coverage"}
-_DIFF_FENCE = re.compile(r"(?m)^```diff[ \t\r]*\n(?:[\s\S]*?\n)?```[ \t\r]*$")
+_FENCE_PADDING = " \t\r"
 _IDENTITY = re.compile(r"(?i)\b(adjudicat\w*|lens(es)?|opus|sonnet|reviewer)\b")
 _FINDING_ID = re.compile(r"A[1-9][0-9]*")
 _PATH_CAP = 200
@@ -30,6 +30,18 @@ _NO_VERDICT_TEXT = "Prover did not return; check the objection by hand."
 _NO_SETTLE_TEXT = "Prover returned no usable evidence; check the objection by hand."
 _UNREACHABLE_REASON = "Proven unreachable from any real entry point."
 _MERGE_REASON = "Merged with a stronger-severity finding."
+
+
+def _has_closed_diff_fence(text: str) -> bool:
+    """True when a bare ```diff line is followed by a later bare ``` line; one pass, linear in len(text)."""
+    opened = False
+    for line in text.split("\n"):
+        stripped = line.rstrip(_FENCE_PADDING)
+        if opened and stripped == "```":
+            return True
+        if stripped == "```diff":
+            opened = True
+    return False
 
 
 def _object(value: object, label: str) -> dict:
@@ -175,7 +187,7 @@ def _validate_ruling(raw: dict, finding: dict) -> dict:
         replacement = _object(replacement, "%s: replacement" % where)
         fix_md = _one_line(replacement.get("fix_md"), _FIX_MD_CAP, "%s: replacement.fix_md" % where)
         recommendation = _required_text(replacement.get("recommendation"), "%s: replacement.recommendation" % where)
-        if not _DIFF_FENCE.search(recommendation):
+        if not _has_closed_diff_fence(recommendation):
             raise ValueError("%s: replacement.recommendation must contain a closed ```diff fenced block" % where)
         _reject_identity(fix_md, "%s: replacement.fix_md" % where)
         _reject_identity(recommendation, "%s: replacement.recommendation" % where)
