@@ -116,9 +116,11 @@ function buildSeed(): { tiles: Tile[]; items: AttentionItem[] } {
       name: "NAS backup",
       kind: "sensor",
       text: "Failed",
+      unit: " min",
       updatedAt: t - 20 * MIN,
       staleAfterMs: DAY,
       staleOpensItem: true,
+      history: [38, 41, 39, 43, 47, 55, 61],
     },
     {
       id: "internet",
@@ -402,12 +404,36 @@ export default function Demo() {
 
   const reset = async () => {
     // tiles are hidden while both stores are replaced so no rule evaluates against half-reset data
+    const previous = { tiles: tilesStore.items, items: itemsStore.items }
     setPreview("loading")
     const seed = buildSeed()
-    await Promise.all([
+    const [tilesWrite, itemsWrite] = await Promise.allSettled([
       tilesStore.replaceAll(seed.tiles),
       itemsStore.replaceAll(seed.items),
     ])
+    const failure = [tilesWrite, itemsWrite].find(
+      (outcome) => outcome.status === "rejected"
+    )
+    if (failure) {
+      // put back whichever collection did get replaced so the two never disagree
+      const rollbacks = await Promise.allSettled([
+        tilesWrite.status === "fulfilled"
+          ? tilesStore.replaceAll(previous.tiles)
+          : undefined,
+        itemsWrite.status === "fulfilled"
+          ? itemsStore.replaceAll(previous.items)
+          : undefined,
+      ])
+      const partial = rollbacks.some((outcome) => outcome.status === "rejected")
+      const cause = failure.reason
+      toast.error("Couldn't reset the sample data", {
+        description: `${cause instanceof Error ? cause.message : String(cause)} ${
+          partial
+            ? "Some data may be partly reset; reload to check."
+            : "Your data was left as it was."
+        }`,
+      })
+    }
     setEpoch((n) => n + 1)
     setPreview("live")
   }
