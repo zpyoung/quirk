@@ -5,6 +5,23 @@ export function entryTypes(entries: TimelineEntry[]): string[] {
   return [...new Set(entries.map((entry) => entry.type))]
 }
 
+const TYPE_OPTION_PREFIX = "type:"
+
+/** The type select's item value for a type key; never empty, so a key of "" stays selectable. */
+export function typeOptionValue(key: string): string {
+  return TYPE_OPTION_PREFIX + key
+}
+
+/** The type key behind a value made by `typeOptionValue`, or null for any other value. */
+export function typeFromOptionValue(value: string): string | null {
+  return value.startsWith(TYPE_OPTION_PREFIX) ? value.slice(TYPE_OPTION_PREFIX.length) : null
+}
+
+/** The label to show for a type key: the configured label, else the key, else "No type" for an empty key. */
+export function typeLabel(key: string, label?: string): string {
+  return label || key || "No type"
+}
+
 /** Entries matching the type (when given) and containing the query in category, message, detail or type. */
 export function filterEntries(entries: TimelineEntry[], { query, type }: TimelineFilter): TimelineEntry[] {
   const needle = query.trim().toLowerCase()

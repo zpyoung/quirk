@@ -22,7 +22,14 @@ import {
 
 import { EntryRow } from "./entry-row"
 import { PlayheadDivider } from "./playhead-divider"
-import { buildRows, entryTypes, formatOffset } from "./timeline"
+import {
+  buildRows,
+  entryTypes,
+  formatOffset,
+  typeFromOptionValue,
+  typeLabel,
+  typeOptionValue,
+} from "./timeline"
 import type { TimelineEntry, TimelineOrder, TimelineType } from "./types"
 
 export type EventTimelineProps = {
@@ -41,8 +48,8 @@ export type EventTimelineProps = {
   "aria-label"?: string
 }
 
-// a type key can be any string, so the "all types" option needs a value no key can equal
-const ANY_TYPE = "\u0000any"
+// type keys are prefixed into option values (see typeOptionValue), so this can never collide with one
+const ANY_TYPE = "any"
 const FOLLOW_PADDING = 48
 
 /**
@@ -234,8 +241,8 @@ export function EventTimeline({
   } else if (rows.length === 0) {
     const parts = [
       query.trim() ? `"${query.trim()}"` : null,
-      activeType !== null ? (types[activeType]?.label ?? activeType) : null,
-    ].filter(Boolean)
+      activeType !== null ? typeLabel(activeType, types[activeType]?.label) : null,
+    ].filter((part) => part !== null)
     body = (
       <EmptyState
         title={`No entries match ${parts.join(" in ")}`}
@@ -295,8 +302,8 @@ export function EventTimeline({
           />
         </div>
         <Select
-          value={activeType ?? ANY_TYPE}
-          onValueChange={(value) => setType(value === ANY_TYPE ? null : value)}
+          value={activeType === null ? ANY_TYPE : typeOptionValue(activeType)}
+          onValueChange={(value) => setType(typeFromOptionValue(value))}
           disabled={!usable}
         >
           <SelectTrigger size="sm" aria-label="Filter by type" className="w-36">
@@ -305,8 +312,8 @@ export function EventTimeline({
           <SelectContent>
             <SelectItem value={ANY_TYPE}>Any type</SelectItem>
             {typeKeys.map((key) => (
-              <SelectItem key={key} value={key}>
-                {types[key]?.label ?? key}
+              <SelectItem key={key} value={typeOptionValue(key)}>
+                {typeLabel(key, types[key]?.label)}
               </SelectItem>
             ))}
           </SelectContent>

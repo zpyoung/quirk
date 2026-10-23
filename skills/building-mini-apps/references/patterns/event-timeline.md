@@ -145,7 +145,7 @@ CONTRACT: type EventTimelineProps = {
   status?: "loading" | "ready" | "error"            // default "ready"; pass useCollection's status
   error?: Error
   onRetry?: () => void
-  types?: Record<string, TimelineType>              // an entry whose type is missing gets a plain icon and its type as the label
+  types?: Record<string, TimelineType>              // an entry whose type is missing gets a plain icon and its type as the label ("No type" when the type is an empty string)
   defaultOrder?: "newest" | "oldest"                // default "newest"; the order button changes it from there
   playhead?: number                                 // playhead mode when a finite number; omit for a plain timeline
   onSeek?: (time: number) => void                   // turns each time into a button; the host moves the playhead
