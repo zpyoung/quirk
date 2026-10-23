@@ -4,25 +4,40 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 /**
- * Applies the OS light/dark preference to <html> until something else (a
- * ThemeProvider or a manual toggle) changes the class, then stops interfering.
+ * Applies the OS light/dark preference to <html> when nothing else has set a
+ * theme class. Any later write to the class list by a ThemeProvider or a manual
+ * toggle, even to the value already applied, hands ownership to that writer for good.
  */
 function useSystemTheme() {
   useEffect(() => {
-    const query = window.matchMedia("(prefers-color-scheme: dark)")
     const root = document.documentElement
-    let applied: "dark" | "light" | null = null
+    if (root.classList.contains("light") || root.classList.contains("dark")) return
 
-    const sync = () => {
-      if (applied !== null && !root.classList.contains(applied)) return
-      applied = query.matches ? "dark" : "light"
+    const query = window.matchMedia("(prefers-color-scheme: dark)")
+    const observer = new MutationObserver(() => release())
+    let owned = true
+
+    function release() {
+      owned = false
+      observer.disconnect()
+      query.removeEventListener("change", sync)
+    }
+
+    function sync() {
+      if (observer.takeRecords().length > 0) return release()
       root.classList.remove("light", "dark")
-      root.classList.add(applied)
+      root.classList.add(query.matches ? "dark" : "light")
+      observer.takeRecords()
     }
 
     sync()
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] })
     query.addEventListener("change", sync)
-    return () => query.removeEventListener("change", sync)
+
+    return () => {
+      if (owned && observer.takeRecords().length === 0) root.classList.remove("light", "dark")
+      release()
+    }
   }, [])
 }
 
