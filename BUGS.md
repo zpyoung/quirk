@@ -313,7 +313,14 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: Raise when unlink fails and mark screenshot_withheld only after confirming the path is gone.
 - **Blocker for**: credential handling guarantee in references/safety.md
 
-## BUG-38: Deep-sandbox timeout test fails under machine load
+## BUG-38: Kit browser tests time out and peg Chrome only when launched by pytest
+- **Observed**: 2026-10-22
+- **File**: tests/fixtures/html-kit/harness.mjs:158
+- **Description**: Browser tests in tests/test_html_kit_elements.py fail under pytest on this machine. The harness's readiness wait times out (failedSteps index -1, 'q-flow, q-schema or q-sequence', page.waitForFunction 10000ms) and a headless Chrome renderer pins 100% CPU for ~80s per test. The same harness call with the same page and steps passes in ~1.2s when run from a plain python3 script that imports the test module. Untouched tests fail the same way (e.g. test_flow_trace_expand_keeps_the_current_node_centred_instead_of_fitting_the_graph). Disabling the faulthandler/asyncio/xdist plugins or passing -s changes nothing, and neither PYTEST_* env vars nor stdin explain it. Seen 2026-10-22 on macOS, system Chrome 155.0.8059.85, pytest 9.0.2, Python 3.9.
+- **Severity**: medium
+- **Proposed fix**: Diff the Chrome child's environment, rlimits and process QoS under pytest against a plain python3 parent; until then, browser tests can be run by calling the test functions directly with hand-built fixtures.
+
+## BUG-39: Deep-sandbox timeout test fails under machine load
 - **Observed**: 2026-10-22
 - **File**: tests/full_code_review/test_deep_sandbox.py:358
 - **Description**: test_timeout_kills_descendants_instead_of_only_the_parent asserts the 1 s exec timeout returns within 4 s of wall time. During a full-suite run alongside other heavy work (renders, a second test run) it failed in two consecutive full-suite runs (load average about 7). Run alone it passed 8 of 8 times, and the whole tests/full_code_review/ directory passed (1599 tests); earlier full-suite runs the same day passed. The wall-clock bound is close enough to the real duration that load pushes it over.
