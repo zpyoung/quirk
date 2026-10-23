@@ -1,0 +1,7 @@
+{
+  "lens": "correctness",
+  "file": "pager.py",
+  "line_min": 7,
+  "line_max": 9,
+  "recommendation_contains": "ceil_div"
+}
