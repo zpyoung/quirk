@@ -26,7 +26,8 @@ APPS = ["linear", "things", "raycast", "craft", "obsidian",
         "home-assistant", "pagerduty", "incident-io"]
 PATTERNS = ["list-peek", "expand-in-place", "action-palette", "doc-collections", "workspace-panes",
             "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector",
-            "command-center"]
+            "command-center", "bulk-select", "query-tokens", "conditional-status", "stack-trace",
+            "event-timeline", "span-waterfall", "replay-player", "aggregate-builder"]
 STYLES = ["neutral-house", "calm-paper", "airy-white", "cool-tool",
           "dense-dark", "glass-launcher", "split-tone"]
 REQUIRED_SECTIONS = ["When to use", "Pattern index", "Style index", "Building a new app",

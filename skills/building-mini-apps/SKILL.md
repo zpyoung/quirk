@@ -25,15 +25,23 @@ A pattern is one named interaction. A mini app usually combines two or three. Re
 |---|---|---|---|
 | list-peek | Dense list; j/k move, Space previews the item in a side panel | Linear | [list-peek](references/patterns/list-peek.md) |
 | expand-in-place | A row opens into an editable card; optional fields stay hidden until asked for | Things 3 | [expand-in-place](references/patterns/expand-in-place.md) |
-| action-palette | Search, select, then ⌘K lists the actions for that one item | Raycast | [action-palette](references/patterns/action-palette.md) |
+| action-palette | Search, select, then ⌘K lists the actions for that one item | Raycast, Sentry | [action-palette](references/patterns/action-palette.md) |
 | doc-collections | A document with record tables embedded in it, each record with a free-text body | Craft | [doc-collections](references/patterns/doc-collections.md) |
 | workspace-panes | Tabs and split panes over file-like records, with a structured view and a raw view | Obsidian | [workspace-panes](references/patterns/workspace-panes.md) |
 | staged-table-edit | Inline cell edits stay pending until one commit or discard | TablePlus | [staged-table-edit](references/patterns/staged-table-edit.md) |
 | mini-full | Quick-add with natural-language parsing that opens into a full view | Fantastical | [mini-full](references/patterns/mini-full.md) |
-| view-switcher | Table, board or calendar over the same records; a record opens in a side panel | Notion | [view-switcher](references/patterns/view-switcher.md) |
+| view-switcher | Table, board or calendar over the same records; a record opens in a side panel | Notion, Sentry | [view-switcher](references/patterns/view-switcher.md) |
 | assisted-notes | The user's notes stay primary; generated additions are styled apart and cite their source | Granola | [assisted-notes](references/patterns/assisted-notes.md) |
 | inspector | Navigation tree, canvas, and a properties panel for the selection | Figma | [inspector](references/patterns/inspector.md) |
 | command-center | Status tiles in sections beside a queue of items that need you, to acknowledge, snooze and resolve | Home Assistant, PagerDuty | [command-center](references/patterns/command-center.md) |
+| bulk-select | Dense table where ticking a row turns the header into an action bar with the selected count | Sentry | [bulk-select](references/patterns/bulk-select.md) |
+| query-tokens | Search box where `key:value` filters become removable chips and the query lives in the URL | Sentry | [query-tokens](references/patterns/query-tokens.md) |
+| conditional-status | Split button that changes state now or on a condition; resolved items regress, parked ones return | Sentry | [conditional-status](references/patterns/conditional-status.md) |
+| stack-trace | Collapsible frames with a highlighted source line; runs of library frames fold into one row | Sentry | [stack-trace](references/patterns/stack-trace.md) |
+| event-timeline | Time-ordered typed entries with type filter and search; can follow a playhead and seek to a time | Sentry | [event-timeline](references/patterns/event-timeline.md) |
+| span-waterfall | Tree of timed rows beside a shared time axis of duration bars; a click opens a side panel | Sentry | [span-waterfall](references/patterns/span-waterfall.md) |
+| replay-player | Transport controls and a marker lane over a recorded sequence, with tabs that follow the playhead | Sentry | [replay-player](references/patterns/replay-player.md) |
+| aggregate-builder | Rail that picks what to visualize, group and sort, driving a chart and Samples and Aggregates tabs | Sentry | [aggregate-builder](references/patterns/aggregate-builder.md) |
 
 Each app has a study note in `references/apps/<app>.md` if a reference points to evidence you need.
 

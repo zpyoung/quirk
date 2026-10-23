@@ -54,6 +54,7 @@
       "registryDependencies": [
         "badge",
         "button",
+        "checkbox",
         "command",
         "input",
         "kbd",
@@ -90,6 +91,11 @@
           "target": "src/patterns/action-palette/index.ts"
         },
         {
+          "path": "src/patterns/action-palette/selection.ts",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/selection.ts"
+        },
+        {
           "path": "src/patterns/action-palette/shortcut-keys.tsx",
           "type": "registry:file",
           "target": "src/patterns/action-palette/shortcut-keys.tsx"
@@ -98,6 +104,72 @@
           "path": "src/patterns/action-palette/types.ts",
           "type": "registry:file",
           "target": "src/patterns/action-palette/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "aggregate-builder",
+      "title": "Aggregate builder",
+      "description": "A rail of Visualize, Group by and Sort by controls driving an SVG chart over time buckets, one series per group, and a table with Samples and Aggregates tabs.",
+      "registryDependencies": [
+        "button",
+        "select",
+        "table",
+        "tabs",
+        "toggle-group"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/aggregate-builder/aggregate-builder.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate-builder.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/aggregate-picker.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate-picker.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/aggregate.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate.ts"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/demo.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/field-picker.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/field-picker.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/index.ts"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/query-rail.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/query-rail.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/results-table.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/results-table.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/series-chart.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/series-chart.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/types.ts"
         }
       ]
     },
@@ -161,6 +233,85 @@
           "path": "src/patterns/assisted-notes/types.ts",
           "type": "registry:file",
           "target": "src/patterns/assisted-notes/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "bulk-select",
+      "title": "Bulk select",
+      "description": "Dense table of multi-line rows where selecting rows turns the header into an action bar in place, with an indeterminate select-all box, actions that disable themselves with a reason, a trend sparkline cell and a searchable assignee popover.",
+      "registryDependencies": [
+        "badge",
+        "button",
+        "command",
+        "dropdown-menu",
+        "input",
+        "popover",
+        "skeleton",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/bulk-select/action-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/action-bar.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/assignee-cell.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/assignee-cell.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/assignees.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/assignees.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/bulk-select.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/bulk-select.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/demo-data.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/demo-data.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/demo.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/indeterminate-checkbox.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/indeterminate-checkbox.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/index.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/selection.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/selection.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/trend-cell.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/trend-cell.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/trend.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/trend.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/types.ts"
         }
       ]
     },
@@ -274,6 +425,60 @@
     },
     {
       "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "conditional-status",
+      "title": "Conditional status",
+      "description": "A split button whose primary half changes state now and whose menu offers conditional variants, with a pure lifecycle that regresses a resolved item or escalates an archived one when its condition is met.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "popover"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/conditional-status/condition-menu.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/condition-menu.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/conditional-status.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/conditional-status.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/demo.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/index.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/models.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/models.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/split-button.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/split-button.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/status.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/status.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
       "name": "doc-collections",
       "title": "Doc collections",
       "description": "A page of text and collection blocks; opening a row shows its properties above a free-text body.",
@@ -341,6 +546,55 @@
           "path": "src/patterns/doc-collections/use-draft.ts",
           "type": "registry:file",
           "target": "src/patterns/doc-collections/use-draft.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "event-timeline",
+      "title": "Event timeline",
+      "description": "Vertical time-ordered list of typed entries with search, a type filter and an order control, plus an optional playhead that dims later entries, follows playback and seeks when a time is clicked.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "select"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/event-timeline/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/demo.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/entry-row.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/entry-row.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/event-timeline.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/event-timeline.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/index.ts"
+        },
+        {
+          "path": "src/patterns/event-timeline/playhead-divider.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/playhead-divider.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/timeline.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/timeline.ts"
+        },
+        {
+          "path": "src/patterns/event-timeline/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/types.ts"
         }
       ]
     },
@@ -565,6 +819,251 @@
     },
     {
       "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "query-tokens",
+      "title": "Query tokens",
+      "description": "Search box where key:value filters become removable chips, with a key and value popover, recent searches, plain-text fallback and an opt-in URL param.",
+      "dependencies": [
+        "lucide-react",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "kbd"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/query-tokens/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/demo.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/index.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/query-tokens.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/query-tokens.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/query.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/query.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/suggestion-popover.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/suggestion-popover.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/suggestions.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/suggestions.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/token-chip.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/token-chip.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/types.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/use-query-state.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/use-query-state.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "replay-player",
+      "title": "Replay player",
+      "description": "Playback surface for a recorded sequence of snapshots, with transport controls, a marker lane over a seek slider, a speed stepper and tabs of timed lists that follow the playhead and seek on click.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "tabs"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/replay-player/control-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/control-bar.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/demo.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/index.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/marker-lane.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/marker-lane.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/playback.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/playback.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/replay-player.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/replay-player.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/seek-slider.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/seek-slider.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/speed-stepper.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/speed-stepper.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/timed-list.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/timed-list.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/types.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/use-playback.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/use-playback.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/viewport.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/viewport.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "span-waterfall",
+      "title": "Span waterfall",
+      "description": "Tree of timed rows beside a shared time axis with colored duration bars, squeezed idle gaps, error badges, search, and a resizable side panel with pinnable attribute columns.",
+      "dependencies": [
+        "lucide-react",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "button",
+        "input",
+        "resizable",
+        "scroll-area"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/span-waterfall/collapse-pill.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/collapse-pill.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/demo.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/duration-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/duration-bar.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/index.ts"
+        },
+        {
+          "path": "src/patterns/span-waterfall/span-panel.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/span-panel.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/span-waterfall.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/span-waterfall.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/time-axis.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/time-axis.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/types.ts"
+        },
+        {
+          "path": "src/patterns/span-waterfall/waterfall.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/waterfall.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "stack-trace",
+      "title": "Stack trace",
+      "description": "Collapsible frames with numbered source excerpts, library frames folded into Show N more, a relevant/full toggle, an order control and chained exceptions.",
+      "registryDependencies": [
+        "badge",
+        "button",
+        "toggle-group"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/stack-trace/code-excerpt.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/code-excerpt.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/demo.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/frames.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/frames.ts"
+        },
+        {
+          "path": "src/patterns/stack-trace/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/index.ts"
+        },
+        {
+          "path": "src/patterns/stack-trace/stack-trace.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/stack-trace.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
       "name": "staged-table-edit",
       "title": "Staged table edit",
       "description": "An editable table where cell edits, new rows and deletions stay pending and tinted until one commit applies them or one discard throws them away.",
@@ -746,6 +1245,11 @@
           "path": "src/patterns/view-switcher/use-views.ts",
           "type": "registry:file",
           "target": "src/patterns/view-switcher/use-views.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/view-draft.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/view-draft.ts"
         },
         {
           "path": "src/patterns/view-switcher/view-switcher.tsx",
