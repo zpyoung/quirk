@@ -141,14 +141,46 @@ def dev_step(app: Path) -> int:
     return 0
 
 
-def stop_group(proc: subprocess.Popen) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(proc.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=5)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+def group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_group_gone(pgid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while group_alive(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def stop_group(proc: subprocess.Popen, grace: float = 5.0) -> None:
+    """Stop the whole process group led by `proc`, SIGKILLing any member that outlives SIGTERM.
+
+    The leader exiting is not enough: a descendant (the vite/esbuild child) can ignore SIGTERM and
+    keep running, so the group itself is polled until empty.
+    """
+    pgid = proc.pid
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        proc.wait()
+        return
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    if proc.poll() is not None and wait_group_gone(pgid, grace):
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+    wait_group_gone(pgid, grace)

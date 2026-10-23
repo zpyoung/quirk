@@ -64,7 +64,10 @@ def tokens_step(app: Path) -> int:
     if not lines[last].endswith("\n"):
         lines[last] += "\n"
     lines.insert(last + 1, TOKENS_IMPORT + "\n")
-    css.write_text("".join(lines), encoding="utf-8")
+    try:
+        css.write_text("".join(lines), encoding="utf-8")
+    except OSError as exc:
+        return _mini.step_failed("tokens", str(exc))
     print(f"+ [tokens] wired {TOKENS_IMPORT} into {css}")
     return 0
 
