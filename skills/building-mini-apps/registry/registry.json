@@ -53,6 +53,7 @@
       ],
       "registryDependencies": [
         "badge",
+        "button",
         "command",
         "input",
         "kbd",

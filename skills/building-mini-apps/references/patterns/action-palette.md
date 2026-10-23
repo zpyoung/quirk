@@ -27,8 +27,8 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 │ ⌕  Search…                                  (hint)   │  search row, ~70px
 ├──────────────────────────────────────────────────────┤
 │  SECTION                                             │
-│ ▌Row title            subtitle              type     │  rows ~44px, 8 visible
-│  Row title            subtitle              type     │
+│ ▌Row title            subtitle           type  …  │  rows ~44px, 8 visible
+│  Row title            subtitle           type     │
 │  Row title            ┌──────────────────────────┐   │
 │  Row title            │ Selected item title      │   │  panel ~45% wide,
 │  Row title            │▌Primary action        ↵  │   │  anchored bottom-right
@@ -44,7 +44,8 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 
 - **Search row:** one input that filters the list as you type.
 - **List:** optional section headings, rows with title, dimmer subtitle and a right-aligned muted type label. The selected row is a lighter rounded rectangle with no accent color.
-- **Footer bar:** left slot for the app or view name, replaced by a spinner and message while an action runs, or a toast. Right slot names what ↵ does for the selected row, then an "Actions ⌘K" chip.
+- **Row actions button:** a ghost `…` icon button at the right end of every row that has actions, named "Actions for <item title>". Always visible on the selected row; other rows show it on hover or when focus is inside the row. Our design.
+- **Footer bar:** left slot for the app or view name, replaced by a spinner and message while an action runs, or a toast. Right slot names what ↵ does for the selected row, then an "Actions ⌘K" button with a visible border and hover state, the same 28px height as any other footer control (our design).
 - **Action panel:** a card with the selected item's title, action rows (icon-free in our house style, shortcut keycaps at the right), thin separators between groups, and a filter input at the bottom edge. The list underneath stays visible and is not dimmed.
 
 ## Interaction
@@ -54,6 +55,10 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 | Type | Filters the list; selection resets to the first match | Substring match on title plus any extra search text; title prefix matches rank first (our design) |
 | ↑ / ↓ | Moves the selection | Works while the search input has focus. Stops at the ends |
 | ⌘K (Ctrl K) | Opens the panel for the selected row; closes it if open | Fires even while typing in the search input. Does nothing when no row is selected or the row has no actions |
+| Click a row | Selects it | Only selects; never opens the panel or runs an action |
+| Click a row's `…` button | Selects that row and opens its panel, anchored bottom-right like ⌘K's; closes the panel if it is already open for that row | Our design. Clicking another row's `…` while a panel is open switches the panel to that row. Focus moves to the panel's filter input, and returns to the search input on close |
+| Click the footer "Actions ⌘K" button | Opens the panel for the selected row; closes it if open | Same as ⌘K, for when no row is hovered. Our design |
+| Tab | Moves focus from the search input to the selected row's `…` button, then to the footer button | Our design. Only the selected row's button is a tab stop; the list keeps one tab stop. Enter or Space on the focused button works as a click |
 | ↵ | Runs the primary action of the selected row | With the panel open, runs the highlighted action instead. A primary action that has `children` opens the panel on its sub-menu instead of running |
 | ⌘↵ (Ctrl ↵) | Runs the secondary action | Only when the row has a second action; otherwise ignored. Inside an open sub-menu it does nothing |
 | Action chord, such as ⇧⌘F | Runs that action on the selected row | Works with the panel open or closed, including while typing in the search or panel input. Sub-menu actions can carry chords too. Chords are ignored while focus is in a text field outside the block |
@@ -72,7 +77,7 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 
 | State | Shows |
 |---|---|
-| Empty collection | `EmptyState` in the list area with a one-line prompt to add the first item. Footer shows no Actions chip |
+| Empty collection | `EmptyState` in the list area with a one-line prompt to add the first item. Footer shows no Actions button |
 | No matches | Message with the query, "No results for “…”". If `onCreate` is given, a first row "Create “…”" is selected; this is our design, adapted from the fallback rows in S1-0022 |
 | Loading | `LoadingState` in the list area. The search input stays enabled and ⌘K does nothing |
 | Error | `ErrorState` with a retry button when `onRetry` is given |
@@ -82,7 +87,8 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 | Many items | The list scrolls inside `ScrollArea`; only the first 200 matches render, with a final row "Showing 200 of N. Keep typing to narrow". Our design |
 | Many actions | Panel body scrolls, about 8 rows tall (S2-0015); the filter input stays pinned at the bottom. Destructive actions sort last, below a separator |
 | No matching action | One muted row "No actions match" in the panel; ↵ does nothing. Not seen in sources, our design |
-| Item has no actions | The footer shows only the primary label if any, and no Actions chip (S1-0075) |
+| Item has no actions | The footer shows only the primary label if any, and no Actions button (S1-0075). The row renders no `…` button |
+| Row `…` button | Rendered for every row with actions, in the DOM at all times. Visible (opacity 1) on the selected row and while the panel is open for its row; on other rows it appears on hover or `focus-within`. Its `aria-expanded` mirrors the panel. Not rendered on the "Create “…”" row. Our design |
 
 ## Borrow / Leave out
 
@@ -91,7 +97,7 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 - Panel as a floating card over the list's lower right, list still visible (S1-0051).
 - Panel anatomy: item title, action rows with keycap shortcuts, separators, filter input at the bottom (S1-0051, S1-0048).
 - First action is primary (↵), second is secondary (⌘↵) (S7, S2-0019).
-- Footer that names the primary action for the current row and shows the ⌘K chip, hidden when the row has no panel (S1-0001, S1-0073, S1-0075).
+- Footer that names the primary action for the current row and shows the ⌘K button, hidden when the row has no panel (S1-0001, S1-0073, S1-0075).
 - One keycap per key of a chord, modifier glyphs that change by platform (S1-0048, S1-0004).
 - Filtering the panel as a flat substring match (S2-0015, S4).
 - Sub-menus that replace the panel contents, and "…" on rows that lead to another view (S2-0021).
@@ -115,6 +121,8 @@ Proportions are approximate, from S1-0001 and S1-0051 (list window about 1.6:1; 
 ## Block API
 
 Files in `src/patterns/action-palette/`: `index.ts` re-exports `ActionPalette`, `ActionPanel`, `ShortcutKeys`, `formatShortcut` and the types `PaletteItem`, `PaletteAction`, `ActionPaletteProps` and `ActionPanelProps`; `demo.tsx` default-exports `Demo`. `registry-item.json` declares `dependencies` `react-hotkeys-hook` and `sonner`.
+
+Mouse path, no new props: the row `…` buttons and the footer button are rendered by `ActionPalette` itself, and `getActions` decides which rows get one (a row whose `getActions` returns an empty array has none). There is no prop to hide them. Each row is a `role="none"` wrapper holding the `role="option"` element and the button as siblings, so no interactive element sits inside an option. Every row's button is in the DOM, but only the selected row's has `tabIndex` 0, which keeps the list at one tab stop. All of these buttons carry `data-action-palette-toggle`, which `ActionPanel`'s outside-click handler ignores, so a click toggles the panel instead of closing and reopening it.
 
 ```ts
 // CONTRACT: item and action types
@@ -168,7 +176,8 @@ shadcn components, all from the pre-installed list:
 - `kbd` for keycaps.
 - `scroll-area`, `separator`, `badge` (type label).
 - `sonner` for toasts; the app's single `AppShell` mounts the `Toaster`.
-- `tooltip` for the footer chip; `AppShell` also mounts the `TooltipProvider`.
+- `tooltip` for the footer button; `AppShell` also mounts the `TooltipProvider`.
+- `button` for the row `…` button (ghost, icon) and the footer button (outline, small).
 - `toggle-group` in the demo only, for the state preview.
 
 Neither the block nor the demo renders `AppShell`, `Toaster` or `TooltipProvider`.
@@ -186,5 +195,5 @@ Neither the block nor the demo renders `AppShell`, `Toaster` or `TooltipProvider
 - Fallback when nothing matches: S1-0022.
 - Other apps: Linear [study note](../apps/linear.md) (S3-t1126, S1-t0129: command menu names its target item in a chip; we name it in the panel title); Obsidian [study note](../apps/obsidian.md) (S3-0004: first row preselected, key-hint footer).
 - Text-sourced only: destructive actions in red (S4), flat results while filtering (S4), Esc clearing the query (S5).
-- Our design, not seen in any source: ⌘K firing while the search input has focus, `aria-activedescendant` focus model, focus return to the search input, title-prefix ranking, 200-row render cap, `/` to focus search, `onCreate` row, "No actions match" row, error toast on a rejected action, chords running with the panel open, and the demo data.
-- Unseen in Raycast sources (see its Unseen section): arrow movement inside the open panel, the panel's open and close animation, mouse hover and clicking the footer chip. We use the library defaults for these.
+- Our design, not seen in any source: ⌘K firing while the search input has focus, `aria-activedescendant` focus model, focus return to the search input, title-prefix ranking, the row `…` actions button with its hover, focus and tab-stop rules, the bordered footer Actions button, 200-row render cap, `/` to focus search, `onCreate` row, "No actions match" row, error toast on a rejected action, chords running with the panel open, and the demo data.
+- Unseen in Raycast sources (see its Unseen section): arrow movement inside the open panel, the panel's open and close animation, mouse hover and clicking the footer button. We use the library defaults for these.
