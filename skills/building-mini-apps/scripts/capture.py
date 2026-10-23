@@ -6,11 +6,13 @@ Usage:
     capture.py search <app> [--query TEXT] [--limit N]
     capture.py video <app> <source_id> <url> [--threshold FLOAT]
 
-`video` downloads at 720p or lower into references/media/<app>/_video/, extracts frames into
-references/media/<app>/ named <source_id>-t<SSSS>.png (whole-second timestamp), prints each
-frame's path relative to the skill root, and always deletes _video/ before exiting. Frames
-left over from an earlier run of the same source ID are replaced; other sources' frames and
-anything outside references/media/<app>/ are never touched.
+`video` downloads at 720p or lower into references/media/<app>/_video/<source_id>/, extracts
+frames into references/media/<app>/ named <source_id>-t<SSSS>.png (whole-second timestamp),
+prints each frame's path relative to the skill root, and always deletes its own
+_video/<source_id>/ before exiting (and _video/ itself once nothing else is in it). Runs for
+different source IDs can overlap safely. Frames left over from an earlier run of the same
+source ID are replaced; other sources' frames and scratch, and anything outside
+references/media/<app>/, are never touched.
 
 Tools resolve from CAPTURE_YTDLP (else PATH, else ~/.local/bin/yt-dlp), CAPTURE_FFMPEG (else
 PATH) and CAPTURE_PLAYWRIGHT (else PATH). An override that points at nothing is a failure
@@ -155,8 +157,28 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def make_scratch(video_dir: Path) -> None:
+    """Create a run's scratch folder; retries because a sibling run may rmdir the shared parent."""
+    for attempt in range(5):
+        try:
+            video_dir.mkdir(parents=True)
+            return
+        except FileNotFoundError:
+            if attempt == 4:
+                raise
+
+
+def remove_scratch(video_dir: Path) -> None:
+    """Delete only this run's scratch folder, then the shared parent if it is now empty."""
+    shutil.rmtree(video_dir, ignore_errors=True)
+    try:
+        video_dir.parent.rmdir()
+    except OSError:
+        pass
+
+
 def download(ytdlp: str, url: str, source_id: str, video_dir: Path) -> Path:
-    video_dir.mkdir(parents=True)
+    make_scratch(video_dir)
     proc = run([ytdlp, "-f", VIDEO_FORMAT, "-o", str(video_dir / f"{source_id}.%(ext)s"), url])
     if proc.returncode != 0:
         raise CaptureError(f"download failed (yt-dlp exit {proc.returncode}):\n{tail(proc.stderr)}")
@@ -179,7 +201,7 @@ def extract(ffmpeg: str, video: Path, vf: str, out_dir: Path) -> List[Tuple[floa
         raise CaptureError(f"ffmpeg extraction failed (exit {proc.returncode}):\n{tail(proc.stderr)}")
     times = [float(m.group(1)) for line in proc.stderr.splitlines()
              if "showinfo" in line and (m := PTS_TIME_RE.search(line))]
-    files = sorted(out_dir.glob("*.png"))
+    files = sorted(out_dir.glob("*.png"), key=lambda path: int(path.stem))
     if len(times) != len(files):
         raise CaptureError(
             f"ffmpeg extraction failed: {len(files)} frames but {len(times)} showinfo timestamps"
@@ -212,7 +234,7 @@ def cmd_video(args: argparse.Namespace) -> int:
     ytdlp = require_tool("yt-dlp")
     ffmpeg = require_tool("ffmpeg")
     media = MEDIA_DIR / args.app
-    video_dir = media / "_video"
+    video_dir = media / "_video" / args.source_id
     media.mkdir(parents=True, exist_ok=True)
     try:
         if video_dir.exists():
@@ -227,7 +249,7 @@ def cmd_video(args: argparse.Namespace) -> int:
             raise CaptureError("no frames extracted from the video")
         published = publish_frames(frames, args.source_id, media)
     finally:
-        shutil.rmtree(video_dir, ignore_errors=True)
+        remove_scratch(video_dir)
     for path in published:
         print(path.relative_to(SKILL_ROOT).as_posix())
     return 0

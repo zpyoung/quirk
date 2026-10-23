@@ -4,12 +4,14 @@ No network. The only test that needs a real ffmpeg is guarded by a skipif.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Dict, List, Optional
 
 import pytest
@@ -354,3 +356,84 @@ def test_video_names_frames_from_real_ffmpeg_showinfo_output(rig: Rig, tmp_path:
     # three solid colours give 2 scene cuts, so the fps=1 rerun supplies the frames
     assert _frames(rig.media()) == [f"S1-t000{n}.png" for n in range(6)]
     assert not (rig.media() / "_video").exists()
+
+
+# --- concurrent runs and frame ordering ---
+
+
+def _load_capture(skill: Path, name: str) -> ModuleType:
+    """Import the copied capture.py so SKILL_ROOT and MEDIA_DIR anchor inside the rig."""
+    spec = importlib.util.spec_from_file_location(name, skill / "scripts" / "capture.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_video_runs_for_different_sources_do_not_delete_each_others_scratch(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    for key, value in rig.env.items():
+        monkeypatch.setenv(key, value)
+    capture = _load_capture(rig.skill, "capture_interleave")
+    real_run = capture.run
+    scratch = rig.media() / "_video"
+    state = {"nested": False, "s1_video_survived": False}
+
+    def interleaving_run(cmd):
+        is_first_ffmpeg = Path(cmd[0]).name == "ffmpeg" and not state["nested"]
+        if is_first_ffmpeg:
+            # S1 has downloaded and is about to extract; S2 now runs start to finish
+            state["nested"] = True
+            other = capture.main(["video", "sentry", "S2", "https://example.invalid/two"])
+            assert other == 0
+            state["s1_video_survived"] = (scratch / "S1" / "S1.mp4").is_file()
+        return real_run(cmd)
+
+    monkeypatch.setattr(capture, "run", interleaving_run)
+    assert capture.main(["video", "sentry", "S1", "https://example.invalid/one"]) == 0
+
+    assert state["s1_video_survived"], "S2's run removed S1's downloaded video"
+    names = _frames(rig.media())
+    for source in ("S1", "S2"):
+        assert [n for n in names if n.startswith(source)] == [
+            f"{source}-t0000.png", f"{source}-t0003.png", f"{source}-t0042.png",
+            f"{source}-t0090.png", f"{source}-t0200.png",
+        ]
+    assert not scratch.exists()
+    assert capsys.readouterr().out.count("references/media/sentry/") == 10
+
+
+def test_video_leaves_another_sources_scratch_alone_and_keeps_the_shared_parent(rig: Rig) -> None:
+    other = rig.media() / "_video" / "S9"
+    other.mkdir(parents=True)
+    (other / "S9.mp4").write_bytes(b"in flight")
+
+    assert rig.run("video", "sentry", "S1", "u").returncode == 0
+    assert (other / "S9.mp4").read_bytes() == b"in flight"
+    assert not (rig.media() / "_video" / "S1").exists()
+
+    assert rig.run("video", "sentry", "S1", "u", FAKE_YTDLP_FAIL="1").returncode == 1
+    assert (other / "S9.mp4").read_bytes() == b"in flight"
+    assert not (rig.media() / "_video" / "S1").exists()
+
+
+def test_extract_pairs_timestamps_with_frames_past_9999(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    capture = _load_capture(rig.skill, "capture_sort")
+    total = 10001
+
+    def fake_run(cmd):
+        out_pattern = cmd[-1]
+        lines = []
+        for n in range(total):
+            Path(out_pattern % (n + 1)).write_bytes(b"")
+            lines.append(f"[Parsed_showinfo_1 @ 0x1] n: {n} pts: {n} pts_time:{n}.0 fmt:yuv420p")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="\n".join(lines))
+
+    monkeypatch.setattr(capture, "run", fake_run)
+    pairs = capture.extract("ffmpeg", tmp_path / "v.mp4", "showinfo", tmp_path / "frames")
+
+    assert len(pairs) == total
+    assert all(int(path.stem) == int(pts) + 1 for pts, path in pairs)
