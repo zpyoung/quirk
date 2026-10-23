@@ -47,6 +47,7 @@ function PageTitle({ title, onCommit }: { title: string; onCommit: (title: strin
   return (
     <Input
       aria-label="Page title"
+      data-mini="title"
       value={draft}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {

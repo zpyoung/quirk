@@ -193,7 +193,7 @@ export default function Demo() {
   return (
     <div className="flex h-full min-h-[34rem] flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
-        <h2 className="text-sm font-semibold">Workshop planner</h2>
+        <h2 data-mini="title" className="text-sm font-semibold">Workshop planner</h2>
         <div
           role="group"
           aria-label="Preview state"
