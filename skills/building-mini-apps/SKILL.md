@@ -1,6 +1,6 @@
 ---
 name: building-mini-apps
-description: Use when the user asks to "build me a mini app", "a little app to track…", or "a local tool with saved data" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
+description: Use when the user asks to "build me a mini app", "a little app to track…", "a local tool with saved data", or to "analyze <app> as a mini app" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
 ---
 
 # Building mini apps
@@ -38,7 +38,7 @@ Each app has a study note in `references/apps/<app>.md` if a reference points to
 
 ## Building a new app
 
-1. **Read the matching references.** Pick the patterns from the index by what the user does with the records, then read each chosen `references/patterns/<p>.md` in full, including its When to use and what it leaves out.
+1. **Read the matching references.** Pick the patterns from the index by what the user does with the records, then read each chosen `references/patterns/<p>.md` in full, including its When to use and what it leaves out. For a clone of an analyzed app, read `references/blueprints/<app>.md` first and use the patterns it names.
 2. **Name the patterns and why**, in your reply, before building: one line per pattern tying it to the user's request. Two or three is normal; one is fine; more than three usually means the request is two apps.
 3. **Scaffold.** The target must not exist and its parent must:
 
@@ -72,12 +72,22 @@ It installs only the new block; existing files, including the base, are skipped,
 
 Then wire the block in by hand: read the app's existing store and keyboard bindings first, point the new block at the existing collection (`useCollection` by name) instead of its demo's sample data, and resolve key clashes with the patterns already installed. Render it from `src/App.tsx` inside the existing `<AppShell>`. Rebuild and report as in step 7 above.
 
+## Analyzing an app
+
+Use this when the user asks to "analyze <app> as a mini app", or to study an app for patterns or plan a close clone. Follow [references/analyzing-apps.md](references/analyzing-apps.md) in full. It needs a writable quirk checkout (not an installed plugin copy), yt-dlp, ffmpeg and playwright-cli, and starts with a preflight that checks them.
+
+- **Stop 1:** the run proposes the app's core jobs and waits for the user to confirm them. Nothing is captured before that.
+- **Stop 2:** the run writes the blueprint, then waits for the user to pick which proposed patterns, revisions and dependencies to build.
+- **Output:** `references/apps/<app>.md` (study note) and `references/blueprints/<app>.md` (clone plan). Frames stay local and uncommitted.
+
+Analyzing does not build the clone app. That is a later request, and the build flow reads the blueprint first.
+
 ## Rules
 
 - **One neutral house style.** All patterns use the tokens in `src/styles/mini-tokens.css`. Change the look by editing that file, not by styling one block apart.
-- **No brand assets from studied apps.** No logos, icons, fonts, illustrations or copy. Copy behavior, not appearance.
+- **No brand assets from studied apps.** No logos, icons, fonts, illustrations or copy. Copy behavior, not appearance. A clone's UI never names the studied app.
 - **Data in the browser by default** (IndexedDB through the base `useCollection`, with JSON export and import). Add a small local server only when the user's need clearly calls for it, such as reading real files.
 - **Never bind keys the browser reserves:** ⌘N, ⌘T, ⌘W, ⌘L. Keep the base rule that bindings do not fire while focus is in an input unless the pattern says so.
 - **Never make one pattern import another.** Share through the base: the store, the state components, the keyboard layer.
-- **Ask before adding dependencies** beyond the base and the installed shadcn components.
+- **Ask before adding dependencies** beyond the base and the installed shadcn components. Approval at an analysis's Stop 2 counts.
 - **Done means it runs:** `pnpm build` passes and `pnpm dev` starts. Never report a scaffold as working without both.
