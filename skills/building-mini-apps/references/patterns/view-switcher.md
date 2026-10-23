@@ -1,6 +1,6 @@
 # view-switcher
 
-One set of records shown through named view tabs (table, board, list, calendar), each tab keeping its own filter and sort, with a record opening in a docked side panel; studied mainly in Notion databases.
+One set of records shown through named view tabs (table, board, list, calendar), each tab keeping its own filter and sort, with a record opening in a docked side panel; studied mainly in Notion databases. Optionally the views are saved slices: a view keeps its query, sort and filters together, and changes not yet saved show a dot on its tab with Save, Save as new view and Reset. It was studied in Notion and Sentry.
 
 ## When to use
 
@@ -10,6 +10,7 @@ Use it when the same records are worth seeing in more than one shape, and the us
 - A content or event planner: a calendar for publish dates plus a "drafts only" list.
 - A small CRM or reading list: a table for sorting, a board by stage, saved filters like "this month".
 - A recipe or inventory log where records carry a status and a date.
+- A support queue, order list or reading backlog where people tune a search, sort and filters, then keep the result as a named view or discard it (turn on `trackUnsaved`).
 
 Do not use it when:
 
@@ -18,6 +19,8 @@ Do not use it when:
 - The user edits many cells at once and reviews changes before saving. Use `staged-table-edit`.
 - The "views" are different tools or panes of one workspace, not one data set seen differently. Use `workspace-panes`.
 - The panel is the main thing (a long property form or detail editor). Use `inspector`.
+- The query is the main control and needs `key:value` tokens with suggestions. Use `query-tokens`; saved views here keep only a plain search string.
+- Views are shared with other people or have permissions. Neither exists here.
 
 ## Anatomy
 
@@ -37,6 +40,15 @@ Do not use it when:
  content area: 100% when the panel is closed, about 65% when open
 ```
 
+With `trackUnsaved` on and the active view changed, the strip row gains a dot and a split button:
+
+```
+| [Table] [Board o] [Calendar] [+] [Save|v]         (F) (S) Search ( ) |
+```
+
+- **Unsaved dot**: a small filled dot at the right edge of a tab, in the accent color, on any view whose query, sort or filters differ from the saved copy. It also appears on the active tab, so the marker stays visible while you work. Screen readers hear "unsaved changes" after the name.
+- **Save group**: a split button after the "+", shown only while the active view is unsaved. The main button overwrites the view; the chevron opens a menu with Reset and Save as new view. Sentry puts this group in the toolbar beside the sort control; here it sits in the strip row so the new view can be renamed from the strip at once.
+
 - **Tab strip**: left-aligned under the title. One tab per view: layout icon plus name, the active tab a filled pill. A trailing "+" opens the layout picker. Scrolls horizontally when tabs overflow.
 - **Toolbar**: right-aligned on the same row as the tabs. Filter, sort and search controls, plus one layout setting (board "Group by", calendar "Date field").
 - **Chip row**: appears only when the active view has filters. One chip per rule with an x, then "+ Add filter".
@@ -46,7 +58,7 @@ Do not use it when:
 
 ## Interaction
 
-Key bindings come from `useHotkeys` and do not fire while focus is in an input, textarea or contenteditable, or while a dialog, menu or listbox is open, except Esc. Up, Down, Left, Right and Enter act only when focus is on the page body, the content area, a record or the panel title. All keys are our design; none of the sources show keyboard use inside a view.
+Key bindings come from `useHotkeys` and do not fire while focus is in an input, textarea or contenteditable, or while a dialog, menu or listbox is open, except Esc. Up, Down, Left, Right and Enter act only when focus is on the page body, the content area, a record or the panel title. All keys are our design; none of the sources show keyboard use inside a view. The saved-views actions add no keys.
 
 | Key | Does | Notes |
 |-----|------|-------|
@@ -63,13 +75,23 @@ Key bindings come from `useHotkeys` and do not fire while focus is in an input, 
 | `t` | Calendar: jump to the current month | |
 | Shift+Left / Shift+Right | Calendar: previous / next month | |
 
+With `trackUnsaved` on, these actions appear while the active view is unsaved (click or Tab and Enter, no keys):
+
+| Action | Does | Notes |
+|--------|------|-------|
+| Save | Writes the active view's query, sort and filters to the stored view and clears the dot | Layout, group and date field already save at once. If the write fails, a toast shows and the changes stay unsaved |
+| Reset (chevron menu) | Drops the unsaved changes and restores the saved query, sort and filters | No confirm; the changes were never saved |
+| Save as new view (chevron menu) | Creates a view named "<name> copy" holding what is on screen, switches to it and opens its name field | The original view goes back to its saved state |
+
 Focus rules:
 
 - Clicking a record or pressing Enter opens the panel and moves focus to the panel title (`tabIndex={-1}`, so it is announced). The row or card that opened it is remembered.
 - Esc or the close button closes the panel and returns focus to the remembered row or card. If it is gone (deleted, filtered out), focus goes to the content area.
 - Opening a record never changes the active tab. Switching tabs keeps the panel open if the record still exists in the new view, and closes it otherwise.
 - The tab strip is a `tablist`: one tab stop, Left/Right move between tabs, Enter or Space activates.
-- A new view takes focus on its name field so it can be renamed at once.
+- A new view takes focus on its name field so it can be renamed at once. This includes a view made by Save as new view.
+- With `trackUnsaved` on, unsaved changes belong to their view: switching tabs keeps them, and the dot stays on the tab you left. They are held in memory, so a reload drops them.
+- The Save group is reached by Tab after the "+" and is a plain button plus a menu button; the menu follows the dropdown menu keys (Up, Down, Enter, Esc). When Save, Reset or Save as new view removes the group, focus moves to the active tab.
 
 | State | Shows |
 |-------|-------|
@@ -82,6 +104,8 @@ Focus rules:
 | Many records | Table and list scroll inside the content area with a sticky header. Board columns scroll independently. A calendar day shows 3 cards, then "+N more" opening a popover. No pagination. |
 | Many views | Tab strip scrolls horizontally and keeps the active tab in view. Below 640 px it collapses to one select naming the current view. |
 | Narrow window | Below 768 px the panel covers the content instead of sharing the row. |
+| Unsaved changes | Dot on the tab and the Save group. Below 640 px the select names the view with "(unsaved)" and the Save group stays. Undoing every change by hand removes the marker. |
+| Saved query | A view saved with a search string applies it on open and fills the search field. The field stays visible while a query is set, even with fewer than 3 records. |
 
 ## Borrow / Leave out
 
@@ -98,6 +122,9 @@ Borrow:
 - Count footer, "+ New" row, "OPEN" pill on row hover, today marked on the calendar, dimmed out-of-month days, shaded weekends, "Today" control.
 - A hidden-record count for records a layout cannot draw ("No date (2)").
 - Empty states that say what is hidden and how to undo it (Linear).
+- With `trackUnsaved`: a small dot beside a saved view's name when its live query, sort and filters differ from the saved definition (Sentry).
+- A split Save button: the main part overwrites the current view, the chevron holds Reset (revert to the saved definition) and Save as new view (Sentry).
+- A view stores its query, sort and filters together, so a named view is a saved search (Sentry).
 
 Leave out:
 
@@ -106,7 +133,10 @@ Leave out:
 - Nested AND/OR filter groups: one flat list of AND rules is enough for a local app.
 - Multi-key sort and drag-to-reorder sorts: one sort key.
 - Drag-and-drop (reorder tabs, move cards between columns, reschedule on the calendar): no drag library in the dependency list. The panel's select changes status or date instead.
-- "Save for everyone", per-person tab display, and Craft's unsaved-changes Save: single user, changes save immediately.
+- "Save for everyone" and per-person tab display: single user. Sharing and permissions are not built.
+- Unsaved-change tracking by default: without `trackUnsaved`, filter and sort edits still save to the view at once, as before.
+- Sentry's All Views browse page (search, sort, "Created by Me" and "Created by Others" tables with creator, last viewed and star columns), star toggle and Starred Views nav group: they need accounts and a second screen.
+- Sentry's project, environment and time-range selectors, Seer button and in-place title rename: not part of the mechanic.
 - Center peek and full-page open modes: one panel mode. Use `list-peek` or `expand-in-place` for those.
 - Databases as containers, linked databases, relations and sidebar nesting: they belong to `doc-collections`.
 - Property visibility per view, frozen columns, calculate footers: toolbar room; every field shows.
@@ -114,7 +144,7 @@ Leave out:
 
 ## Block API
 
-Files: `gallery/src/patterns/view-switcher/index.ts`, `view-switcher.tsx` (plus internal layout files), `demo.tsx`. `index.ts` exports `ViewSwitcher`, `ViewSwitcherProps`, `applyView` and the types `Layout`, `FieldType`, `FieldDef`, `FilterOp`, `FilterRule`, `SortRule` and `ViewConfig`.
+Files: `gallery/src/patterns/view-switcher/index.ts`, `view-switcher.tsx` (plus internal layout files), `view-draft.ts` (pure unsaved-change logic), `use-views.ts` and `tab-strip.tsx` (stored views, the drafts hook, the dot and Save group), `demo.tsx`. `index.ts` exports `ViewSwitcher`, `ViewSwitcherProps`, `applyView` and the types `Layout`, `FieldType`, `FieldDef`, `FilterOp`, `FilterRule`, `SortRule` and `ViewConfig`.
 
 ```ts
 CONTRACT: type Layout = "table" | "board" | "list" | "calendar"
@@ -123,7 +153,7 @@ CONTRACT: interface FieldDef<T> { key: Extract<keyof T, string>; label: string; 
 CONTRACT: type FilterOp = "contains" | "is" | "isNot" | "anyOf" | "onOrBefore" | "onOrAfter" | "gte" | "lte"
 CONTRACT: interface FilterRule { field: string; op: FilterOp; value: string | string[] }
 CONTRACT: interface SortRule { field: string; dir: "asc" | "desc" }
-CONTRACT: interface ViewConfig { id: string; name: string; layout: Layout; filters: FilterRule[]; sort?: SortRule; groupBy?: string; dateField?: string }
+CONTRACT: interface ViewConfig { id: string; name: string; layout: Layout; filters: FilterRule[]; sort?: SortRule; groupBy?: string; dateField?: string; query?: string }   // query is read and saved only when trackUnsaved is on
 CONTRACT: interface ViewSwitcherProps<T extends { id: string; title: string }> {
   items: T[]
   fields: FieldDef<T>[]                               // beyond id and title, which are always shown
@@ -139,6 +169,8 @@ CONTRACT: interface ViewSwitcherProps<T extends { id: string; title: string }> {
   renderPanel?: (item: T, ctx: { close: () => void }) => ReactNode   // replaces the default property list
   activeViewId?: string                               // controlled mode
   onActiveViewChange?: (id: string) => void
+  trackUnsaved?: boolean                              // default false; on: query, sort and filters become a per-view draft with the unsaved dot and Save, Save as new view, Reset
+  onViewSaved?: (view: ViewConfig, how: "save" | "save-as-new") => void   // after a successful write; only with trackUnsaved
 }
 CONTRACT: ViewSwitcher<T extends { id: string; title: string }>(props: ViewSwitcherProps<T>): JSX.Element
 CONTRACT: applyView<T extends { id: string; title: string }>(items: T[], view: ViewConfig, fields: FieldDef<T>[], query?: string): T[]   // pure filter + search + sort, exported for tests and reuse
@@ -148,7 +180,10 @@ Behavior the signature does not show:
 
 - `ViewSwitcher` owns tabs, toolbar, chips, layouts and the panel; the host owns the records and passes `items` from its own `useCollection`.
 - Uncontrolled, the active view id is kept in `localStorage` under `${storageKey}-active` (read and written inside try/catch) so a reload reopens the same tab, falling back to the first view when the id is gone.
-- Search text is shared by all views and is not saved.
+- Search text is shared by all views and is not saved, unless `trackUnsaved` is on: then it is part of the view (`ViewConfig.query`), each view keeps its own, and it is saved with Save.
+- `trackUnsaved` leaves `layout`, `groupBy`, `dateField` and `name` writing straight to the view. Only `query`, `sort` and `filters` become a draft, held in component state by view id (`view-draft.ts`). A view is unsaved when its draft differs from the stored copy; `applyView` runs on the draft merged over the stored view.
+- Save writes the draft with one `update`; the draft is dropped only when that write succeeds and nothing was edited meanwhile. Save as new view adds a copy of the merged view, drops the original's draft and switches to the copy.
+- Duplicate copies the stored view, not the draft. Deleting a view drops its draft.
 - Board needs `groupBy` naming a select field and calendar needs `dateField` naming a date field; the layout picker preselects the first matching field, and the toolbar select changes it. If no field of that type exists, the tile is disabled with a tooltip saying why.
 - Deleting the only remaining view is not allowed.
 - View writes that reject show a `sonner` toast; the tab strip keeps the last good views.
@@ -157,7 +192,7 @@ Base pieces used: `useCollection` (views), `EmptyState`, `LoadingState`, `ErrorS
 
 shadcn components (all from the pre-installed list): `tabs`, `button`, `input`, `badge`, `popover`, `select`, `checkbox`, `dropdown-menu`, `dialog`, `table`, `tooltip`, `kbd`. `registry-item.json` declares the npm `dependencies` `react-hotkeys-hook` and `sonner`; no others.
 
-`demo.tsx` shows a "Workshop planner" with 14 records on `useCollection("view-switcher-demo", seed)` (the views are stored under `view-switcher-demo-views`): fields Title, Stage (Idea, Planned, Confirmed, Done), Host (three names), Date (spread over the current month, built from today's date), Seats (number). Two records have no date, one has no host, and one has a title of about 100 characters. A "Preview state" button group (live, empty, loading, error) in the header forces each state. Seeded views: "All" (table), "Calendar" (by Date), "By stage" (board by Stage), "Upcoming" (list, Stage any of Planned and Confirmed, sorted by Date). It wires `onCreate` (new records start at stage Idea), `onUpdate` and `onDelete` to the store, and reports a rejected write as a toast.
+`demo.tsx` shows a "Workshop planner" with 14 records on `useCollection("view-switcher-demo", seed)` (the views are stored under `view-switcher-demo-views`): fields Title, Stage (Idea, Planned, Confirmed, Done), Host (three names), Date (spread over the current month, built from today's date), Seats (number). Two records have no date, one has no host, and one has a title of about 100 characters. A "Preview state" button group (live, empty, loading, error) in the header forces each state. Seeded views: "All" (table), "Calendar" (by Date), "By stage" (board by Stage), "Upcoming" (list, Stage any of Planned and Confirmed, sorted by Date). It passes `trackUnsaved`, so editing a filter, the sort or the search on any view shows the dot and the Save group, and Save, Save as new view and Reset all work. It wires `onCreate` (new records start at stage Idea), `onUpdate` and `onDelete` to the store, and reports a rejected write as a toast.
 
 ## Sources
 
@@ -176,6 +211,10 @@ shadcn components (all from the pre-installed list): `tabs`, `button`, `input`, 
   - Loading as a blank panel with no skeleton: S1-0014; we use `LoadingState` instead, our design.
 - [linear study note](../apps/linear.md): one-letter filter key and keycaps in tooltips (S1-t0066, S1-t0102), empty state naming hidden counts (S1-t0111), metadata truncating before title (S1-t0072), view-tab strip above toolbar (S2-t0096).
 - [obsidian study note](../apps/obsidian.md): filters apply live with no Apply button (S3-0032), several named views per base (S8).
-- [craft study note](../apps/craft.md): view tabs as saved filter/group/sort and immediate new tab (S1-0012, S1-0032); we leave out its unsaved-changes Save (S4-collections_blog_1).
+- [craft study note](../apps/craft.md): view tabs as saved filter/group/sort and immediate new tab (S1-0012, S1-0032); its unsaved-changes Save (S4-collections_blog_1) is only matched by the optional `trackUnsaved`, modeled on Sentry.
+- [sentry study note](../apps/sentry.md), source of the optional saved-views revision:
+  - Dot on a modified saved view, signalling the live state differs from the saved definition: S8-unsaved-changes.png (shown at the right edge of the row in the starred-views list; we put it on the tab).
+  - Split Save button, main part overwrites the view, chevron menu with Reset and Save as new view: S8-save-button.png.
+  - A view as a saved query and filters, with its definition scannable as chips: S8-all-views.png. The browse page itself is left out.
 - [fantastical study note](../apps/fantastical.md): numbered view shortcuts (S4-calendar-views), sidebar unchanged across views (S2-0015).
-- Our design (no source shows it): every key in the keys table, the focus rules, the filter/sort popover keys, the flat filter operators, "+N more" in calendar cells, the 640 px and 768 px breakpoints, the `onCreate` defaults, `applyView`, and persisting the active view in `localStorage`.
+- Our design (no source shows it): the Save group in the strip row instead of the toolbar, the "<name> copy" naming and immediate rename after Save as new view, drafts kept per view in memory, no keys for the saved-views actions, the `query` field on `ViewConfig`, the `trackUnsaved` switch and `onViewSaved`, every key in the keys table, the focus rules, the filter/sort popover keys, the flat filter operators, "+N more" in calendar cells, the 640 px and 768 px breakpoints, the `onCreate` defaults, `applyView`, and persisting the active view in `localStorage`.

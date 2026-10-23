@@ -33,7 +33,8 @@ import { RecordPanel } from "./record-panel"
 import { TabStrip } from "./tab-strip"
 import { Toolbar } from "./toolbar"
 import type { FieldDef, Layout, ViewConfig } from "./types"
-import { useActiveViewId, useViews } from "./use-views"
+import { useActiveViewId, useDrafts, useViews } from "./use-views"
+import { effectiveView, savePatch } from "./view-draft"
 
 export interface ViewSwitcherProps<T extends { id: string; title: string }> {
   items: T[]
@@ -60,6 +61,13 @@ export interface ViewSwitcherProps<T extends { id: string; title: string }> {
   /** Controlled mode for the active view. */
   activeViewId?: string
   onActiveViewChange?: (id: string) => void
+  /**
+   * Off by default. On, query, sort and filters become a per-view draft: a dot
+   * marks the view and Save, Save as new view and Reset appear until it is saved.
+   */
+  trackUnsaved?: boolean
+  /** Called after a successful write; only with `trackUnsaved`. */
+  onViewSaved?: (view: ViewConfig, how: "save" | "save-as-new") => void
 }
 
 const LAYOUT_NAMES: Record<Layout, string> = {
@@ -107,19 +115,29 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
     onUpdate,
     onDelete,
     renderPanel,
+    trackUnsaved: tracking = false,
   } = props
 
   const defs = withTitle(fields)
   const viewsApi = useViews(storageKey, props.defaultViews)
   const { views } = viewsApi
-  const [view, setActive] = useActiveViewId(
+  const [saved, setActive] = useActiveViewId(
     storageKey,
     views,
     props.activeViewId,
     props.onActiveViewChange
   )
+  const draftsApi = useDrafts(views)
+  const viewFor = (v: ViewConfig) =>
+    tracking ? effectiveView(v, draftsApi.drafts[v.id]) : v
+  const view = viewFor(saved)
 
-  const [query, setQuery] = useState("")
+  const [sharedQuery, setSharedQuery] = useState("")
+  const query = tracking ? (view.query ?? "") : sharedQuery
+  function setQuery(next: string) {
+    if (tracking) draftsApi.patch(saved.id, { query: next })
+    else setSharedQuery(next)
+  }
   const [activeRecordId, setActiveRecordId] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [filterOpen, setFilterOpen] = useState(false)
@@ -209,8 +227,11 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
   function switchTo(target: ViewConfig) {
     if (target.id === view.id) return
     setActive(target.id)
+    const next = viewFor(target)
     const kept = new Set(
-      applyView(items, target, fields, query).map((i) => i.id)
+      applyView(items, next, fields, tracking ? (next.query ?? "") : query).map(
+        (i) => i.id
+      )
     )
     if (openId !== null && !kept.has(openId)) closePanel(false)
     if (activeRecordId !== null && !kept.has(activeRecordId))
@@ -218,7 +239,50 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
   }
 
   function updateView(patch: Partial<Omit<ViewConfig, "id">>) {
-    viewsApi.update(view.id, patch)
+    if (!tracking) {
+      void viewsApi.update(view.id, patch)
+      return
+    }
+    const { filters, sort, ...immediate } = patch
+    if ("filters" in patch || "sort" in patch)
+      draftsApi.patch(saved.id, {
+        ...("filters" in patch ? { filters } : {}),
+        ...("sort" in patch ? { sort } : {}),
+      })
+    if (Object.keys(immediate).length > 0)
+      void viewsApi.update(saved.id, immediate)
+  }
+
+  async function saveView() {
+    const draft = draftsApi.drafts[saved.id]
+    if (!draft) return
+    const merged = effectiveView(saved, draft)
+    if (await viewsApi.update(saved.id, savePatch(merged))) {
+      draftsApi.clear(saved.id, draft)
+      props.onViewSaved?.(merged, "save")
+    }
+  }
+
+  async function saveAsNewView(): Promise<boolean> {
+    const merged = effectiveView(saved, draftsApi.drafts[saved.id])
+    const next: ViewConfig = {
+      ...merged,
+      id: crypto.randomUUID(),
+      name: `${saved.name} copy`,
+      filters: merged.filters.map((r) => ({
+        ...r,
+        value: Array.isArray(r.value) ? [...r.value] : r.value,
+      })),
+      sort: merged.sort && { ...merged.sort },
+      query: merged.query ? merged.query : undefined,
+    }
+    const added = await viewsApi.add(next)
+    if (added) {
+      draftsApi.clear(saved.id)
+      switchTo(next)
+      props.onViewSaved?.(next, "save-as-new")
+    }
+    return added
   }
 
   async function addView(layout: Layout): Promise<boolean> {
@@ -257,7 +321,10 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
     if (views.length <= 1) return
     const index = views.findIndex((v) => v.id === id)
     const neighbour = views[index + 1] ?? views[index - 1]
-    if (await viewsApi.remove(id)) switchTo(neighbour)
+    if (await viewsApi.remove(id)) {
+      draftsApi.clear(id)
+      switchTo(neighbour)
+    }
   }
 
   function requestCreate(defaults: CreateDefaults) {
@@ -295,6 +362,10 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
       }
     }
     return {}
+  }
+
+  function resetView() {
+    draftsApi.clear(saved.id)
   }
 
   function clearFilters() {
@@ -571,12 +642,22 @@ export function ViewSwitcher<T extends { id: string; title: string }>(
             onRename={(id, name) => viewsApi.update(id, { name })}
             onDuplicate={duplicateView}
             onDelete={(id) => void deleteView(id)}
+            unsaved={
+              tracking
+                ? {
+                    ids: draftsApi.dirtyIds,
+                    onSave: () => void saveView(),
+                    onSaveAsNew: saveAsNewView,
+                    onReset: resetView,
+                  }
+                : undefined
+            }
           />
           <Toolbar
             view={view}
             fields={defs}
             disabled={loading}
-            showSearch={ready && items.length >= 3}
+            showSearch={ready && (items.length >= 3 || (tracking && query !== ""))}
             query={query}
             searchRef={searchRef}
             filterOpen={filterOpen}
