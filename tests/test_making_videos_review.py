@@ -439,6 +439,21 @@ def test_sync_chart_one_series_when_cuts_agree_else_one_per_cut(tmp_path: Path, 
     assert re.search(r"<tr><td>b1</td><td>0\.3</td><td>-0\.6</td></tr>", results)
 
 
+def test_no_onset_label_survives_a_cut_that_measured_one(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    (proj / "beats.json").write_text(json.dumps([{"id": "b1", "word": "alpha"}]))
+    v1 = proj / "v1"
+    v1.mkdir()
+    add_cut(v1, "a-16x9")
+    add_cut(v1, "a-9x16")
+    write_verify(v1, {
+        "a-16x9.mp4": _run([_sync([("b1", "onset", 0.3)])]),
+        "a-9x16.mp4": _run([_sync([("b1", "expected", 0.0)])]),
+    })
+    _, page = build_ok(proj, env)
+    assert "<td>alpha (no onset)</td>" in section(page, "Verify results")
+
+
 # scenes ---------------------------------------------------------------------------------------
 
 
@@ -516,6 +531,32 @@ def test_storyboard_without_a_scene_table_renders_as_text_with_tables(tmp_path: 
     assert page.count("<h1") == 1  # the storyboard's own h1 is demoted
 
 
+def test_scene_table_without_outer_pipes(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    (proj / "v1").mkdir()
+    (proj / "storyboard.md").write_text(
+        "Scene | Time | Narration\n--- | --- | ---\ns1 | 0-5 | Hello\ns2 | 5-10 | Bye\n"
+    )
+    _, page = build_ok(proj, env)
+    scenes = section(page, "Scenes")
+    assert scenes.count('class="seek"') == 2
+    assert "Hello" in scenes and "Bye" in scenes and 'data-seek="5"' in scenes
+
+    mod = _load_module()
+    assert [s.start for s in mod.parse_scenes("Scene | Time | Narration\n--- | --- | ---\ns1 | 0-5 | Hello\n")] == ["0"]
+    html = mod.render_markdown("a | b\n--|--\n1 | 2\n3 | 4\n\nafter\n")
+    assert html.count("<tr>") == 3 and "<td>3</td><td>4</td>" in html
+    assert "<p>after</p>" in html
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("review_page_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_render_markdown_table_unit() -> None:
     spec = importlib.util.spec_from_file_location("review_page_under_test", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
@@ -591,6 +632,36 @@ def test_unreadable_verify_json_is_named(tmp_path: Path, env: dict) -> None:
     assert "verify.json unreadable" in section(page, "Verify results")
 
 
+def test_wrongly_typed_verify_fields_are_named_not_fatal(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    v1 = proj / "v1"
+    v1.mkdir()
+    add_cut(v1, "a-16x9")
+    add_cut(v1, "a-9x16")
+    add_cut(v1, "a-1x1")
+    sync_bad = _check("sync", "pass", {"worst_frames": 0, "beats": 5}, {"offset_frames_max": 1})
+    (v1 / "verify.json").write_text(json.dumps({"runs": {
+        "a-16x9.mp4": {"passed": True, "checks": 1},
+        "a-9x16.mp4": 7,
+        "a-1x1.mp4": _run([sync_bad]),
+    }}))
+    _, page = build_ok(proj, env)
+    results = section(page, "Verify results")
+    assert "verify.json checks unreadable for a-16x9.mp4" in results
+    assert "verify.json run for a-9x16.mp4 unreadable" in results
+    assert "verify.json sync beats unreadable for a-1x1.mp4" in results
+
+    (v1 / "verify.json").write_text(json.dumps({"passed": True, "checks": "nope", "runs": None}))
+    _, page = build_ok(proj, env)
+    assert "verify.json runs unreadable" in section(page, "Verify results")
+
+    (v1 / "verify.json").write_text(json.dumps({"passed": True, "checks": 1}))
+    for stem in ("a-9x16", "a-1x1"):
+        (v1 / (stem + ".mp4")).unlink()
+    _, page = build_ok(proj, env)
+    assert "verify.json checks unreadable" in section(page, "Verify results")
+
+
 def test_flat_verify_and_flat_frames_still_render(tmp_path: Path, env: dict) -> None:
     proj = make_project(tmp_path)
     v1 = proj / "v1"
@@ -636,6 +707,26 @@ def test_outside_calls_what_ran_is_escaped(tmp_path: Path, env: dict) -> None:
     src, page = build_ok(proj, env)
     assert "&lt;b&gt;x&lt;/b&gt;" in src and "<b>x</b>" not in src
     assert "&lt;i&gt;evil&lt;/i&gt;" in page and "<i>evil</i>" not in page
+
+
+def test_local_call_status_follows_each_providers_convention(tmp_path: Path, env: dict) -> None:
+    proj = make_project(tmp_path)
+    (proj / "v1").mkdir()
+    calls = [
+        {"provider": "hyperframes", "subcommand": "render", "args": [], "status": 0},
+        {"provider": "playwright", "method": "RECORD", "host": "localhost", "path": "/", "status": 200},
+    ]
+    (proj / "calls.jsonl").write_text("\n".join(json.dumps(c) for c in calls) + "\n")
+    src, _ = build_ok(proj, env)
+    assert "local call" not in src.split("every one to local tools")[-1].split("</li>")[0]
+
+    calls += [
+        {"provider": "hyperframes", "subcommand": "render", "args": [], "status": 1},
+        {"provider": "playwright", "method": "RECORD", "host": "localhost", "path": "/", "status": 0},
+    ]
+    (proj / "calls.jsonl").write_text("\n".join(json.dumps(c) for c in calls) + "\n")
+    src, _ = build_ok(proj, env)
+    assert "2 local calls failed." in src
 
 
 # earlier versions and compare -----------------------------------------------------------------
