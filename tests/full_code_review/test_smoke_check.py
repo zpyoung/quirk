@@ -168,11 +168,24 @@ def test_absent_does_not_require_production_under_complete_adjudication():
     {"absent": None},
     {"recommendation_contains": 3},
     {"recommendation_contains": ["ceil_div"]},
+    {"recommendation_contains": None},
+    {"recommendation_contains": ""},
+    {"absent": None, "recommendation_contains": "ceil_div"},
 ])
 def test_non_bool_absent_or_non_string_marker_is_bad_input(tmp_path, extra):
     code, out = run_cli(tmp_path, {"findings": [finding()]}, dict(EXPECTED, **extra))
     assert code == 2
     assert "error" in out
+
+
+@pytest.mark.parametrize("extra", [
+    {"recommendation_contains": None},
+    {"recommendation_contains": ""},
+    {"absent": None},
+])
+def test_check_rejects_present_but_null_or_empty_keys(extra):
+    with pytest.raises(ValueError):
+        m.check({"findings": [finding()]}, dict(EXPECTED, **extra))
 
 
 def test_absent_false_behaves_like_an_ordinary_case():
