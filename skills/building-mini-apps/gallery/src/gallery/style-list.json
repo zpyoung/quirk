@@ -2,5 +2,29 @@
   {
     "slug": "neutral-house",
     "name": "Neutral House"
+  },
+  {
+    "slug": "calm-paper",
+    "name": "Calm Paper"
+  },
+  {
+    "slug": "airy-white",
+    "name": "Airy White"
+  },
+  {
+    "slug": "cool-tool",
+    "name": "Cool Tool"
+  },
+  {
+    "slug": "dense-dark",
+    "name": "Dense Dark"
+  },
+  {
+    "slug": "glass-launcher",
+    "name": "Glass Launcher"
+  },
+  {
+    "slug": "split-tone",
+    "name": "Split Tone"
   }
 ]

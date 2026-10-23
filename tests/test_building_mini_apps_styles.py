@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -432,7 +433,7 @@ def test_build_regenerates_outputs_byte_for_byte(
     build_styles: ModuleType, tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
 ) -> None:
     root = _copy_skill(tmp_path)
-    outputs = [root / "styles" / "dist" / "neutral-house.css",
+    outputs = [*sorted((root / "styles" / "dist").glob("*.css")),
                root / "gallery" / "src" / "styles" / "mini-tokens.css",
                root / "gallery" / "src" / "styles" / "gallery-styles.css",
                root / "gallery" / "src" / "gallery" / "style-list.json"]
@@ -440,7 +441,7 @@ def test_build_regenerates_outputs_byte_for_byte(
     for path in outputs:
         path.write_text("stale", encoding="utf-8")
     assert build_styles.main([], skill_root=root) == 0
-    assert "styles built: 1" in capsys.readouterr().out
+    assert "styles built: 7" in capsys.readouterr().out
     assert [p.read_bytes() for p in outputs] == expected
 
 
@@ -544,3 +545,56 @@ def test_check_file_rejects_out_of_range_colours_quickly(
     path.write_text(text + "\nhtml:root { --primary: oklch(0.5 " + "9" * 400 + " 205); }\n", encoding="utf-8")
     assert build_styles.main(["--check-file", str(path)], skill_root=SKILL_DIR) == 1
     assert "finite" in capsys.readouterr().err
+
+
+# --- the seven real sources ---
+
+STUDIED_FROM = {
+    "neutral-house": [],
+    "calm-paper": ["granola", "craft"],
+    "airy-white": ["notion", "things"],
+    "cool-tool": ["linear", "figma"],
+    "dense-dark": ["tableplus", "obsidian"],
+    "glass-launcher": ["raycast"],
+    "split-tone": ["fantastical"],
+}
+APP_DISPLAY_NAMES = ("Linear", "Things", "Raycast", "Craft", "Obsidian", "TablePlus",
+                     "Fantastical", "Notion", "Granola", "Figma")
+
+
+def test_all_seven_sources_exist_and_stems_equal_slugs(styles: ModuleType) -> None:
+    stems = sorted(p.stem for p in STYLES_DIR.glob("*.json"))
+    assert stems == sorted(styles.SLUGS)
+    assert list(styles.load_styles(STYLES_DIR)) == list(styles.SLUGS)
+
+
+@pytest.mark.parametrize("slug", list(STUDIED_FROM))
+def test_real_source_validates_and_passes_the_gate(styles: ModuleType, slug: str) -> None:
+    style = styles.load_style(STYLES_DIR / f"{slug}.json")
+    assert style["slug"] == slug
+    assert styles.contrast_failures(style) == []
+
+
+@pytest.mark.parametrize("slug", list(STUDIED_FROM))
+def test_real_source_studied_from(styles: ModuleType, slug: str) -> None:
+    assert styles.load_style(STYLES_DIR / f"{slug}.json")["studied_from"] == STUDIED_FROM[slug]
+
+
+def test_no_studied_app_name_appears_in_generated_output() -> None:
+    pattern = re.compile(r"\b(" + "|".join(APP_DISPLAY_NAMES) + r")\b")
+    files = sorted((STYLES_DIR / "dist").glob("*.css")) + [
+        SKILL_DIR / "gallery" / "src" / "styles" / "gallery-styles.css",
+        SKILL_DIR / "gallery" / "src" / "gallery" / "style-list.json",
+    ]
+    for path in files:
+        assert not pattern.search(path.read_text(encoding="utf-8")), path.name
+    for source in STYLES_DIR.glob("*.json"):
+        name = json.loads(source.read_text(encoding="utf-8"))["name"]
+        assert not pattern.search(name), source.name
+
+
+def test_style_list_lists_the_seven_in_slug_order(styles: ModuleType) -> None:
+    data = json.loads((SKILL_DIR / "gallery" / "src" / "gallery" / "style-list.json").read_text())
+    loaded = styles.load_styles(STYLES_DIR)
+    assert [entry["slug"] for entry in data] == list(styles.SLUGS)
+    assert data == [{"slug": s, "name": loaded[s]["name"]} for s in styles.SLUGS]
