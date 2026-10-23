@@ -20,7 +20,7 @@ _DISAGREEMENT_KIND = {"issue_wrong": "issue", "fix_wrong": "fix", "unreachable":
 _RULINGS = ("agree", *_DISAGREEMENT_KIND)
 _LABELS = ("Common path", "Edge case", "Unreachable", "Would miss", "N/A")
 _TEST_DIMENSIONS = {"tests", "test-adequacy", "test-coverage"}
-_DIFF_FENCE = re.compile(r"(?m)^```diff")
+_DIFF_FENCE = re.compile(r"(?m)^```diff[ \t\r]*\n(?:[\s\S]*?\n)?```[ \t\r]*$")
 _IDENTITY = re.compile(r"(?i)\b(adjudicat\w*|lens(es)?|opus|sonnet|reviewer)\b")
 _FINDING_ID = re.compile(r"A[1-9][0-9]*")
 _PATH_CAP = 200
@@ -176,7 +176,7 @@ def _validate_ruling(raw: dict, finding: dict) -> dict:
         fix_md = _one_line(replacement.get("fix_md"), _FIX_MD_CAP, "%s: replacement.fix_md" % where)
         recommendation = _required_text(replacement.get("recommendation"), "%s: replacement.recommendation" % where)
         if not _DIFF_FENCE.search(recommendation):
-            raise ValueError("%s: replacement.recommendation must contain a ```diff fenced block" % where)
+            raise ValueError("%s: replacement.recommendation must contain a closed ```diff fenced block" % where)
         _reject_identity(fix_md, "%s: replacement.fix_md" % where)
         _reject_identity(recommendation, "%s: replacement.recommendation" % where)
         replacement = {"fix_md": fix_md, "recommendation": recommendation}

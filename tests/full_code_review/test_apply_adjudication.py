@@ -797,6 +797,12 @@ def test_one_line_fields_reject_unsafe_characters_at_either_end(tmp_path, capsys
      "recommendation"),
     ("differently fenced recommendation",
      lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "```python\na = b\n```"}), "recommendation"),
+    ("fence info string only starts with diff",
+     lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "```different\n-a\n+b\n```"}), "recommendation"),
+    ("fence info string has a suffix after diff",
+     lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "```diffx\n-a\n+b\n```"}), "recommendation"),
+    ("unclosed diff fence",
+     lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "```diff\n-a\n+b"}), "recommendation"),
 ])
 def test_prompt_contract_shapes_are_enforced(tmp_path, capsys, command, name, ruling, needle):
     mod, paths = build(tmp_path, capsys, [finding(1)], [ruling()])
@@ -817,6 +823,14 @@ def test_recommendation_with_prose_around_a_diff_fence_is_accepted(tmp_path, cap
                       [fix_wrong("A1", replacement={"fix_md": "x", "recommendation": recommendation})],
                       verdicts={"A1": "adjudicator"})
     assert result["findings"][0]["recommendation"] == recommendation
+
+
+def test_recommendation_diff_fence_tolerates_trailing_whitespace(tmp_path, capsys):
+    recommendation = "```diff \t\n-a\n+b\n```  "
+    result = pipeline(tmp_path, capsys, [finding(1)],
+                      [fix_wrong("A1", replacement={"fix_md": "x", "recommendation": recommendation})],
+                      verdicts={"A1": "adjudicator"})
+    assert result["findings"][0]["recommendation"] == recommendation.strip()
 
 
 def stale_apply(tmp_path, capsys, findings, rulings, changed_rulings=None, changed_findings=None):
