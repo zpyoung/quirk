@@ -6,7 +6,8 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **28 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, driving web, Electron, and native macOS apps like a user with a no-false-pass guard script, and more.
+- **29 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, driving web, Electron, and native macOS apps like a user with a no-false-pass guard script, and more.
+- **building-mini-apps** scaffolds a small local React app from proven interaction patterns (list-peek, action-palette, view-switcher and others) through a local shadcn registry.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation
