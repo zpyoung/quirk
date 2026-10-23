@@ -126,15 +126,9 @@ export function Pane<T extends WorkspaceItem>({
   const [rawError, setRawError] = useState<string>()
 
   function commitRaw(raw: string) {
-    const base = writer?.latest()
-    if (!writer || !base) return
-    try {
-      const next = parseRaw(raw, base)
-      setRawError(undefined)
-      writer.write(next).catch((cause: unknown) => setRawError(messageOf(cause)))
-    } catch (cause) {
-      setRawError(messageOf(cause))
-    }
+    if (!writer) return
+    setRawError(undefined)
+    writer.edit((base) => parseRaw(raw, base)).catch((cause: unknown) => setRawError(messageOf(cause)))
   }
 
   let body: ReactNode
