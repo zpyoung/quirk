@@ -104,7 +104,7 @@ export default function Demo() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-10 shrink-0 items-center gap-3 border-b px-3">
-        <h2 className="text-sm font-semibold tracking-tight">Errands</h2>
+        <h2 data-mini="title" className="text-sm font-semibold tracking-tight">Errands</h2>
         <div className="ml-auto">{toolbar}</div>
       </header>
       <div className="min-h-0 flex-1 overflow-auto">

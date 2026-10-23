@@ -410,6 +410,8 @@ function Row({
   return (
     <div
       role="none"
+      data-mini="row"
+      data-active={selected ? "" : undefined}
       className={cn(
         "group/row mx-1 flex h-11 items-center rounded-md text-sm",
         selected && "bg-muted"
@@ -418,7 +420,6 @@ function Row({
       <div
         id={id}
         role="option"
-        data-mini="row"
         aria-selected={selected}
         onClick={onSelect}
         className="flex h-full min-w-0 flex-1 items-center gap-3 pl-3"
