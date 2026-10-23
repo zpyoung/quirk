@@ -94,7 +94,7 @@ Focus rules:
 |-------|-------|
 | Loading | `LoadingState` "Loading tiles" in the tile area. No badge row or queue is drawn until ready. The header stays. |
 | Error | `ErrorState` with retry in the tile area (`onRetry`). No badge row or queue. |
-| Refresh failed | Header reads "Stale since HH:mm"; an alert banner "Couldn't refresh: <message>" with Retry. Tiles keep their last good values. The next interval tries again and a success returns the header to Live. |
+| Refresh failed | Header reads "Stale since HH:mm"; an alert banner "Couldn't refresh: <message>" with Retry. When the refresh function itself failed, tiles keep their last good values; when a storage write failed while the readings were being saved, tiles whose write persisted show the new reading, a toast names the failed write, and nothing is rolled back. The next interval tries again and a success returns the header to Live. |
 | Paused | Header reads "Paused" with a Resume button. No refresh runs, including the one in flight. Tiles keep their last values. |
 | Empty | `EmptyState` "No tiles yet" in the tile area. The queue still shows its items. |
 | Nothing needs you | The queue reads "Nothing needs you" and the "N need you" badge is hidden. A narrow strip reads "Nothing needs you" too. |
