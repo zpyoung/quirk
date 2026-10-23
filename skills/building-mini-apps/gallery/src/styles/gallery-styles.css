@@ -196,11 +196,11 @@ html[data-mini-style="cool-tool"]:root {
   font-size: 15px;
 
   --background: oklch(0.99 0.001 260);
-  --foreground: oklch(0.24 0.008 265);
+  --foreground: oklch(0.17 0.008 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.24 0.008 265);
+  --card-foreground: oklch(0.17 0.008 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.24 0.008 265);
+  --popover-foreground: oklch(0.17 0.008 265);
   --primary: oklch(0.5 0.12 265);
   --primary-foreground: oklch(0.99 0.001 260);
   --secondary: oklch(0.962 0.004 262);
@@ -306,8 +306,8 @@ html[data-mini-style="dense-dark"]:root {
   --secondary-foreground: oklch(0.28 0.008 240);
   --muted: oklch(0.955 0.005 240);
   --muted-foreground: oklch(0.5 0.01 240);
-  --accent: oklch(0.5 0.1 235);
-  --accent-foreground: oklch(1 0 0);
+  --accent: oklch(0.93 0.02 235);
+  --accent-foreground: oklch(0.22 0.008 240);
   --destructive: oklch(0.54 0.19 25);
   --border: oklch(0.9 0.006 240);
   --input: oklch(0.87 0.007 240);
@@ -321,8 +321,8 @@ html[data-mini-style="dense-dark"]:root {
   --sidebar-foreground: oklch(0.28 0.008 240);
   --sidebar-primary: oklch(0.5 0.1 235);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.5 0.1 235);
-  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.92 0.02 235);
+  --sidebar-accent-foreground: oklch(0.22 0.008 240);
   --sidebar-border: oklch(0.9 0.006 240);
   --sidebar-ring: oklch(0.55 0.1 235);
   --radius: 0.25rem;
@@ -352,8 +352,8 @@ html[data-mini-style="dense-dark"].dark {
   --secondary-foreground: oklch(0.92 0.004 240);
   --muted: oklch(0.27 0.006 240);
   --muted-foreground: oklch(0.7 0.01 240);
-  --accent: oklch(0.5 0.1 235);
-  --accent-foreground: oklch(1 0 0);
+  --accent: oklch(0.3 0.04 235);
+  --accent-foreground: oklch(0.95 0.004 240);
   --destructive: oklch(0.68 0.17 24);
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 12%);
@@ -367,8 +367,8 @@ html[data-mini-style="dense-dark"].dark {
   --sidebar-foreground: oklch(0.9 0.004 240);
   --sidebar-primary: oklch(0.7 0.1 235);
   --sidebar-primary-foreground: oklch(0.18 0.01 240);
-  --sidebar-accent: oklch(0.5 0.1 235);
-  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.28 0.04 235);
+  --sidebar-accent-foreground: oklch(0.95 0.004 240);
   --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.65 0.1 235);
 
@@ -383,15 +383,15 @@ html[data-mini-style="dense-dark"] [data-mini="title"] { font-family: var(--mini
 html[data-mini-style="dense-dark"] [data-mini="cell"] { font-family: var(--mini-font-data); }
 
 html[data-mini-style="dense-dark"] [data-mini="group-header"] { font-weight: 600; letter-spacing: 0.04em; }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] { background-color: var(--accent); color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [data-mini="cell"] { color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"] { color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] { background-color: var(--accent); color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] [data-mini="cell"] { color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] [class*="text-muted-foreground"] { color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][data-active] { background-color: var(--accent); color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][data-active] [data-mini="cell"] { color: var(--accent-foreground); }
-html[data-mini-style="dense-dark"] [data-mini="row"][data-active] [class*="text-muted-foreground"] { color: var(--accent-foreground); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [data-mini="cell"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] [data-mini="cell"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][aria-current="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][data-active] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][data-active] [data-mini="cell"] { color: oklch(1 0 0); }
+html[data-mini-style="dense-dark"] [data-mini="row"][data-active] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
 
 html[data-mini-style="glass-launcher"]:root {
   font-size: 15px;
@@ -406,7 +406,7 @@ html[data-mini-style="glass-launcher"]:root {
   --primary-foreground: oklch(1 0 0);
   --secondary: oklch(0.2 0.01 60 / 6%);
   --secondary-foreground: oklch(0.26 0.006 60);
-  --muted: oklch(0.2 0.01 60 / 6%);
+  --muted: oklch(0.94 0.006 60);
   --muted-foreground: oklch(0.46 0.008 60);
   --accent: oklch(0.2 0.01 60 / 8%);
   --accent-foreground: oklch(0.22 0.006 60);
@@ -452,9 +452,9 @@ html[data-mini-style="glass-launcher"].dark {
   --primary-foreground: oklch(0.2 0.03 50);
   --secondary: oklch(1 0 0 / 8%);
   --secondary-foreground: oklch(0.95 0.004 60);
-  --muted: oklch(1 0 0 / 8%);
+  --muted: oklch(0.27 0.012 290);
   --muted-foreground: oklch(0.84 0.008 60);
-  --accent: oklch(1 0 0 / 11%);
+  --accent: oklch(1 0 0 / 8%);
   --accent-foreground: oklch(0.97 0.004 60);
   --destructive: oklch(0.7 0.16 24);
   --border: oklch(1 0 0 / 12%);
@@ -587,6 +587,16 @@ html[data-mini-style="split-tone"].dark {
 html[data-mini-style="split-tone"] [data-mini="title"] { font-family: var(--mini-font-heading); }
 html[data-mini-style="split-tone"] [data-mini="cell"] { font-family: var(--mini-font-data); }
 
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="shell-sidebar"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="shell-main"] [aria-label="Items"] [class*=" text-muted-foreground"] { color: oklch(0.78 0.008 280); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="shell-main"] [aria-label="Items"] [class*="placeholder:text-muted-foreground"]::placeholder { color: oklch(0.78 0.008 280); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*="placeholder:text-muted-foreground"]::placeholder { color: oklch(0.78 0.008 280); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [data-mini="surface"] [class*=" text-muted-foreground"] { color: var(--muted-foreground); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [data-slot="kbd"] { color: var(--muted-foreground); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="panel"][aria-label="Quick add panel"] [class*="bg-background"] { color: var(--foreground); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="shell-main"] [aria-label="Show sidebar"] { color: var(--sidebar-foreground); }
+html[data-mini-style="split-tone"]:not(.dark) [data-mini="shell-main"] [aria-label="Open tabs"] [role="tab"][aria-selected="false"] { color: var(--foreground); }
 html[data-mini-style="split-tone"] [data-mini="row"][aria-selected="true"] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }
 html[data-mini-style="split-tone"] [data-mini="row"][aria-current="true"] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }
 html[data-mini-style="split-tone"] [data-mini="row"][data-active] { background-color: var(--mini-accent-soft); box-shadow: inset 3px 0 0 var(--mini-accent); }

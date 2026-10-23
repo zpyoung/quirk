@@ -1,4 +1,4 @@
-/* mini-style: glass-launcher sha256=af9c7451056260d6066a65040e417fc611a1548f51db5464ea50c67e399100a4 */
+/* mini-style: glass-launcher sha256=659a3ab727b9af2ec0f6bbc375c3fc0d484736849078c8be4721936d2b8b144f */
 html:root {
   font-size: 15px;
 
@@ -12,7 +12,7 @@ html:root {
   --primary-foreground: oklch(1 0 0);
   --secondary: oklch(0.2 0.01 60 / 6%);
   --secondary-foreground: oklch(0.26 0.006 60);
-  --muted: oklch(0.2 0.01 60 / 6%);
+  --muted: oklch(0.94 0.006 60);
   --muted-foreground: oklch(0.46 0.008 60);
   --accent: oklch(0.2 0.01 60 / 8%);
   --accent-foreground: oklch(0.22 0.006 60);
@@ -58,9 +58,9 @@ html.dark {
   --primary-foreground: oklch(0.2 0.03 50);
   --secondary: oklch(1 0 0 / 8%);
   --secondary-foreground: oklch(0.95 0.004 60);
-  --muted: oklch(1 0 0 / 8%);
+  --muted: oklch(0.27 0.012 290);
   --muted-foreground: oklch(0.84 0.008 60);
-  --accent: oklch(1 0 0 / 11%);
+  --accent: oklch(1 0 0 / 8%);
   --accent-foreground: oklch(0.97 0.004 60);
   --destructive: oklch(0.7 0.16 24);
   --border: oklch(1 0 0 / 12%);

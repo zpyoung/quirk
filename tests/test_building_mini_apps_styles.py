@@ -399,6 +399,84 @@ def test_gate_does_not_check_borders(styles: ModuleType, neutral: Dict[str, Any]
     assert styles.contrast_failures(faint) == []
 
 
+@pytest.mark.parametrize("fg, bg", [
+    ("muted-foreground", "sidebar"),
+    ("muted-foreground", "popover"),
+    ("muted-foreground", "accent"),
+    ("foreground", "accent"),
+    ("sidebar-foreground", "sidebar-accent"),
+])
+def test_gate_checks_the_pairs_blocks_render(
+    styles: ModuleType, neutral: Dict[str, Any], fg: str, bg: str
+) -> None:
+    weak = copy.deepcopy(neutral)
+    weak["light"][fg] = weak["light"][bg]
+    pairs = {(f.mode, f.fg, f.bg) for f in styles.contrast_failures(weak)}
+    assert ("light", fg, bg) in pairs
+
+
+def test_gate_checks_the_kbd_chip_over_a_primary_button(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    glass = copy.deepcopy(neutral)
+    glass["light"]["primary"] = "oklch(0.55 0.15 50)"
+    glass["light"]["muted"] = "oklch(0.2 0.01 60 / 6%)"
+    glass["light"]["muted-foreground"] = "oklch(0.46 0.008 60)"
+    failures = [f for f in styles.contrast_failures(glass) if f.mode == "light"]
+    assert [(f.fg, f.bg) for f in failures] == [("muted-foreground", "muted over primary")]
+    assert failures[0].ratio < 2.0
+
+
+def test_opaque_muted_passes_over_any_primary(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    assert not [f for f in styles.contrast_failures(neutral) if "over" in f.bg]
+
+
+def _dark_sidebar(neutral: Dict[str, Any]) -> Dict[str, Any]:
+    style = copy.deepcopy(neutral)
+    style["light"]["sidebar"] = "oklch(0.23 0.006 280)"
+    style["light"]["sidebar-foreground"] = "oklch(0.95 0.004 280)"
+    style["light"]["sidebar-accent"] = "oklch(0.3 0.008 280)"
+    style["light"]["sidebar-accent-foreground"] = "oklch(0.97 0.003 280)"
+    return style
+
+
+def test_dark_sidebar_on_a_light_page_needs_a_muted_remap(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    style = _dark_sidebar(neutral)
+    failures = [(f.mode, f.fg, f.bg) for f in styles.contrast_failures(style)]
+    assert ("light", "muted-foreground", "sidebar") in failures
+    style["extra_css"] = [
+        _rule('[data-mini="shell-sidebar"] [class*=" text-muted-foreground"]', mode="light", color="oklch(0.78 0.008 280)")
+    ]
+    assert styles.contrast_failures(style) == []
+
+
+def test_a_weak_muted_remap_is_reported(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    style = _dark_sidebar(neutral)
+    style["extra_css"] = [
+        _rule('[data-mini="shell-sidebar"] [class*=" text-muted-foreground"]', mode="light", color="oklch(0.4 0 0)")
+    ]
+    assert [(f.mode, f.fg, f.bg) for f in styles.contrast_failures(style)] == [
+        ("light", "muted-foreground", "sidebar")
+    ]
+
+
+def test_a_remap_outside_the_sidebar_surfaces_does_not_excuse_the_token(
+    styles: ModuleType, neutral: Dict[str, Any]
+) -> None:
+    style = _dark_sidebar(neutral)
+    style["extra_css"] = [
+        _rule('[data-mini="row"] [class*=" text-muted-foreground"]', mode="light", color="oklch(0.78 0.008 280)")
+    ]
+    assert ("light", "muted-foreground", "sidebar") in {
+        (f.mode, f.fg, f.bg) for f in styles.contrast_failures(style)
+    }
+
+
+def test_placeholder_pseudo_element_is_an_allowed_selector(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
+) -> None:
+    rule = _rule('[data-mini="row"] [class*="placeholder:text-muted-foreground"]::placeholder', color="oklch(0.78 0 0)")
+    assert styles.load_style(_write(tmp_path, _variant(neutral, extra_css=[rule])))["slug"] == "calm-paper"
+
+
 # --- build_styles CLI ---
 
 def test_check_passes_on_a_fresh_copy(
