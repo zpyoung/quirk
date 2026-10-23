@@ -5,6 +5,7 @@ import { EmptyState, LoadingState } from "@/components/mini/states"
 import { cn } from "@/lib/utils"
 import { ErrorBoundary } from "@/gallery/error-boundary"
 import { ReferencePanel } from "@/gallery/reference-panel"
+import { StylePicker } from "@/gallery/style-picker"
 import { ThemeToggle } from "@/gallery/theme-toggle"
 import { useHashRoute } from "@/gallery/use-hash-route"
 
@@ -87,7 +88,12 @@ export function App() {
   }
 
   return (
-    <AppShell title="Mini-app patterns" sidebar={nav} toolbar={<ThemeToggle />}>
+    <AppShell title="Mini-app patterns" sidebar={nav} toolbar={
+        <div className="flex items-center gap-2">
+          <StylePicker />
+          <ThemeToggle />
+        </div>
+      }>
       {body}
     </AppShell>
   )
