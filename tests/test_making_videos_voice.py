@@ -112,6 +112,10 @@ def fake_ffmpeg(tmp_path: Path, with_subtitles: bool = True, fail: bool = False)
     return make_stub(tmp_path / "bin" / "ffmpeg", body)
 
 
+def with_ffmpeg(env: dict, tmp_path: Path) -> dict:
+    return dict(env, QUIRK_FFMPEG=str(make_stub(tmp_path / "ffbin" / "ffmpeg", "exit 0\n")))
+
+
 def fake_ffprobe(tmp_path: Path, width: int = 1080, height: int = 1920, extra: str = "") -> Path:
     stream = f'{{"width": {width}, "height": {height}{extra}}}'
     body = f"""echo '{{"streams": [{stream}]}}'\n"""
@@ -178,14 +182,14 @@ def test_say_runs_worker_with_brand_voice_and_env(env, tmp_path):
     lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
     reply = json.dumps({"clips": [{"id": "a", "wav": "x.wav", "duration_s": 1.2}]})
     fake_venv_python(tmp_path, reply)
-    env = dict(env, GEMINI_API_KEY="leak", GOOGLE_API_KEY="leak", ELEVENLABS_API_KEY="leak", QUIRK_FFMPEG="/x/ffmpeg")
+    env = dict(env, GEMINI_API_KEY="leak", GOOGLE_API_KEY="leak", ELEVENLABS_API_KEY="leak", QUIRK_FFMPEG=str(make_stub(tmp_path / "x" / "ffmpeg", "exit 0\n")))
     code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
     assert code == 0
     assert out == json.loads(reply)
     argv = (tmp_path / "worker.log.argv").read_text().split()
     assert argv[0] == str(WORKER_PY)
     assert argv[1] == "say"
-    assert argv[argv.index("--ffmpeg") + 1] == "/x/ffmpeg"
+    assert argv[argv.index("--ffmpeg") + 1] == str(tmp_path / "x" / "ffmpeg")
     assert argv[argv.index("--voice") + 1] == "af_heart"
     assert argv[argv.index("--out-dir") + 1] == str(project / "assets" / "voice")
     assert argv[argv.index("--model-dir") + 1] == str(tmp_path / "cache" / "models" / "kokoro")
@@ -203,7 +207,7 @@ def test_say_passes_brand_pronunciations_to_worker(env, tmp_path):
     project = make_project(tmp_path)
     lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
     fake_venv_python(tmp_path, json.dumps({"clips": []}))
-    code, _, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
+    code, _, _ = run_voice("say", "--project", project, "--lines", lines, env=with_ffmpeg(env, tmp_path))
     assert code == 0
     raw = (tmp_path / "worker.log.argv").read_text()
     argv = raw.split(" --pronunciations ", 1)[1].strip()
@@ -214,7 +218,7 @@ def test_say_explicit_voice_wins(env, tmp_path):
     project = make_project(tmp_path)
     lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
     fake_venv_python(tmp_path, json.dumps({"clips": []}))
-    code, _, _ = run_voice("say", "--project", project, "--lines", lines, "--voice", "bf_emma", env=env)
+    code, _, _ = run_voice("say", "--project", project, "--lines", lines, "--voice", "bf_emma", env=with_ffmpeg(env, tmp_path))
     assert code == 0
     argv = (tmp_path / "worker.log.argv").read_text().split()
     assert argv[argv.index("--voice") + 1] == "bf_emma"
@@ -242,11 +246,12 @@ def test_say_without_voice_or_brand_exits_1(env, tmp_path):
 
 def test_say_rejects_unsafe_clip_ids(env, tmp_path):
     project = make_project(tmp_path)
-    lines = write_json(tmp_path / "lines.json", [{"id": "../evil", "text": "Hi.", "start_s": 0}])
     fake_venv_python(tmp_path, json.dumps({"clips": []}))
-    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
-    assert code == 1
-    assert "id" in out["error"]
+    for bad in ("../evil", ".hidden", "a/b", "a\\b"):
+        lines = write_json(tmp_path / "lines.json", [{"id": bad, "text": "Hi.", "start_s": 0}])
+        code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
+        assert code == 1, bad
+        assert "id" in out["error"]
 
 
 def test_say_worker_failure_exits_1_with_stderr_tail(env, tmp_path):
@@ -256,9 +261,29 @@ def test_say_worker_failure_exits_1_with_stderr_tail(env, tmp_path):
         tmp_path / "cache" / "venv" / "bin" / "python",
         "echo 'kokoro model missing' >&2\nexit 7\n",
     )
-    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
+    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=with_ffmpeg(env, tmp_path))
     assert code == 1
     assert "kokoro model missing" in out["error"]
+
+
+def test_say_without_ffmpeg_exits_3_with_install_fix(env, tmp_path):
+    project = make_project(tmp_path)
+    lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
+    fake_venv_python(tmp_path, json.dumps({"clips": []}))
+    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=env)
+    assert code == 3
+    assert out["missing"] == "ffmpeg" and out["fix"] == "brew install ffmpeg-full"
+    assert not (tmp_path / "worker.log.argv").exists()
+
+
+def test_say_maps_a_worker_missing_ffmpeg_reply_to_exit_3(env, tmp_path):
+    project = make_project(tmp_path)
+    lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi.", "start_s": 0}])
+    reply = json.dumps({"error": "ffmpeg not found: ffmpeg", "missing": "ffmpeg"})
+    fake_venv_python(tmp_path, reply, code=3)
+    code, out, _ = run_voice("say", "--project", project, "--lines", lines, env=with_ffmpeg(env, tmp_path))
+    assert code == 3
+    assert out["missing"] == "ffmpeg" and out["fix"] == "brew install ffmpeg-full"
 
 
 def test_say_rejects_ids_that_collide_with_raw_clips(env, tmp_path):
@@ -1022,8 +1047,7 @@ def test_normalize_clip_measures_then_applies_a_linear_gain(stdlib_worker, tmp_p
     raw.write_bytes(b"")
     out = tmp_path / "a.wav"
     levels = stdlib_worker.normalize_clip(str(stub), raw, out, 24000)
-    assert levels == {"lufs": -27.5, "true_peak_dbtp": -9.0, "normalization": "linear"}
-    assert out.exists() and not list(tmp_path.glob("*.norm-tmp.wav"))
+    assert out.exists() and sorted(p.name for p in tmp_path.iterdir()) == ["a.raw.wav", "a.wav", "bin", "ffmpeg.log"]
     measure, apply, check = [line.split() for line in log.read_text().splitlines()]
     assert "measured_I" not in " ".join(measure)
     filt = apply[apply.index("-af") + 1]
@@ -1040,6 +1064,68 @@ def test_normalize_clip_reports_an_ffmpeg_failure(stdlib_worker, tmp_path):
     with pytest.raises(RuntimeError, match="no such filter"):
         stdlib_worker.normalize_clip(str(stub), raw, tmp_path / "a.wav", 24000)
     assert not (tmp_path / "a.wav").exists()
+
+
+def _measuring_stub(tmp_path: Path, input_i: str, input_tp: str, offset: str) -> Path:
+    body = (
+        f'echo "$@" >> "{tmp_path}/ffmpeg.log"\n'
+        "cat >&2 <<'EOF'\n"
+        f'{{"input_i": "{input_i}", "input_tp": "{input_tp}", "input_lra": "0.00", "input_thresh": "-70.00",'
+        f' "target_offset": "{offset}", "normalization_type": "linear"}}\n'
+        "EOF\n"
+        'for last; do :; done\n'
+        '[ "$last" = "-" ] || touch "$last"\n'
+    )
+    return make_stub(tmp_path / "bin" / "ffmpeg", body)
+
+
+def test_normalize_clip_skips_loudnorm_when_the_measurement_is_not_finite(stdlib_worker, tmp_path):
+    stub = _measuring_stub(tmp_path, "-inf", "-14.00", "inf")
+    raw = tmp_path / "a.raw.wav"
+    raw.write_bytes(b"")
+    out = tmp_path / "a.wav"
+    levels = stdlib_worker.normalize_clip(str(stub), raw, out, 24000)
+    assert levels["normalization"] == "skipped_short"
+    assert levels["reason"]
+    assert levels["lufs"] is None and levels["true_peak_dbtp"] == -14.0
+    assert out.exists()
+    json.dumps(levels, allow_nan=False)
+    passes = (tmp_path / "ffmpeg.log").read_text().splitlines()
+    assert "measured_I" not in " ".join(passes)
+    leveled = passes[1].split()
+    assert leveled[leveled.index("-af") + 1] == stdlib_worker.LEVELING_CHAIN
+
+
+def test_normalize_clip_survives_a_silent_clip(stdlib_worker, tmp_path):
+    stub = _measuring_stub(tmp_path, "-inf", "-inf", "inf")
+    raw = tmp_path / "s.raw.wav"
+    raw.write_bytes(b"")
+    levels = stdlib_worker.normalize_clip(str(stub), raw, tmp_path / "s.wav", 24000)
+    assert levels["normalization"] == "skipped_short"
+    assert levels["lufs"] is None and levels["true_peak_dbtp"] is None
+    assert (tmp_path / "s.wav").exists()
+
+
+def test_normalize_clip_keeps_clips_whose_ids_look_like_temporary_names(stdlib_worker, tmp_path):
+    stub = _measuring_stub(tmp_path, "-16.00", "-3.00", "0.10")
+    for order in (("a.norm-tmp", "a"), ("a", "a.norm-tmp")):
+        voice = tmp_path / "-".join(order)
+        voice.mkdir()
+        for clip in order:
+            raw = voice / f"{clip}.raw.wav"
+            raw.write_bytes(b"")
+            stdlib_worker.normalize_clip(str(stub), raw, voice / f"{clip}.wav", 24000)
+        assert (voice / "a.wav").exists() and (voice / "a.norm-tmp.wav").exists()
+        assert sorted(p.name for p in voice.iterdir()) == sorted(
+            ["a.raw.wav", "a.wav", "a.norm-tmp.raw.wav", "a.norm-tmp.wav"]
+        )
+
+
+def test_normalize_clip_reports_a_missing_ffmpeg(stdlib_worker, tmp_path):
+    raw = tmp_path / "a.raw.wav"
+    raw.write_bytes(b"")
+    with pytest.raises(stdlib_worker.MissingTool):
+        stdlib_worker.normalize_clip(str(tmp_path / "nope" / "ffmpeg"), raw, tmp_path / "a.wav", 24000)
 
 
 def _real_ffmpeg() -> "str | None":
@@ -1095,3 +1181,31 @@ def test_normalized_clips_mix_to_minus_16_lufs_at_unity_gain(stdlib_worker, tmp_
     subprocess.run(argv + ["-filter_complex", graph, "-map", "[m]", str(mix)], check=True)
     loudness, _ = _ebur128(ffmpeg, mix)
     assert loudness == pytest.approx(-16, abs=1.0)
+
+
+@pytest.mark.skipif(_real_ffmpeg() is None, reason="needs an ffmpeg with loudnorm, alimiter and acompressor")
+def test_real_ffmpeg_normalizes_a_clip_shorter_than_the_gating_window(stdlib_worker, tmp_path):
+    ffmpeg = _real_ffmpeg()
+    raw = tmp_path / "short.raw.wav"
+    subprocess.run(
+        [ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2:sample_rate=24000",
+         "-c:a", "pcm_s16le", str(raw)],
+        check=True,
+    )
+    levels = stdlib_worker.normalize_clip(ffmpeg, raw, tmp_path / "short.wav", 24000)
+    assert levels["normalization"] == "skipped_short"
+    assert (tmp_path / "short.wav").stat().st_size > 44
+
+
+@pytest.mark.skipif(_real_ffmpeg() is None, reason="needs an ffmpeg with loudnorm, alimiter and acompressor")
+def test_real_ffmpeg_normalizes_a_silent_clip(stdlib_worker, tmp_path):
+    ffmpeg = _real_ffmpeg()
+    raw = tmp_path / "quiet.raw.wav"
+    subprocess.run(
+        [ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", "2",
+         "-c:a", "pcm_s16le", str(raw)],
+        check=True,
+    )
+    levels = stdlib_worker.normalize_clip(ffmpeg, raw, tmp_path / "quiet.wav", 24000)
+    assert levels["normalization"] == "skipped_short"
+    assert levels["lufs"] is None

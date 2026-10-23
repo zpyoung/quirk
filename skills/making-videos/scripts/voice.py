@@ -17,6 +17,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import sys
 from pathlib import Path
@@ -186,6 +187,19 @@ def _require_venv() -> Path:
     return python
 
 
+def _fail_missing_tool(worker_stdout: str) -> NoReturn:
+    """Report the worker's ``{error, missing}`` reply as exit 3 with the install fix."""
+    last = [line for line in worker_stdout.splitlines() if line.strip()]
+    try:
+        reply = json.loads(last[-1]) if last else None
+    except json.JSONDecodeError:
+        reply = None
+    reply = reply if isinstance(reply, dict) else {}
+    missing = str(reply.get("missing", "ffmpeg"))
+    fix = FFMPEG_FIX if missing == "ffmpeg" else DOCTOR_FIX
+    _fail(str(reply.get("error", f"{missing} not found")), EXIT_MISSING_TOOL, missing=missing, fix=fix)
+
+
 def _run_worker(args_list: "list[str]", extra_env: Optional[dict] = None) -> dict:
     python = _require_venv()
     env = _child_env()
@@ -205,6 +219,8 @@ def _run_worker(args_list: "list[str]", extra_env: Optional[dict] = None) -> dic
         _fail(f"voice worker did not finish: {type(exc).__name__}: {exc}")
     if proc.stderr:
         sys.stderr.write(proc.stderr)
+    if proc.returncode == EXIT_MISSING_TOOL:
+        _fail_missing_tool(proc.stdout)
     if proc.returncode != 0:
         _fail(f"voice worker failed (exit {proc.returncode}): {_tail(proc.stderr)}")
     last = [line for line in proc.stdout.splitlines() if line.strip()]
@@ -234,6 +250,9 @@ def _cmd_say(args: argparse.Namespace) -> None:
             )
         voice = voice_cfg["id"]
     pronunciations = _valid_pronunciations((brand or {}).get("pronunciations"))
+    ffmpeg = _ffmpeg_binary()
+    if shutil.which(ffmpeg, path=_child_env().get("PATH")) is None:
+        _fail(f"ffmpeg not found: {ffmpeg}", EXIT_MISSING_TOOL, missing="ffmpeg", fix=FFMPEG_FIX)
     out_dir = project / "assets" / "voice"
     out_dir.mkdir(parents=True, exist_ok=True)
     result = _run_worker(
@@ -248,7 +267,7 @@ def _cmd_say(args: argparse.Namespace) -> None:
             "--model-dir",
             str(cache_root() / "models" / "kokoro"),
             "--ffmpeg",
-            _ffmpeg_binary(),
+            ffmpeg,
             "--pronunciations",
             json.dumps(pronunciations, ensure_ascii=False),
         ]

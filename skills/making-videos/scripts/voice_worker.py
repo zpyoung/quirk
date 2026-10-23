@@ -4,16 +4,20 @@
 ``voice.py`` is the stdlib launcher that picks the interpreter, environment and paths. Heavy
 imports (kokoro_onnx, soundfile, numpy, faster_whisper) happen inside the commands so the pure
 helpers stay importable without them. Each command prints one JSON object as its last stdout
-line and exits 0; any failure raises, so the launcher sees a non-zero exit and the traceback.
+line and exits 0. A missing executable prints ``{error, missing}`` and exits 3; any other failure
+raises, so the launcher sees a non-zero exit and the traceback.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -31,6 +35,17 @@ LEVELING_CHAIN = (
     "alimiter=limit=-14dB:attack=2:release=40:level=0"
 )
 FFMPEG_TIMEOUT_S = 600
+EXIT_MISSING_TOOL = 3
+CLIP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+
+
+class MissingTool(Exception):
+    """A required executable is not installed; ``main`` reports it as exit 3 with ``missing`` set."""
+
+    def __init__(self, tool: str, message: str):
+        super().__init__(message)
+        self.tool = tool
 
 
 def apply_patches(phonemes: str, pronunciations: dict) -> str:
@@ -80,6 +95,30 @@ def parse_loudnorm(stderr: str) -> dict:
     return json.loads(blocks[-1])
 
 
+def _finite(value: object) -> "float | None":
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _measurable(measured: dict) -> bool:
+    """Whether a loudnorm measurement can be fed back as ``measured_*``; it cannot for clips under
+    the 400 ms gating window or for silence, which measure as ``-inf``."""
+    return all(_finite(measured.get(key)) is not None for key in MEASURED_KEYS)
+
+
+def _run_ffmpeg(ffmpeg: str, argv: "list[str]", src: Path) -> str:
+    try:
+        proc = subprocess.run([ffmpeg, *argv], capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S)
+    except FileNotFoundError:
+        raise MissingTool("ffmpeg", f"ffmpeg not found: {ffmpeg}") from None
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed on {src.name} (exit {proc.returncode}): {proc.stderr.strip()[-400:]}")
+    return proc.stderr
+
+
 def _loudnorm(ffmpeg: str, src: Path, prefilter: str, measured: "dict | None", dst: "Path | None", rate: int) -> dict:
     """One ffmpeg pass: measure ``src`` through ``prefilter`` + loudnorm, writing ``dst`` when given."""
     options = f"I={TARGET_LUFS}:TP={LOUDNORM_PEAK_DBTP}:LRA={LOUDNORM_LRA}"
@@ -89,12 +128,14 @@ def _loudnorm(ffmpeg: str, src: Path, prefilter: str, measured: "dict | None", d
             f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
             f":offset={measured['target_offset']}:linear=true"
         )
-    argv = [ffmpeg, "-hide_banner", "-nostats", "-y", "-i", str(src), "-af", f"{prefilter}loudnorm={options}:print_format=json"]
+    argv = ["-hide_banner", "-nostats", "-y", "-i", str(src), "-af", f"{prefilter}loudnorm={options}:print_format=json"]
     argv += ["-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(dst)] if dst else ["-f", "null", "-"]
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed on {src.name} (exit {proc.returncode}): {proc.stderr.strip()[-400:]}")
-    return parse_loudnorm(proc.stderr)
+    return parse_loudnorm(_run_ffmpeg(ffmpeg, argv, src))
+
+
+def _level_only(ffmpeg: str, src: Path, dst: Path, rate: int) -> None:
+    argv = ["-hide_banner", "-nostats", "-y", "-i", str(src), "-af", LEVELING_CHAIN]
+    _run_ffmpeg(ffmpeg, argv + ["-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(dst)], src)
 
 
 def normalize_clip(ffmpeg: str, raw: Path, out: Path, rate: int) -> dict:
@@ -102,22 +143,35 @@ def normalize_clip(ffmpeg: str, raw: Path, out: Path, rate: int) -> dict:
 
     Two loudnorm passes (measure, then apply the measurement as a linear gain) so the clip keeps its
     dynamics; ffmpeg falls back to dynamic mode on its own when a linear gain would break the peak
-    ceiling, and ``normalization`` reports which one ran. Returns ``{lufs, true_peak_dbtp, normalization}``
-    measured on ``out``.
+    ceiling, and ``normalization`` reports which one ran. A clip loudnorm cannot measure (shorter
+    than 400 ms, or silent) gets only the compressor and limiter, with ``normalization`` set to
+    ``skipped_short`` and a ``reason``. Returns ``{lufs, true_peak_dbtp, normalization}`` measured on
+    ``out``, where a level that is not finite is ``None``. Intermediates live in a private temporary
+    directory beside ``out``, never under a name a clip id could take.
     """
     first = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", None, None, rate)
-    tmp = out.with_name(out.stem + ".norm-tmp.wav")
-    try:
-        second = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", first, tmp, rate)
+    with tempfile.TemporaryDirectory(prefix=".normalize-", dir=out.parent) as scratch:
+        tmp = Path(scratch) / "leveled.wav"
+        if _measurable(first):
+            kind = _loudnorm(ffmpeg, raw, LEVELING_CHAIN + ",", first, tmp, rate).get("normalization_type", "unknown")
+            extra: dict = {}
+        else:
+            _level_only(ffmpeg, raw, tmp, rate)
+            kind = "skipped_short"
+            extra = {"reason": "loudnorm cannot measure a clip under 400 ms or a silent one; only compressed and limited"}
         final = _loudnorm(ffmpeg, tmp, "", None, None, rate)
         os.replace(tmp, out)
-    finally:
-        tmp.unlink(missing_ok=True)
     return {
-        "lufs": round(float(final["input_i"]), 1),
-        "true_peak_dbtp": round(float(final["input_tp"]), 1),
-        "normalization": second.get("normalization_type", "unknown"),
+        "lufs": _rounded(final["input_i"]),
+        "true_peak_dbtp": _rounded(final["input_tp"]),
+        "normalization": kind,
+        **extra,
     }
+
+
+def _rounded(value: object) -> "float | None":
+    number = _finite(value)
+    return None if number is None else round(number, 1)
 
 
 def _cmd_say(args: argparse.Namespace) -> dict:
@@ -132,7 +186,12 @@ def _cmd_say(args: argparse.Namespace) -> dict:
             raise FileNotFoundError(
                 f"Kokoro model file missing: {needed} (run doctor.py install --what tts --yes)"
             )
+    if shutil.which(args.ffmpeg) is None:
+        raise MissingTool("ffmpeg", f"ffmpeg not found: {args.ffmpeg}")
     lines = json.loads(Path(args.lines).read_text(encoding="utf-8"))
+    for line in lines:
+        if not CLIP_ID_RE.match(line["id"]) or line["id"].endswith(".raw"):
+            raise ValueError(f"invalid clip id {line['id']!r}")
     pronunciations = json.loads(args.pronunciations)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -157,7 +216,7 @@ def _cmd_say(args: argparse.Namespace) -> dict:
             }
         )
         print(
-            f"{line['id']}: {clips[-1]['duration_s']}s {levels['lufs']} LUFS {levels['true_peak_dbtp']} dBTP",
+            f"{line['id']}: {clips[-1]['duration_s']}s {levels['lufs']} LUFS {levels['true_peak_dbtp']} dBTP {levels['normalization']}",
             file=sys.stderr,
         )
     return {"clips": clips}
@@ -203,7 +262,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: "list[str] | None" = None) -> int:
     args = build_parser().parse_args(argv)
-    result = args.func(args)
+    try:
+        result = args.func(args)
+    except MissingTool as exc:
+        sys.stdout.write(json.dumps({"error": str(exc), "missing": exc.tool}) + "\n")
+        sys.stdout.flush()
+        return EXIT_MISSING_TOOL
     sys.stdout.write(json.dumps(result) + "\n")
     sys.stdout.flush()
     return 0
