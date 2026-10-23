@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, EllipsisVerticalIcon } from "lucide-react"
 
 import { EmptyState } from "@/components/mini/states"
@@ -12,6 +12,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 import { RawEditor } from "./raw-editor"
+import type { RecordWriter } from "./record-writers"
 import type { PaneMode, WorkspaceItem } from "./types"
 
 type PaneHeaderProps = {
@@ -97,91 +98,36 @@ function PaneHeader({
 
 type PaneProps<T extends WorkspaceItem> = Omit<PaneHeaderProps, "title" | "hasItem"> & {
   item: T | undefined
+  writer: RecordWriter<T> | undefined
   deleted: boolean
   empty: ReactNode
   maxContentWidth: number
   renderStructured: (item: T, api: { update: (patch: Partial<T>) => Promise<void> }) => ReactNode
   toRaw: (item: T) => string
   parseRaw: (raw: string, item: T) => T
-  onChange: (next: T) => Promise<void>
 }
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-/**
- * Composes every write from the newest local record. The store publishes a
- * record only after its write resolves, so the `item` prop lags behind edits
- * already made; building a write from it alone would drop those edits.
- */
-function createWriter<T extends WorkspaceItem>() {
-  let prop: T | undefined
-  let save: ((next: T) => Promise<void>) | undefined
-  let unsettled: T | undefined
-  let inflight = 0
-
-  const latest = () => unsettled ?? prop
-
-  function write(next: T): Promise<void> {
-    if (!save) return Promise.resolve()
-    unsettled = next
-    inflight += 1
-    return save(next).then(
-      () => {
-        inflight -= 1
-      },
-      (cause: unknown) => {
-        inflight -= 1
-        if (inflight === 0) unsettled = undefined
-        throw cause
-      }
-    )
-  }
-
-  return {
-    latest,
-    write,
-    update(patch: Partial<T>): Promise<void> {
-      const base = latest()
-      return base ? write({ ...base, ...patch }) : Promise.resolve()
-    },
-    saveWith(onChange: (next: T) => Promise<void>) {
-      save = onChange
-    },
-    receive(item: T | undefined) {
-      prop = item
-      if (inflight === 0) unsettled = undefined
-    },
-  }
-}
-
 /** Header plus body for one tab: structured form, raw file, the empty pane, or the deleted notice. */
 export function Pane<T extends WorkspaceItem>({
   item,
+  writer,
   deleted,
   empty,
   maxContentWidth,
   renderStructured,
   toRaw,
   parseRaw,
-  onChange,
   ...header
 }: PaneProps<T>) {
   const [rawError, setRawError] = useState<string>()
-  const [writer] = useState(createWriter<T>)
-
-  useEffect(() => {
-    writer.saveWith(onChange)
-  }, [writer, onChange])
-
-  useEffect(() => {
-    writer.receive(item)
-  }, [writer, item])
 
   function commitRaw(raw: string) {
-    const base = writer.latest()
-    if (!base) return
+    const base = writer?.latest()
+    if (!writer || !base) return
     try {
       const next = parseRaw(raw, base)
       setRawError(undefined)
@@ -210,7 +156,7 @@ export function Pane<T extends WorkspaceItem>({
   } else {
     body = (
       <div className="mx-auto w-full p-4" style={{ maxWidth: maxContentWidth }}>
-        {renderStructured(item, { update: (patch) => writer.update(patch) })}
+        {renderStructured(item, { update: (patch) => writer?.update(patch) ?? Promise.resolve() })}
       </div>
     )
   }

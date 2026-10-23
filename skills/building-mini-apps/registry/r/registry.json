@@ -707,6 +707,11 @@
           "target": "src/patterns/workspace-panes/raw-editor.tsx"
         },
         {
+          "path": "src/patterns/workspace-panes/record-writers.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/record-writers.ts"
+        },
+        {
           "path": "src/patterns/workspace-panes/sidebar.tsx",
           "type": "registry:file",
           "target": "src/patterns/workspace-panes/sidebar.tsx"
