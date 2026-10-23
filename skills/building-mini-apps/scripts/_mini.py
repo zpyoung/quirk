@@ -144,12 +144,53 @@ def _theme_inline_span(text: str) -> tuple[int, int] | None:
     return None
 
 
+def _declaration_span(block: str, name: str) -> tuple[int, int] | None:
+    """Offsets of the first `name: value` declaration in `block`, excluding its `;`; None when absent.
+
+    The value ends at the first `;` outside quotes and parentheses, or at the end of the block, so
+    neighbours sharing the line and values spanning lines are left to the caller to preserve.
+    """
+    for found in re.finditer(rf"(?<![\w-]){re.escape(name)}[ \t\r\n]*:", block):
+        before = block[: found.start()].rstrip()
+        if before and before[-1] not in ";{}":
+            continue
+        quote = ""
+        depth = 0
+        i = found.end()
+        while i < len(block):
+            char = block[i]
+            if quote:
+                if char == "\\":
+                    i += 1
+                elif char == quote:
+                    quote = ""
+            elif char in "\"'":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(depth - 1, 0)
+            elif char in ";}" and depth == 0:
+                break
+            i += 1
+        value_end = len(block[:i].rstrip())
+        return found.start(), max(value_end, found.end())
+    return None
+
+
 def _wire_fonts(block: str) -> str:
-    """Point `--font-sans` and `--font-heading` at the mini tokens, adding a line when it is absent."""
+    """Point `--font-sans` and `--font-heading` at the mini tokens, adding a line when it is absent.
+
+    Only the font declarations' own text changes; every other byte of `block` is preserved.
+    """
     for name, value in FONT_WIRING:
-        line = re.compile(rf"^([ \t]*){re.escape(name)}:[^\n]*$", re.MULTILINE)
-        if line.search(block):
-            block = line.sub(lambda m: f"{m.group(1)}{name}: {value};", block, count=1)
+        span = _declaration_span(block, name)
+        if span is not None:
+            start, end = span
+            tail = block[end:]
+            if tail.startswith(";"):
+                tail = tail[1:]
+            block = f"{block[:start]}{name}: {value};{tail}"
         else:
             body = block.rstrip(" \t")
             trail = block[len(body):]
