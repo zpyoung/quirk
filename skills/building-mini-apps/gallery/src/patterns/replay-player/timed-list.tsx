@@ -15,7 +15,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
-import { activeIndex, filterEntries, formatClock } from "./playback"
+import {
+  activeIndex,
+  filterEntries,
+  followScrollTop,
+  formatClock,
+  ownValue,
+} from "./playback"
 import type { ReplayEvent } from "./types"
 
 const ICONS: Record<string, LucideIcon> = {
@@ -63,16 +69,17 @@ export function TimedList({
 
   const scrollToCurrent = () => {
     const container = containerRef.current
+    if (!container) return
     const row = currentId ? rowRefs.current.get(currentId) : undefined
-    if (!container || !row || rowInView(container, row)) return
-    const top = row.offsetTop
-    const target =
-      top < container.scrollTop
-        ? top
-        : top + row.offsetHeight - container.clientHeight
-    if (target === container.scrollTop) return
+    if (currentId && !row) return
+    const next = followScrollTop(
+      container.scrollTop,
+      container.clientHeight,
+      row ? { top: row.offsetTop, height: row.offsetHeight } : null
+    )
+    if (next === null) return
     ownScroll.current = true
-    container.scrollTop = Math.max(0, target)
+    container.scrollTop = next
   }
 
   useEffect(() => {
@@ -131,7 +138,7 @@ export function TimedList({
           >
             <ul aria-label={label} className="flex flex-col">
               {shown.map((entry, index) => {
-                const Icon = ICONS[entry.kind] ?? CircleIcon
+                const Icon = ownValue(ICONS, entry.kind) ?? CircleIcon
                 const isCurrent = index === current
                 const future = index > current
                 const rule = future && index === current + 1

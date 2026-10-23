@@ -81,7 +81,7 @@ Keys act while focus is on the page body or anywhere inside the block, and never
 - The slider has `role="slider"` with `aria-valuemin`, `aria-valuemax`, `aria-valuenow` and an `aria-valuetext` such as "00:18 of 01:30".
 - The entry at the playhead has `aria-current="true"`. A visually hidden live region says "Playing" or "Paused" when the state changes. It does not announce the time.
 
-**The list follows the playhead.** The entry at the playhead is the last one with a time at or before the playhead. While the list is following, it scrolls just enough to keep that entry in view as the playhead moves or after a seek. If the user scrolls the list so that entry is out of view, following stops and a "Jump to current time" button appears. Clicking an entry's time, or the button, resumes following.
+**The list follows the playhead.** The entry at the playhead is the last one with a time at or before the playhead. While the list is following, it scrolls just enough to keep that entry in view as the playhead moves or after a seek. When the playhead is before the first entry there is no current entry, and a following list returns to the top. If the user scrolls the list so that entry is out of view, following stops and a "Jump to current time" button appears. Clicking an entry's time, or the button, resumes following.
 
 | State | Shows |
 |-------|-------|
