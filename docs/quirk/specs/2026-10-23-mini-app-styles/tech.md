@@ -225,6 +225,7 @@ Back-link: [SC-7](logic.md#behavior--scenarios).
 | sidebar-primary-foreground | sidebar-primary | 4.5 |
 | sidebar-foreground, sidebar-accent-foreground | sidebar-accent | 4.5 |
 | foreground | mini-added, mini-removed, mini-pending | 4.5 |
+| muted-foreground | mini-added, mini-removed, mini-pending | 4.5 |
 | ring | background | 3.0 |
 | sidebar-ring | sidebar | 3.0 |
 

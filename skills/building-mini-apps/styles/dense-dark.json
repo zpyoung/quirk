@@ -145,6 +145,13 @@
       }
     },
     {
+      "selector": "[data-mini=\"row\"][aria-selected=\"true\"] [data-mini=\"cell\"][data-tint] [class*=\"text-muted-foreground\"]",
+      "mode": "both",
+      "declarations": {
+        "color": "var(--muted-foreground)"
+      }
+    },
+    {
       "selector": "[data-mini=\"row\"][aria-current=\"true\"]",
       "mode": "both",
       "declarations": {

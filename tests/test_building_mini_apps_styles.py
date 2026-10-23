@@ -435,7 +435,21 @@ def test_gate_checks_foreground_on_staged_tints(
     weak = copy.deepcopy(neutral)
     weak["light"][token] = weak["light"]["foreground"]
     failures = styles.contrast_failures(weak)
-    assert [(f.mode, f.fg, f.bg, f.needed) for f in failures] == [("light", "foreground", token, 4.5)]
+    assert [(f.mode, f.fg, f.bg, f.needed) for f in failures] == [
+        ("light", "foreground", token, 4.5),
+        ("light", "muted-foreground", token, 4.5),
+    ]
+
+
+@pytest.mark.parametrize("token", ["mini-added", "mini-removed", "mini-pending"])
+def test_gate_checks_muted_foreground_on_staged_tints(
+    styles: ModuleType, neutral: Dict[str, Any], token: str
+) -> None:
+    weak = copy.deepcopy(neutral)
+    weak["dark"][token] = "oklch(0.6 0 0)"
+    weak["dark"]["muted-foreground"] = "oklch(0.7 0 0)"
+    failures = styles.contrast_failures(weak)
+    assert ("dark", "muted-foreground", token, 4.5) in {(f.mode, f.fg, f.bg, f.needed) for f in failures}
 
 
 def test_gate_does_not_check_borders(styles: ModuleType, neutral: Dict[str, Any]) -> None:
@@ -769,6 +783,19 @@ def test_dense_dark_selected_staged_cells_keep_their_tint(styles: ModuleType, ti
         "color": "var(--foreground)",
     }
     assert selectors.index(rule["selector"]) > selectors.index(selected)
+
+
+def test_dense_dark_selected_tinted_cells_restore_muted_text(styles: ModuleType) -> None:
+    style = styles.load_style(STYLES_DIR / "dense-dark.json")
+    muted = '[data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"]'
+    tinted = '[data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint] [class*="text-muted-foreground"]'
+    selectors = [r["selector"] for r in style["extra_css"]]
+    rule = style["extra_css"][selectors.index(tinted)]
+    assert rule["mode"] == "both"
+    assert rule["declarations"] == {"color": "var(--muted-foreground)"}
+    # more specific than the white rule (one extra attribute pair), so it wins wherever it matches
+    assert selectors.index(muted) < selectors.index(tinted)
+    assert tinted.count("[") > muted.count("[")
 
 
 def test_staged_table_cells_expose_their_staged_state() -> None:

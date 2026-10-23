@@ -97,6 +97,9 @@ CONTRAST_PAIRS: Tuple[Tuple[str, str, float, Optional[str]], ...] = (
     ("foreground", "mini-added", AA_TEXT, None),
     ("foreground", "mini-removed", AA_TEXT, None),
     ("foreground", "mini-pending", AA_TEXT, None),
+    ("muted-foreground", "mini-added", AA_TEXT, None),
+    ("muted-foreground", "mini-removed", AA_TEXT, None),
+    ("muted-foreground", "mini-pending", AA_TEXT, None),
     ("ring", "background", AA_UI, None),
     ("sidebar-ring", "sidebar", AA_UI, None),
 )

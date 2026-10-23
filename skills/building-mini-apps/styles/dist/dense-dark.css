@@ -1,4 +1,4 @@
-/* mini-style: dense-dark sha256=abbc1ba5b60ff1b7958e02d107fa2e666fa779d5770d74ca1607ebd528e55232 */
+/* mini-style: dense-dark sha256=de204303932011302a7e7516700c2e639ee50b45da6d64da5022ad96f030f42c */
 html:root {
   font-size: 15px;
 
@@ -97,6 +97,7 @@ html.dark {
 [data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint="removed"] { background-color: var(--mini-removed); color: var(--foreground); }
 [data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint="pending"] { background-color: var(--mini-pending); color: var(--foreground); }
 [data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
+[data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint] [class*="text-muted-foreground"] { color: var(--muted-foreground); }
 [data-mini="row"][aria-current="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
 [data-mini="row"][aria-current="true"] [data-mini="cell"] { color: oklch(1 0 0); }
 [data-mini="row"][aria-current="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
