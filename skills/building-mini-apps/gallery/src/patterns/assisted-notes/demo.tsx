@@ -243,10 +243,11 @@ async function generateFromTranscript(
   const anchors = note.segments.filter(
     (segment) => segment.origin === "user" && segment.text.trim()
   )
+  const generation = crypto.randomUUID()
   return sentences(note.transcript)
     .slice(0, 5)
     .map((sentence, index) => ({
-      id: `${note.id}-gen-${index}`,
+      id: `${note.id}-gen-${generation}-${index}`,
       origin: "generated" as const,
       text: sentence,
       kind: "bullet" as const,

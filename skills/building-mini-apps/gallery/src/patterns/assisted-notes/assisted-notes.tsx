@@ -64,6 +64,9 @@ export function AssistedNotes<T extends AssistedNoteItem>({
     return () => active.forEach((controller) => controller.abort())
   }, [])
 
+  // fields whose write has not landed; each write re-sends them so a failed save is retried, not dropped
+  const unsaved = useRef(new Map<string, Partial<T>>())
+
   // the draft shows what was typed until the write lands, and stays if the write fails
   function commit(id: string, patch: Partial<T>) {
     const base = notesRef.current.find((note) => note.id === id)
@@ -73,14 +76,19 @@ export function AssistedNotes<T extends AssistedNoteItem>({
       note.id === id ? next : note
     )
     setDrafts((current) => ({ ...current, [id]: next }))
-    update(id, patch).then(
-      () =>
+    const pending = { ...unsaved.current.get(id), ...patch }
+    unsaved.current.set(id, pending)
+    update(id, pending).then(
+      () => {
+        if (unsaved.current.get(id) !== pending) return
+        unsaved.current.delete(id)
         setDrafts((current) => {
           if (current[id] !== next) return current
           return Object.fromEntries(
             Object.entries(current).filter(([key]) => key !== id)
           )
-        }),
+        })
+      },
       (cause: unknown) =>
         toast.error("Could not save the note", {
           description: toError(cause).message,
