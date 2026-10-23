@@ -35,7 +35,7 @@ skills/making-videos/
   scripts/record.py            Playwright web-app recording → MP4                    (stdlib)
   scripts/verify.py            strict verify, writes verify.json                     (stdlib)
   scripts/media_worker.py      pixel/onset analysis for voice sync; runs in venv     (venv deps)
-  scripts/review_page.py       builds the project's review.html                      (stdlib)
+  scripts/review_page.py       writes review.src.html, builds review.html via writing-html-artifacts (stdlib)
 tests/
   test_making_videos_skill.py      structure, links, evals, budgets, script paths, trap strings
   test_making_videos_studio.py     _common + studio
@@ -277,15 +277,79 @@ scene; six evenly spaced stills when `--at` is omitted) into
 
 ### `review_page.py`
 
+Back-links: [Data flow](logic.md#data-flow) step 7, SC-11, amendment 2026-10-23.
+
 `CONTRACT:`
 ```
-review_page.py --project DIR -> {"page": str}   # <project>/review.html
+review_page.py --project DIR
+  -> 0 {"page": str, "source": str, "checks": {"passed": bool, "failures": [...], "warnings": [...]}}
+  -> 1 {"error": str, ["page", "source", "checks"]}   # html skill missing, build failed, or static checks failed
+  -> 2 {"error": str}                                  # usage error or missing project
 ```
-Self-contained HTML (inline CSS, no CDN, works from `file://`), light and dark. Shows: player per
-version (relative paths), storyboard, each MP4's contact sheet and stills, each MP4's verify checks with measured value,
-outside calls, version list newest first with side-by-side compare of any two. A version without
-an MP4, `verify.json` or frames still gets a row saying what's missing; a missing project exits 2.
-An older flat `verify.json` and flat `frames/` still render.
+
+- Writes `<project>/review.src.html` (kept, rebuildable by hand) and builds `<project>/review.html`
+  by running the sibling skill's builder:
+  `sys.executable <skills>/writing-html-artifacts/scripts/quirk_html.py build <project>/review.src.html --out <project>/review.html --project-dir <project>`,
+  where `<skills>` is `Path(__file__).resolve().parents[2]`. `--project-dir <project>` keeps template
+  lookup off whatever repo the agent's cwd is in. The builder's JSON `checks` is passed through.
+  Missing builder file, builder exit 2, or non-JSON output → exit 1 naming the cause; builder exit 1
+  (a static check failed) → exit 1 with `page`, `source`, `checks`. No fallback renderer.
+- Source header: `{"template": "report", "title": "<brief title or 'Video review'>, <vN> review",
+  "layout": "explainer", "mode": "offline", "interactions": [...]}`. The header is one line of JSON
+  inside an HTML comment, so `<`, `>` and `&` in the title are written as `<`, `>`,
+  `&` (a `-->` in a title must not close the comment).
+- Every value read from project files is HTML-escaped before it enters the source. Media and file
+  links are relative to the project (percent-encoded), so the page works from `file://` only while it
+  sits in the project folder. No network references.
+- The newest version (`vN` with the highest N) leads. Region order:
+  1. `summary`: the note's verdict paragraph (see `review-notes.md` below), else a plain verify
+     verdict. A newest version whose verify run set `stop: true` opens with "Stopped after 3 failed
+     verify attempts" and names the failing checks, before any note text.
+  2. `main`, in order: a `q-meta` line (product, length, aspects, narration, created date, project
+     path); Findings (generated from `verify.json`: loudness, worst sync beat and any expected-time
+     beats, outside calls, attempt history per MP4); Watch (one `<video>` per MP4 in a `q-grid`,
+     16:9 `data-span="3"`, 9:16 and 1:1 `data-span="1"`, plus `.srt` links); Scenes (below); What I
+     would check before signing off (the note's remaining content, else "The agent's frame review
+     for vN isn't written yet."); Verify results (one row per check, one column per MP4, measured
+     value and bar in plain words, raw JSON never shown; a `q-chart` of beat offsets when a sync
+     check has beats); Frames (verify's stills from `frames/<mp4 stem>/`, one `q-tabs` section per
+     MP4, each still captioned with its time and scene; the contact sheet is not shown); Outside
+     calls; Earlier versions (only when there are two or more versions); Files; How this page was
+     built.
+- Missing pieces: a version without an MP4, `verify.json`, a verify run for one of its MP4s, or
+  stills gets one visible line naming each missing item. A project with no versions, no brief or no
+  storyboard still builds.
+- Scenes: from the first Markdown table in `storyboard.md` whose header's first cell starts with
+  "Scene" and which has a column whose header starts with "Time" (case-insensitive). A row's start
+  is the first number in its Time cell; a row without one gets no play button. The spoken words are
+  the items of the Script section's numbered list when their count equals the row count, else the
+  row's "Narration" cell, else its first cell whose header contains "text", else empty. Each row
+  with a start gets `<button type="button" class="seek" data-seek="<start>">Play sN from X s</button>`;
+  with two or more MP4s a radio group picks which player the buttons start. No usable table → the
+  storyboard renders as Markdown text, tables included.
+- Stills: a still's time is the number before the trailing `s` in `still-NN-<t>s.png`; its scene is
+  the last row whose start ≤ t. Stills without a parsable time are captioned by file name.
+- Sync chart: beat labels come from `word` in the project's `beats*.json` by beat `id`, else the id;
+  a beat measured `via: "expected"` is labelled "(no onset)". One series per MP4, or one series and
+  the sentence "Every cut measured the same offsets." when all MP4s agree.
+- Outside calls: counts grouped by provider and subcommand (or host); every call to a provider that
+  is not local (`hyperframes`, `playwright`) is also listed on its own row with time, what ran,
+  status and bytes, and a call to a provider not in `cloud_allow` is marked "not allowed" in text.
+  Unreadable lines in `calls.jsonl` are counted in a visible line.
+- Earlier versions: each older version gets its heading, its note's verdict or plain verify
+  verdict, its players, any missing-items line and a link to its `verify.json`; then a compare with
+  two `<select>`s listing every MP4 of every version and two players.
+- An older flat `verify.json` (no `runs`) and flat `frames/` still render.
+
+`SCHEMA:` `<vN>/review-notes.md` (written by the agent after its frame review, before the page)
+```
+<one paragraph: the verdict, one or two sentences>
+
+- <a thing the user should check before signing off>
+- ...
+```
+The first paragraph becomes `summary`; everything after it renders as Markdown under "What I would
+check before signing off". An empty list is fine ("nothing beyond the checks").
 
 ## Content contracts: SKILL.md and references
 
@@ -299,12 +363,12 @@ in `test_making_videos_skill.py`.
 | `SKILL.md` | the 8 pipeline steps in order and the two stops; scope refusal before any work for over 3 min, avatars, publishing, editing user footage (SC-10) †; macOS only; every HyperFrames call via `hf.py` †, every cloud call via `cloud.py` †; 3 failed verify attempts → stop at review (SC-5) †; SKILL_DIR convention; a one-line pointer to each reference |
 | `references/gather.md` | repo reading (README, docs, skill files), claims trace to sources; URL → `hf.py -- capture … --skip-vision`; web-app recording via `record.py`; native macOS recording unsupported, offer URL capture or web build instead (SC-8) |
 | `references/brand.md` | studio layout and `brand.json`; extraction from CSS/assets/capture; draft brand shown at stop 1 and saved with `brand save --confirm` only when the storyboard is approved (SC-1) †; one saved voice reused; pronunciation patches |
-| `references/storyboard.md` | script, scene list with timings, narration text, style frames, scene kit; narration default on above about 20 s (SC-1, SC-2) †; 9:16 and 1:1 are separate layout passes from one storyboard (SC-2); a 3D shot is proposed and marked in the storyboard, with Blender's status, and never rendered unseen (SC-3) †; if TTS install was declined the storyboard says the video is silent (SC-7); craft rules from `research/craft.md` (pace, hold times, hooks) with sources |
+| `references/storyboard.md` | script, scene list with timings, narration text, style frames, scene kit; narration default on above about 20 s (SC-1, SC-2) †; 9:16 and 1:1 are separate layout passes from one storyboard (SC-2); a 3D shot is proposed and marked in the storyboard, with Blender's status, and never rendered unseen (SC-3) †; if TTS install was declined the storyboard says the video is silent (SC-7); craft rules from `research/craft.md` (pace, hold times, hooks) with sources; the scene table's Time cell opens with the scene's start second, and the Script list has one item per scene when narration is on, so the review page can build its play buttons (SC-11) |
 | `references/motion.md` | general motion principles and software-video specifics from `research/craft.md`; seek-safe GSAP rules from the trials: never `play()`, no nested `add()` of scene timelines, `fromTo` not `from`, no `repeat: -1`, no ScrollTrigger, `immediateRender: false` on stacked tweens †, `gsap.set` not `tl.set(…, 0)` |
 | `references/hyperframes.md` | wrapper recipes for init/lint/check/snapshot/render/capture/audio; inline the `:root` font tokens, never a linked stylesheet † ; `--describe false` †; `HYPERFRAMES_NO_TELEMETRY` †; frames for review come from the MP4; the macOS screenshot-capture fallback warning |
 | `references/audio.md` | narration build order (voice first, visuals timed to measured onsets); Kokoro + alignment via `voice.py`; loudness target −16 LUFS, true peak ≤ −1 dBTP †; music only from a user file or the stock opt-in, at least 20 dB under narration †; captions: burned for 9:16/1:1, `.srt` for 16:9 † |
 | `references/3d.md` | `blender_render.py` usage; `--python-exit-code` †; .blend before `--python`; the guard runs automatically after the author's script, which must tolerate extra args via `parse_known_args`; TTF/OTF fonts; sRGB→linear for brand colours; Standard view transform; ease text to face camera (mirrored-text trap); fallback to 2D when Blender is missing (SC-3) |
-| `references/review.md` | verify checks and their sources (logic amendment 2026-10-22); review page; stop 2; notes → new version, old versions kept (SC-6) †; 3-attempt cap (SC-5) |
+| `references/review.md` | verify checks and their sources (logic amendment 2026-10-22); review page; stop 2; notes → new version, old versions kept (SC-6) †; 3-attempt cap (SC-5); after its frame review the agent writes `<vN>/review-notes.md` (verdict paragraph, then things to check) before running `review_page.py` (SC-11) †; the page is built with `writing-html-artifacts` and the script exits 1 if that skill is missing |
 | `references/cloud.md` | local by default; a provider runs only when the brief names it (SC-4) †; a key in the environment is never permission †; providers, endpoints, auth headers and licence/attribution rules from `research/toolchain.md`; Gemini frame review not offered |
 | `references/long-form.md` | over about 60 s: lock the scene kit first, subagents compose only from the kit, verify runs on the assembled MP4 (SC-9) † |
 
@@ -348,9 +412,9 @@ Project layout:
 `SCHEMA:`
 ```
 <studio>/videos/<YYYY-MM-DD>-<slug>/
-  brief.json  storyboard.md  kit/  assets/  calls.jsonl  review.html
+  brief.json  storyboard.md  kit/  assets/  calls.jsonl  review.src.html  review.html
   scenes/ (HyperFrames project, 16:9)  [scenes-9x16/  scenes-1x1/]   # one folder per aspect layout pass
-  v1/ <slug>-16x9.mp4 [<slug>-9x16.mp4] [*.srt] frames/<mp4 stem>/ verify.json (runs per MP4) render.log
+  v1/ <slug>-16x9.mp4 [<slug>-9x16.mp4] [*.srt] frames/<mp4 stem>/ verify.json (runs per MP4) render.log [review-notes.md]
 ```
 
 ## DO-NOT-CHANGE fences
@@ -361,7 +425,8 @@ Back-links: [Key decisions and rationale](logic.md#key-decisions-and-rationale),
   asserted by `tests/test_using_apps_like_a_user_skill.py:149-152`.
 - Version fields in `pyproject.toml:3`, `.claude-plugin/plugin.json:4`, `.claude-plugin/marketplace.json`, and
   `CHANGELOG.md`. `bin/release.py` stamps them at release; hand edits break the release diff.
-- Every other `skills/*` directory. This work adds a skill; it changes no existing one.
+- Every other `skills/*` directory. This work adds a skill; it changes no existing one. `review_page.py`
+  calls `writing-html-artifacts`' builder as a subprocess and never edits that skill.
 - `~/.hyperframes/config.json` and any global `~/.claude` or `~/.agents` path. The trials showed
   global writes are the failure we're preventing.
 
