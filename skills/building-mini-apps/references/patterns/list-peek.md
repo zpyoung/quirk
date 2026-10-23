@@ -1,6 +1,6 @@
 # list-peek
 
-A dense one-line-per-row list where j/k (and the arrow keys) move a highlight and Space previews the highlighted item in a side panel without leaving the list. It was studied in Linear.
+A dense one-line-per-row list where j/k (and the arrow keys) move a highlight and Space (or a click) previews the highlighted item in a side panel without leaving the list. It was studied in Linear.
 
 ## When to use
 
@@ -51,7 +51,9 @@ Do not use it when:
 | k or ArrowUp | Highlights the previous row | With nothing highlighted, highlights the last row. Stops at the ends, no wrap. |
 | Space (tap) | Opens peek for the highlighted row; a second tap closes it | With no highlight, uses the row under the pointer. Does nothing if neither exists. |
 | Space (hold) | Peek shows only while the key is down | A press held longer than 250ms closes peek on release. |
-| Enter | Calls `onOpen(item)` | No-op when `onOpen` is not given. |
+| Enter | Calls `onOpen(item)` for the highlighted row | The host decides what opening means: the demo opens a full view of the book in place of the list. No-op when `onOpen` is not given. |
+| Click (row) | Highlights the row and opens peek on it; clicking the peeked row again closes peek (our design) | Another row retargets the panel. Clicks on a button, link or input inside a row do nothing. Focus stays on the list. |
+| Double-click (row) | Highlights the row and calls `onOpen(item)`, the same as Enter (our design) | The click pair does not toggle peek back off. |
 | Esc | Closes peek; if closed, clears the highlight; if the filter has text, clears that first | One step per press. |
 | / | Focuses the filter input | |
 | Home / End | Highlights first / last row | |
@@ -62,7 +64,7 @@ List keys act only when focus is on the page body or inside the block, and never
 
 - Focus stays on the list container for the whole session; the highlighted row is exposed with `aria-activedescendant`, so opening and closing peek never moves focus.
 - Tab moves from the list into the panel (so links and buttons inside it are reachable). Esc inside the panel closes it and returns focus to the list.
-- Clicking a row highlights it; if peek is open the panel retargets. Clicking does not open peek.
+- Clicking a row highlights it, opens peek on it, and keeps focus on the list; clicking the peeked row again closes peek, so a click toggles like Space (our design). Controls inside a row (lead or meta) are left alone.
 - If the peeked item is removed, peek closes and the highlight moves to the next row, or the previous one at the end.
 
 | State | Shows |
@@ -117,12 +119,13 @@ CONTRACT: type ListPeekProps<T extends ListPeekItem> = {
   renderMeta?: (item: T) => ReactNode               // right-aligned, truncates first
   groupBy?: (item: T) => string                     // group band per distinct value, in first-seen order
   filterText?: (item: T) => string                  // text the filter input matches; default is the title
-  onOpen?: (item: T) => void                        // Enter
+  onOpen?: (item: T) => void                        // Enter or double-click; the host decides what opening means
   highlightedId?: string | null                     // controlled; omit for internal state
   onHighlightedIdChange?: (id: string | null) => void
   peekOpen?: boolean                                // controlled; omit for internal state
   onPeekOpenChange?: (open: boolean) => void
   holdThresholdMs?: number                          // default 250
+  autoFocus?: boolean                               // focus the list on mount; default false (for hosts that remount it after a full view)
   emptyTitle?: string
   emptyAction?: { label: string; onClick: () => void }
   "aria-label"?: string
@@ -136,9 +139,9 @@ Uses from the base:
 - `useCollection` in the demo only; `ListPeek` takes `items` and `status` as props and does not read the store.
 - `EmptyState`, `LoadingState`, `ErrorState` from `src/components/mini/states.tsx` for all list-area states.
 - `useHotkeys` from `react-hotkeys-hook` for all keys. Hold detection uses its `keydown` and `keyup` options, ignores `event.repeat`, and clears on window blur.
-- shadcn components, all pre-installed: `scroll-area`, `input`, `button` in the block; `badge` and `kbd` in the demo. No new dependencies.
+- shadcn components, all pre-installed: `scroll-area`, `input`, `button` in the block; `badge` in the demo. No new dependencies.
 
-`demo.tsx` renders neither `AppShell` nor a toaster; the app wraps everything in one `AppShell`. It shows a reading list of 14 books stored with `useCollection("list-peek-demo", seed)`. Fields: `id` ("BK-01"), `title`, `author`, `status` ("To read", "Reading", "Done"), `added` date, `notes`. Grouped by status; one title is deliberately very long; one group has a single item. `renderLead` shows the ID, `renderMeta` the author, `renderPeek` the title, a badge row, notes and dates. A line under the list reports the item Enter opened, and a footer lists the keys with `kbd`. A "State preview (demo only)" button group (live, empty, loading, error) forces each state; the empty state offers "Restore sample books", and Retry in the error state returns to live.
+`demo.tsx` renders neither `AppShell` nor a toaster; the app wraps everything in one `AppShell`. It shows a reading list of 14 books stored with `useCollection("list-peek-demo", seed)`. Fields: `id` ("BK-01"), `title`, `author`, `status` ("To read", "Reading", "Done"), `added` date, `notes`. Grouped by status; one title is deliberately very long; one group has a single item. `renderLead` shows the ID, `renderMeta` the author, `renderPeek` the title, a badge row, notes and dates. `onOpen` (Enter or double-click) replaces the list area with a full view of the book: title, author, status, dates, notes and the same Move and Remove actions as the peek, a "Back to list" button and Esc to return (our design). The list is remounted with the highlight and peek state the demo holds, so the same row is highlighted and focused (`autoFocus`); the filter text is not kept. A plain-text footer lists the key and click hints. A "State preview (demo only)" button group (live, empty, loading, error) forces each state; the empty state offers "Restore sample books", and Retry in the error state returns to live.
 
 ## Sources
 
@@ -157,4 +160,4 @@ Uses from the base:
 - **Esc clears the query before closing:** [raycast study note](../apps/raycast.md), S5 text. Applied to the filter input.
 - **Hover tint lighter than selected:** [fantastical study note](../apps/fantastical.md), S2-0031.
 - **Text-sourced (no frame shows it):** the peek panel's behavior, J/K highlighting, and peek on a hovered row come from docs text only. The panel's layout is designed in the neutral house style.
-- **Our design:** peek panel layout, push versus overlay, 720px breakpoint, Home/End, `/` to focus the filter, Enter calling `onOpen`, panel following the highlight, focus rules, removal behavior, narrow-window cover, and the panel header buttons.
+- **Our design:** peek panel layout, push versus overlay, 720px breakpoint, Home/End, `/` to focus the filter, click toggling peek, double-click and Enter calling `onOpen`, the demo's full view, panel following the highlight, focus rules, removal behavior, narrow-window cover, and the panel header buttons.

@@ -361,12 +361,11 @@
       "$schema": "https://ui.shadcn.com/schema/registry-item.json",
       "name": "list-peek",
       "title": "List peek",
-      "description": "Dense one-line-per-row list with j/k highlight and a Space-to-peek side panel that follows the highlight.",
+      "description": "Dense one-line-per-row list with j/k highlight and a click-or-Space peek side panel that follows the highlight.",
       "registryDependencies": [
         "badge",
         "button",
         "input",
-        "kbd",
         "scroll-area"
       ],
       "type": "registry:block",
