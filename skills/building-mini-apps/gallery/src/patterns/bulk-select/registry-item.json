@@ -1,0 +1,15 @@
+{
+  "name": "bulk-select",
+  "title": "Bulk select",
+  "description": "Dense table of multi-line rows where selecting rows turns the header into an action bar in place, with an indeterminate select-all box, actions that disable themselves with a reason, a trend sparkline cell and a searchable assignee popover.",
+  "registryDependencies": [
+    "badge",
+    "button",
+    "command",
+    "dropdown-menu",
+    "input",
+    "popover",
+    "skeleton",
+    "tooltip"
+  ]
+}
