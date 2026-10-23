@@ -402,7 +402,7 @@ export function NoteView<T extends AssistedNoteItem>({
       <div ref={setBody} className="min-h-0 flex-1">
         <ScrollArea className="h-full [&_[data-slot=scroll-area-viewport]>div]:block!">
           <div className="mx-auto flex w-full max-w-[560px] flex-col gap-0.5 px-4 py-3">
-            {view === "enhanced" && generatedCount === 0 ? (
+            {view === "enhanced" && generatedCount === 0 && !generating ? (
               <div className="flex flex-col items-start gap-2 py-6">
                 <p className="text-sm text-muted-foreground">
                   Nothing generated yet
