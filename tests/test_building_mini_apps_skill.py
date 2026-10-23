@@ -618,3 +618,35 @@ def test_observations_missing_bullets_file_or_study_note_exits_1(tmp_path: Path)
     bullets = _bullets(tmp_path, "- S1, text: x")
     no_note = _check_docs(skill, "observations", "nonesuch", str(bullets))
     assert no_note.returncode == 1 and "missing file" in no_note.stdout
+
+
+def test_observations_trailing_unseen_lines_pass(tmp_path: Path) -> None:
+    skill = _copy_skill(tmp_path)
+    bullets = _bullets(
+        tmp_path,
+        "- S5, text of a page: ok. → feeds: list-peek; jobs: J1",
+        "",
+        "Unseen: J3 merge flow, not shown in this video",
+        "Unseen: keyboard shortcuts",
+    )
+    result = _check_docs(skill, "observations", "linear", str(bullets), "--frames")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_observations_bare_unseen_line_fails(tmp_path: Path) -> None:
+    skill = _copy_skill(tmp_path)
+    bullets = _bullets(tmp_path, "- S5, text of a page: ok. → feeds: list-peek", "Unseen:", "Unseen:   ")
+    result = _check_docs(skill, "observations", "linear", str(bullets))
+    assert result.returncode == 1
+    assert "line 2" in result.stdout and "line 3" in result.stdout
+    assert "line 1" not in result.stdout
+
+
+def test_observations_stray_prose_line_still_fails_beside_unseen(tmp_path: Path) -> None:
+    skill = _copy_skill(tmp_path)
+    bullets = _bullets(tmp_path, "Unseen: J3 merge flow", "Some stray prose.", "unseen: wrong case")
+    result = _check_docs(skill, "observations", "linear", str(bullets))
+    assert result.returncode == 1
+    assert "line 2" in result.stdout and "line 3" in result.stdout
+    assert "line 1" not in result.stdout
+    assert "not a bullet of the form '- S<n>, ...'" in result.stdout
