@@ -159,8 +159,9 @@ CONTRACT: function useCommandCenter(opts: {
 - Runs `evaluateRules` whenever `tiles` (by `updatedAt` or state) or `rules` change, and on each
   tick (for staleness). Writes go through the callbacks; a rejected write shows `toast.error` and
   leaves the store's last good items (the store already guarantees that). `RuleMemory` advances
-  only after every write from that evaluation has resolved; if one rejects, memory stays put so
-  the next evaluation fires the same edge again rather than losing the flag.
+  per rule: a rule whose write resolved (or that had none) takes its new memory, while a rule whose
+  write rejected keeps its old memory so the next evaluation fires the same edge again. A sibling
+  rule's failure therefore neither replays an already-stored edge nor loses a later clear.
 - **`updatedAt` is stamped by the hook**: a toggle, level or target change from the UI is written as
   `onTileUpdate(id, { ...patch, updatedAt: now })`; a refresh patch without `updatedAt` gets
   `updatedAt: now` added. Toggling a `toggle` or `level` tile patches `{ on: !tile.on }`.

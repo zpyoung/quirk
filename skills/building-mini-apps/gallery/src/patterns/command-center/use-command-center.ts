@@ -92,6 +92,7 @@ export function useCommandCenter(opts: {
   const evaluating = useRef(false)
   const dirty = useRef(false)
   const inflight = useRef<AbortController | null>(null)
+  const applying = useRef(false)
   const lastSuccess = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -163,6 +164,23 @@ export function useCommandCenter(opts: {
     [setTimeline]
   )
 
+  const announceReturned = useCallback((ids: string[]) => {
+    const names = ids.map((id) => {
+      const item = itemsRef.current.find((candidate) => candidate.id === id)
+      const tile = latest.current.tiles.find(
+        (candidate) => candidate.id === item?.tileId
+      )
+      return tile?.name ?? item?.title ?? ""
+    })
+    // blank first so a repeat of the same text is still a change the live region announces
+    setAnnouncement("")
+    clearTimeout(announceTimer.current)
+    announceTimer.current = setTimeout(
+      () => setAnnouncement(names.map((name) => `${name} is back`).join(". ")),
+      100
+    )
+  }, [])
+
   const evaluate = useCallback(async () => {
     if (evaluating.current) {
       dirty.current = true
@@ -189,25 +207,41 @@ export function useCommandCenter(opts: {
         })
         for (const item of result.add) pendingAdds.current.set(item.id, item)
         itemsRef.current = [...itemsRef.current, ...result.add]
-        const writes = [
-          ...result.add.map((item) =>
-            current.onItemAdd(item).catch((cause: unknown) => {
+        const writes: Array<{
+          ruleId: string | undefined
+          done: Promise<void>
+        }> = [
+          ...result.add.map((item) => ({
+            ruleId: item.ruleId,
+            done: current.onItemAdd(item).catch((cause: unknown) => {
               pendingAdds.current.delete(item.id)
               itemsRef.current = itemsRef.current.filter(
                 (candidate) => candidate.id !== item.id
               )
               throw cause
-            })
-          ),
-          ...result.append.map(({ id, events }) => appendEvents(id, events)),
+            }),
+          })),
+          ...result.append.map(({ id, events }) => ({
+            ruleId: itemsRef.current.find((candidate) => candidate.id === id)
+              ?.ruleId,
+            done: appendEvents(id, events),
+          })),
         ]
-        const outcomes = await Promise.allSettled(writes)
-        const failed = outcomes.find((outcome) => outcome.status === "rejected")
-        if (failed) {
-          reportWrite("update the needs-you queue", failed.reason)
-        } else {
-          memory.current = result.memory
-        }
+        const outcomes = await Promise.allSettled(writes.map((w) => w.done))
+        const next: RuleMemory = { ...result.memory }
+        let failure: PromiseRejectedResult | undefined
+        outcomes.forEach((outcome, index) => {
+          if (outcome.status !== "rejected") return
+          failure ??= outcome
+          const ruleId = writes[index].ruleId
+          if (ruleId === undefined) return
+          // a rule whose write failed keeps its old memory so its edge fires again; siblings advance
+          const kept = memory.current?.[ruleId]
+          if (kept) next[ruleId] = kept
+          else delete next[ruleId]
+        })
+        memory.current = next
+        if (failure) reportWrite("update the needs-you queue", failure.reason)
       } while (dirty.current)
     } finally {
       evaluating.current = false
@@ -224,21 +258,7 @@ export function useCommandCenter(opts: {
       setNow(at)
       const ended = endExpiredSnoozes(itemsRef.current, at)
       if (ended.length === 0) return
-      const names = ended.map(({ id }) => {
-        const item = itemsRef.current.find((candidate) => candidate.id === id)
-        const tile = latest.current.tiles.find(
-          (candidate) => candidate.id === item?.tileId
-        )
-        return tile?.name ?? item?.title ?? ""
-      })
-      // blank first so a repeat of the same text is still a change the live region announces
-      setAnnouncement("")
-      clearTimeout(announceTimer.current)
-      announceTimer.current = setTimeout(
-        () =>
-          setAnnouncement(names.map((name) => `${name} is back`).join(". ")),
-        100
-      )
+      announceReturned(ended.map(({ id }) => id))
       for (const { id, events } of ended) {
         appendEvents(id, events).catch((cause: unknown) =>
           reportWrite("return a snoozed item", cause)
@@ -254,25 +274,52 @@ export function useCommandCenter(opts: {
       clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisible)
     }
-  }, [appendEvents])
+  }, [appendEvents, announceReturned])
 
   const runRefresh = useCallback(async () => {
     const onRefresh = latest.current.onRefresh
-    if (!onRefresh || inflight.current) return
+    if (!onRefresh || inflight.current || applying.current) return
     const controller = new AbortController()
     inflight.current = controller
     try {
       const patches = await onRefresh(controller.signal)
       if (controller.signal.aborted) return
       const at = Date.now()
-      await Promise.all(
-        patches.map((patch) =>
-          latest.current.onTileUpdate(patch.id, {
-            ...patch,
-            updatedAt: patch.updatedAt ?? at,
-          })
-        )
+      const before = new Map(
+        latest.current.tiles.map((tile) => [tile.id, tile] as const)
       )
+      applying.current = true
+      let outcomes: PromiseSettledResult<void>[]
+      try {
+        outcomes = await Promise.allSettled(
+          patches.map((patch) =>
+            latest.current.onTileUpdate(patch.id, {
+              ...patch,
+              updatedAt: patch.updatedAt ?? at,
+            })
+          )
+        )
+        const failed = outcomes.find((outcome) => outcome.status === "rejected")
+        if (failed) {
+          // put back what the batch did write so tiles never show a mix of two snapshots
+          await Promise.allSettled(
+            patches.flatMap((patch, index) => {
+              const prior = before.get(patch.id)
+              if (outcomes[index].status !== "fulfilled" || !prior) return []
+              const restore: Record<string, unknown> = {}
+              for (const key of [...Object.keys(patch), "updatedAt"]) {
+                if (key !== "id") restore[key] = prior[key as keyof Tile]
+              }
+              return [
+                latest.current.onTileUpdate(patch.id, restore as Partial<Tile>),
+              ]
+            })
+          )
+          throw (failed as PromiseRejectedResult).reason
+        }
+      } finally {
+        applying.current = false
+      }
       if (controller.signal.aborted) return
       lastSuccess.current = at
       setRefresh({ state: "live", at })
@@ -325,11 +372,18 @@ export function useCommandCenter(opts: {
       if (!item) return
       const at = Date.now()
       setNow(at)
-      appendEvents(itemId, applyItemAction(item, action, at)).catch(
-        (cause: unknown) => reportWrite("save that change", cause)
+      // an elapsed snooze ends before the action lands, so the next tick never has to find it
+      const ended = endExpiredSnoozes([item], at).flatMap(
+        ({ events }) => events
       )
+      if (ended.length > 0) announceReturned([itemId])
+      const settled = { ...item, timeline: [...item.timeline, ...ended] }
+      appendEvents(itemId, [
+        ...ended,
+        ...applyItemAction(settled, action, at),
+      ]).catch((cause: unknown) => reportWrite("save that change", cause))
     },
-    [appendEvents]
+    [appendEvents, announceReturned]
   )
 
   return { now, announcement, refresh, pause, resume, retry, act }
