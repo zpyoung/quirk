@@ -224,6 +224,7 @@ function Workspace<T extends InspectorItem>({
     const finalize = () => {
       window.clearTimeout(timer)
       finalizers.current.delete(finalize)
+      toast.dismiss(toastId)
       void (async () => {
         try {
           await onRemove(ids)
@@ -238,7 +239,7 @@ function Workspace<T extends InspectorItem>({
     finalizers.current.add(finalize)
 
     const first = byId.get(ids[0])?.title ?? "item"
-    toast(
+    const toastId = toast(
       ids.length === 1 ? `Removed "${first}"` : `Removed ${ids.length} items`,
       {
         duration: UNDO_MS,
