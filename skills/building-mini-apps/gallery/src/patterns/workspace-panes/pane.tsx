@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, EllipsisVerticalIcon } from "lucide-react"
 
 import { EmptyState } from "@/components/mini/states"
@@ -124,11 +124,15 @@ export function Pane<T extends WorkspaceItem>({
   ...header
 }: PaneProps<T>) {
   const [rawError, setRawError] = useState<string>()
+  const latestCommit = useRef(0)
 
   function commitRaw(raw: string) {
     if (!writer) return
+    const commit = ++latestCommit.current
     setRawError(undefined)
-    writer.edit((base) => parseRaw(raw, base)).catch((cause: unknown) => setRawError(messageOf(cause)))
+    writer.edit((base) => parseRaw(raw, base)).catch((cause: unknown) => {
+      if (commit === latestCommit.current) setRawError(messageOf(cause))
+    })
   }
 
   let body: ReactNode
