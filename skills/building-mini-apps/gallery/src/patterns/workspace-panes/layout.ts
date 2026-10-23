@@ -39,27 +39,44 @@ export function freshLayout(): WorkspaceLayout {
   }
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const isTab = (value: unknown): value is WorkspaceTab =>
+  isRecord(value) &&
+  typeof value.tabId === "string" &&
+  (value.itemId === null || typeof value.itemId === "string") &&
+  (value.mode === "structured" || value.mode === "raw")
+
+const isGroup = (value: unknown): value is TabGroup =>
+  isRecord(value) &&
+  typeof value.groupId === "string" &&
+  typeof value.activeTabId === "string" &&
+  Array.isArray(value.tabs) &&
+  value.tabs.length > 0 &&
+  value.tabs.every(isTab) &&
+  value.tabs.some((t) => t.tabId === value.activeTabId)
+
 /** Returns the stored layout when it is well formed, otherwise a fresh one-group layout. */
 export function normalizeLayout(stored: unknown): WorkspaceLayout {
-  const candidate = stored as Partial<WorkspaceLayout> | undefined
+  const candidate = isRecord(stored) ? stored : undefined
   const groups = candidate?.groups
-  const valid =
-    Array.isArray(groups) &&
-    (groups.length === 1 || groups.length === 2) &&
-    groups.every(
-      (g) =>
-        Array.isArray(g.tabs) &&
-        g.tabs.length > 0 &&
-        g.tabs.some((t) => t.tabId === g.activeTabId)
-    ) &&
-    groups.some((g) => g.groupId === candidate?.activeGroupId)
-  if (!valid) return freshLayout()
+  if (
+    !Array.isArray(groups) ||
+    (groups.length !== 1 && groups.length !== 2) ||
+    !groups.every(isGroup) ||
+    !groups.some((g) => g.groupId === candidate?.activeGroupId)
+  ) {
+    return freshLayout()
+  }
   return {
     id: "layout",
     groups,
-    activeGroupId: candidate!.activeGroupId!,
+    activeGroupId: candidate!.activeGroupId as string,
     sidebarOpen: candidate!.sidebarOpen !== false,
-    recent: Array.isArray(candidate!.recent) ? candidate!.recent : [],
+    recent: Array.isArray(candidate!.recent)
+      ? candidate!.recent.filter((id): id is string => typeof id === "string")
+      : [],
   }
 }
 

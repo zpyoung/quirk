@@ -18,7 +18,7 @@ import { activeGroupOf, activeTabOf } from "./layout"
 import { Pane } from "./pane"
 import { Sidebar } from "./sidebar"
 import { TabStrip } from "./tab-strip"
-import type { TabGroup, WorkspaceItem } from "./types"
+import type { OpenHow, TabGroup, WorkspaceItem } from "./types"
 import { DEFAULT_LAYOUT_STORE, useWorkspaceLayout } from "./use-workspace-layout"
 
 export type WorkspacePanesProps<T extends WorkspaceItem> = {
@@ -81,7 +81,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
   const activeTab = activeTabOf(layout)
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const hasItems = items.length > 0
-  const shownItemId = hasItems ? activeTab.itemId : null
+  const shownItemId = activeTab.itemId
   const activeItem = shownItemId ? byId.get(shownItemId) : undefined
   const groups: TabGroup[] = wide ? layout.groups : [activeGroup]
 
@@ -169,10 +169,12 @@ export function WorkspacePanes<T extends WorkspaceItem>({
   }
 
   const titleOf = (itemId: string | null) => {
-    if (!itemId || !hasItems) return "New tab"
+    if (!itemId) return "New tab"
     return byId.get(itemId)?.title ?? "Deleted"
   }
-  const isDeleted = (itemId: string | null) => !!itemId && hasItems && !byId.has(itemId)
+  const isDeleted = (itemId: string | null) => !!itemId && !byId.has(itemId)
+  const openFromSidebar = (id: string, how: OpenHow) =>
+    ws.openItem(id, !wide && how === "split" ? "tab" : how)
 
   const sidebar = layout.sidebarOpen ? (
     <Sidebar
@@ -180,7 +182,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
       loading={!ready}
       activeId={shownItemId ?? undefined}
       filterRef={filterRef}
-      onOpen={ws.openItem}
+      onOpen={openFromSidebar}
       onCreate={create ? () => void create().catch(() => undefined) : undefined}
       onCollapse={ws.toggleSidebar}
       badge={badge}
@@ -210,8 +212,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
             >
               {groups.map((group, index) => {
                 const tab = group.tabs.find((t) => t.tabId === group.activeTabId) ?? group.tabs[0]
-                const itemId = hasItems ? tab.itemId : null
-                const item = itemId ? byId.get(itemId) : undefined
+                const item = tab.itemId ? byId.get(tab.itemId) : undefined
                 const trail = ws.history[tab.tabId]
                 return (
                   <Fragment key={group.groupId}>
@@ -249,7 +250,7 @@ export function WorkspacePanes<T extends WorkspaceItem>({
                           onBack={() => ws.goBack(tab.tabId)}
                           onForward={() => ws.goForward(tab.tabId)}
                           onMode={(mode) => ws.setMode(tab.tabId, mode)}
-                          onSplit={() => ws.split(tab.tabId)}
+                          onSplit={wide ? () => ws.split(tab.tabId) : undefined}
                           onClose={() => ws.closeTab(tab.tabId)}
                           onReopen={ws.reopenTab}
                           renderStructured={renderStructured}
