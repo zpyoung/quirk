@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Check study notes, pattern references and blueprints, and vet staged observation bullets.
+"""Check study notes, pattern and style references and blueprints, and vet staged observation bullets.
 
 Usage:
     check_docs.py study <app>
     check_docs.py pattern <pattern>
     check_docs.py blueprint <app>
+    check_docs.py style <style>
     check_docs.py observations <app> <bullets_file> [--frames]
 
-Names come from the files on disk (references/apps, references/patterns, references/blueprints)
-and must match [a-z0-9][a-z0-9-]*. `observations` never edits a file; with --frames it also
-requires each cited references/media/<app>/<file>.png to exist.
+Names come from the files on disk (references/apps, references/patterns, references/blueprints,
+references/styles) and must match [a-z0-9][a-z0-9-]*. `observations` never edits a file; with
+--frames it also requires each cited references/media/<app>/<file>.png to exist.
 
 Exits 0 when the document is complete, 1 when it is missing or incomplete (each problem is
 printed), and 2 on a usage error.
@@ -22,14 +23,16 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 
-FOLDERS = {"study": "apps", "pattern": "patterns", "blueprint": "blueprints"}
+FOLDERS = {"study": "apps", "pattern": "patterns", "blueprint": "blueprints", "style": "styles"}
 REQUIRED: Dict[str, Tuple[str, ...]] = {
     "study": ("Sources", "Observations", "Unseen", "Patterns fed"),
     "pattern": ("When to use", "Anatomy", "Interaction", "Borrow / Leave out", "Block API", "Sources"),
     "blueprint": ("Core jobs", "Screens", "Coverage", "Composition",
                   "Proposed patterns", "Proposed revisions"),
+    "style": ("Character", "When it fits", "Studied from", "Leaves out"),
 }
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 JOB_STATES = ("proposed", "confirmed", "covered")
@@ -209,7 +212,7 @@ def main(argv: List[str]) -> int:
     if kind == "observations" and "--frames" in args:
         frames = True
         args.remove("--frames")
-    wanted = {"study": 1, "pattern": 1, "blueprint": 1, "observations": 2}.get(kind)
+    wanted = {"study": 1, "pattern": 1, "blueprint": 1, "style": 1, "observations": 2}.get(kind)
     if wanted is None or len(args) != wanted or any(a.startswith("--") for a in args):
         print(__doc__.strip(), file=sys.stderr)
         return 2

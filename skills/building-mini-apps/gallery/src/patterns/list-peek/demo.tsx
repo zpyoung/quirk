@@ -71,7 +71,7 @@ function BookDetail({
   const Heading = full ? "h1" : "h2"
   return (
     <article className="flex flex-col gap-3">
-      <Heading className={full ? "text-xl font-semibold" : "line-clamp-3 text-base font-semibold"}>
+      <Heading data-mini="title" className={full ? "text-xl font-semibold" : "line-clamp-3 text-base font-semibold"}>
         {book.title}
       </Heading>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

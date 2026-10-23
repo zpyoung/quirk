@@ -320,3 +320,17 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Diff the Chrome child's environment, rlimits and process QoS under pytest against a plain python3 parent; until then, browser tests can be run by calling the test functions directly with hand-built fixtures.
 
+
+## BUG-39: mini-full's out-of-month day numbers fail AA in every style
+- **Observed**: 2026-10-23
+- **File**: skills/building-mini-apps/gallery/src/patterns/mini-full/month-grid.tsx
+- **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
+- **Severity**: low
+- **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+
+## BUG-40: Neutral House's tab labels sit just under 4.5:1
+- **Observed**: 2026-10-23
+- **File**: skills/building-mini-apps/gallery/src/components/ui/tabs.tsx
+- **Description**: Inactive tab triggers render foreground at 60% opacity on the background. Under real browser compositing this is about 4.48:1 in Neutral House light mode, just under AA for normal text. Neutral House's token values are locked as the default look, so the style gate does not check this pair (adding it fails the default). Found while fixing cool-tool's inactive tab contrast for the style presets work.
+- **Severity**: low
+- **Proposed fix**: Raise the inactive trigger opacity (or switch it to text-muted-foreground) in the tabs component, then add the pair to the style gate.

@@ -3,7 +3,7 @@
   "name": "base",
   "type": "registry:block",
   "title": "Mini-app base",
-  "description": "House-style tokens, IndexedDB collection store with JSON export/import, app shell, and empty/loading/error states.",
+  "description": "Neutral House style tokens, IndexedDB collection store with JSON export/import, app shell, and empty/loading/error states.",
   "dependencies": ["idb-keyval", "react-hotkeys-hook"],
   "registryDependencies": ["button", "skeleton", "sonner", "tooltip"],
   "files": [

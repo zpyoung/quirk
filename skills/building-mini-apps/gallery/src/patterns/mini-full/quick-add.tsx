@@ -192,7 +192,7 @@ export function ParsePreview({
     )
 
   return (
-    <Card size="sm" role="group" aria-label="Parsed entry" className="rounded-md">
+    <Card size="sm" role="group" data-mini="surface" aria-label="Parsed entry" className="rounded-md">
       <CardContent className="flex flex-col gap-2">
         <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1 text-xs">
           <dt className="text-muted-foreground">Title</dt>

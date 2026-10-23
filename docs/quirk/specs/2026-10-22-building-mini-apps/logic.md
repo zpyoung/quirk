@@ -6,6 +6,7 @@
 
 **Amendments:**
 - 2026-10-23: block sources move from `registry/` to `gallery/src/` (base files at their target paths, each pattern in `gallery/src/patterns/<pattern>/`). A prototype showed sources outside the gallery's `src/` can't resolve their npm imports when the gallery compiles them. `registry/` keeps `registry.json` and the built items in `registry/r/`. Approved by the user.
+- 2026-10-23: the one neutral house style becomes one of seven named styles drawn from the studied apps, picked per app at scaffold time. Brand assets stay out, but an app's character (mood, radius, type feel, accent family) may now carry over. See [mini-app-styles](../2026-10-23-mini-app-styles/logic.md). Approved by the user.
 
 I build a lot of small apps for my own local use, and an agent asked to "make it nice" produces a
 generic dashboard. This skill gives the agent proven interaction patterns to start from instead. The
@@ -101,7 +102,7 @@ adapts them to what I asked for.
   hits open shadcn CLI bugs, and a mini app couldn't stand alone.
 - **React, Vite, Tailwind v4 and shadcn/ui.** My stack choice, and shadcn is the most familiar
   component set for agents.
-- **One neutral house style.** All patterns share one set of tokens. This keeps combined patterns
+- **One neutral house style.** Superseded 2026-10-23 by [mini-app-styles](../2026-10-23-mini-app-styles/logic.md). All patterns share one set of tokens. This keeps combined patterns
   looking like one app and keeps clear of other apps' trade dress.
 - **Data lives in the browser by default.** IndexedDB or localStorage, with JSON export and import.
   A pattern or app may add a small local server when it actually needs one, such as for reading real
@@ -182,7 +183,7 @@ ten registry blocks, the gallery, and `SKILL.md`.
 
 Not in scope:
 
-- Pixel-faithful clones, or any brand assets: logos, icons, fonts, illustrations, copy.
+- Pixel-faithful clones, or any brand assets: logos, icons, fonts, illustrations, copy. Narrowed 2026-10-23: an app's character may carry over through a named style ([mini-app-styles](../2026-10-23-mini-app-styles/logic.md)).
 - Committing any captured frame or video.
 - Native desktop or mobile builds. Starters are web apps run locally.
 - A hosted registry. Installs come from local files only.
@@ -194,7 +195,7 @@ Not in scope:
 **Template shape**
 - A template is a written reference plus a runnable starter block.
 - Templates are cut by interaction pattern, not by app or app type.
-- The behavior is copied and the style is our own neutral one.
+- The behavior is copied and the style is our own neutral one. Superseded 2026-10-23 by [mini-app-styles](../2026-10-23-mini-app-styles/logic.md).
 
 **Location and media**
 - New skill in the quirk repo at `skills/building-mini-apps/`.

@@ -148,6 +148,7 @@ export function RecordPanel({
     <aside
       ref={panelRef}
       aria-label={`${noun} details`}
+      data-mini="panel"
       className="absolute inset-0 z-20 flex min-w-0 flex-col border-l bg-card md:static md:inset-auto md:z-auto md:w-[35%] md:max-w-md md:min-w-64 md:shrink-0"
     >
       <div className="flex h-9 shrink-0 items-center justify-between px-3">
@@ -166,6 +167,7 @@ export function RecordPanel({
           ref={titleRef}
           tabIndex={-1}
           data-panel-title=""
+          data-mini="title"
           className="mb-3 text-base font-semibold break-words outline-none"
         >
           {item.title}

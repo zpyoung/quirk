@@ -54,7 +54,7 @@ function PaneHeader({
           <ChevronRightIcon />
         </Button>
       </div>
-      <h2 className="truncate text-center text-xs font-medium" title={title}>
+      <h2 data-mini="title" className="truncate text-center text-xs font-medium" title={title}>
         {title}
       </h2>
       <div className="flex items-center gap-1">

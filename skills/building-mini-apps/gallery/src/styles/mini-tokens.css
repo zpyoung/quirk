@@ -1,9 +1,4 @@
-/*
- * House style: calm, dense, neutral greys with one restrained slate-teal accent.
- * Overrides shadcn's variables. `html:root` and `html.dark` outrank shadcn's
- * `:root` and `.dark`, so these win wherever the file is imported.
- */
-
+/* mini-style: neutral-house sha256=1f46f67d46a3f75474dc0e61c8ba955bded3c17ba1ffec8d2c3a5e18e18ada2d */
 html:root {
   font-size: 15px;
 
@@ -30,7 +25,6 @@ html:root {
   --chart-3: oklch(0.55 0.01 250);
   --chart-4: oklch(0.42 0.01 250);
   --chart-5: oklch(0.3 0.01 250);
-  --radius: 0.5rem;
   --sidebar: oklch(0.965 0.004 250);
   --sidebar-foreground: oklch(0.28 0.01 250);
   --sidebar-primary: oklch(0.5 0.075 205);
@@ -39,12 +33,18 @@ html:root {
   --sidebar-accent-foreground: oklch(0.25 0.01 250);
   --sidebar-border: oklch(0.905 0.005 250);
   --sidebar-ring: oklch(0.58 0.085 205);
+  --radius: 0.5rem;
 
   --mini-accent: oklch(0.5 0.075 205);
   --mini-accent-soft: oklch(0.95 0.02 205);
+  --mini-pending: oklch(0.96 0.045 85);
+  --mini-added: oklch(0.95 0.05 150);
+  --mini-removed: oklch(0.95 0.04 25);
   --mini-row-height: 2rem;
   --mini-gap: 0.5rem;
-  --mini-pending: oklch(0.96 0.045 85);
+  --mini-font-sans: 'Geist Variable', sans-serif;
+  --mini-font-heading: 'Geist Variable', sans-serif;
+  --mini-font-data: 'Geist Variable', sans-serif;
 }
 
 html.dark {
@@ -83,4 +83,9 @@ html.dark {
   --mini-accent: oklch(0.72 0.085 205);
   --mini-accent-soft: oklch(0.28 0.03 205);
   --mini-pending: oklch(0.3 0.04 85);
+  --mini-added: oklch(0.3 0.05 150);
+  --mini-removed: oklch(0.3 0.05 25);
 }
+
+[data-mini="title"] { font-family: var(--mini-font-heading); }
+[data-mini="cell"] { font-family: var(--mini-font-data); }

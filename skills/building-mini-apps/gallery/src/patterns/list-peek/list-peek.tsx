@@ -375,6 +375,7 @@ export function ListPeek<T extends ListPeekItem>({
           key={item.id}
           id={rowDomId(item.id)}
           role="option"
+          data-mini="row"
           aria-selected={highlighted}
           title={item.title}
           onClick={(event) => onRowClick(event, item)}
@@ -421,6 +422,7 @@ export function ListPeek<T extends ListPeekItem>({
             <div key={section.name} role="group" aria-labelledby={`${uid}-group-${index}`}>
               <div
                 id={`${uid}-group-${index}`}
+                data-mini="group-header"
                 className="flex h-9 items-center gap-2 border-b border-border/60 bg-muted/60 px-3 text-xs font-medium"
               >
                 <span className="truncate">{section.name}</span>
@@ -465,6 +467,7 @@ export function ListPeek<T extends ListPeekItem>({
           <aside
             ref={panelRef}
             aria-label="Preview"
+            data-mini="panel"
             className="flex min-h-0 w-[42%] shrink-0 flex-col border-l bg-background @max-[720px]:absolute @max-[720px]:inset-0 @max-[720px]:z-10 @max-[720px]:w-full @max-[720px]:border-l-0"
           >
             <div className="flex h-11 shrink-0 items-center gap-1 border-b px-3">

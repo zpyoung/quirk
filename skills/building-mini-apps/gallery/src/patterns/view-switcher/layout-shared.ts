@@ -26,6 +26,7 @@ export function recordProps(
 ) {
   return {
     "data-record-id": id,
+    "data-mini": "row",
     "data-active": layout.activeId === id ? "" : undefined,
     "aria-current": layout.openId === id ? ("true" as const) : undefined,
     tabIndex: tabStopId === id ? 0 : -1,
