@@ -452,3 +452,57 @@ def test_extract_pairs_timestamps_with_frames_past_9999(
 
     assert len(pairs) == total
     assert all(int(path.stem) == int(pts) + 1 for pts, path in pairs)
+
+
+# --- republishing a source's frames ---
+
+
+def test_video_recapture_removes_five_digit_stale_frames_but_not_a_longer_source_id(rig: Rig) -> None:
+    media = rig.media()
+    media.mkdir(parents=True)
+    long_stale = media / "S1-t10000.png"
+    long_stale.write_bytes(b"stale five-digit frame")
+    longer_source = media / "S10-t0001.png"
+    longer_source.write_bytes(b"different source")
+    longer_source_long = media / "S10-t10000.png"
+    longer_source_long.write_bytes(b"different source, five digits")
+
+    assert rig.run("video", "sentry", "S1", "u").returncode == 0
+
+    assert not long_stale.exists()
+    assert longer_source.read_bytes() == b"different source"
+    assert longer_source_long.read_bytes() == b"different source, five digits"
+
+
+def test_video_failed_publish_keeps_the_previous_capture_and_leaves_no_temporaries(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    for key, value in rig.env.items():
+        monkeypatch.setenv(key, value)
+    capture = _load_capture(rig.skill, "capture_publish_failure")
+    media = rig.media()
+    media.mkdir(parents=True)
+    previous = {
+        "S1-t0000.png": b"old zero",
+        "S1-t0042.png": b"old forty-two",
+        "S1-t9999.png": b"old stale",
+        "S3-t0042.png": b"other source",
+    }
+    for name, data in previous.items():
+        (media / name).write_bytes(data)
+
+    real_move = shutil.move
+    moves = {"count": 0}
+
+    def failing_move(src, dst, *args, **kwargs):
+        moves["count"] += 1
+        if moves["count"] == 3:
+            raise OSError(28, "No space left on device")
+        return real_move(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(capture.shutil, "move", failing_move)
+    assert capture.main(["video", "sentry", "S1", "https://example.invalid/one"]) == 1
+
+    assert moves["count"] >= 3
+    assert "No space left" in capsys.readouterr().err
+    assert {p.name: p.read_bytes() for p in media.iterdir()} == previous

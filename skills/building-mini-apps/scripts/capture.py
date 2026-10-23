@@ -224,16 +224,35 @@ def first_per_second(frames: List[Tuple[float, Path]]) -> dict:
 def publish_frames(
     frames: List[Tuple[float, Path]], source_id: str, media: Path
 ) -> List[Path]:
-    """Move frames into media/, one per whole second, replacing this source's earlier frames."""
+    """Move frames into media/, one per whole second, replacing this source's earlier frames.
+
+    The previous capture is only touched once every new frame sits in media/ under a temporary
+    name; a failure before that point removes the temporaries and raises CaptureError, leaving
+    the previous frames as they were.
+    """
     chosen = first_per_second(frames)
-    for stale in media.glob(f"{source_id}-t[0-9][0-9][0-9][0-9].png"):
-        stale.unlink()
-    published = []
-    for seconds in sorted(chosen):
-        dest = media / frame_name(source_id, seconds)
-        shutil.move(str(chosen[seconds]), str(dest))
-        published.append(dest)
-    return published
+    finals = {media / frame_name(source_id, seconds): chosen[seconds] for seconds in sorted(chosen)}
+    temps = {final: final.with_name(f".{final.name}.tmp") for final in finals}
+    try:
+        for final, source in finals.items():
+            shutil.move(str(source), str(temps[final]))
+    except OSError as exc:
+        for temp in temps.values():
+            temp.unlink(missing_ok=True)
+        raise CaptureError(f"publishing frames failed, previous capture kept: {exc}") from exc
+
+    own_frame = re.compile(rf"^{re.escape(source_id)}-t\d+\.png$")
+    try:
+        for entry in media.iterdir():
+            if own_frame.match(entry.name) and entry not in finals:
+                entry.unlink()
+        for final, temp in temps.items():
+            os.replace(temp, final)
+    except OSError as exc:
+        for temp in temps.values():
+            temp.unlink(missing_ok=True)
+        raise CaptureError(f"publishing frames failed: {exc}") from exc
+    return list(finals)
 
 
 def cmd_video(args: argparse.Namespace) -> int:
