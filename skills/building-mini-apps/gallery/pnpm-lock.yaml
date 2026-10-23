@@ -27,7 +27,7 @@ importers:
         specifier: ^4.4.0
         version: 4.4.0
       idb-keyval:
-        specifier: ^6.3.0
+        specifier: 6.3.0
         version: 6.3.0
       lucide-react:
         specifier: ^1.61.0
@@ -48,10 +48,10 @@ importers:
         specifier: ^19.3.0
         version: 19.3.1(react@19.3.1)
       react-hotkeys-hook:
-        specifier: ^5.3.3
+        specifier: 5.3.3
         version: 5.3.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react-markdown:
-        specifier: ^10.1.0
+        specifier: 10.1.0
         version: 10.1.0(@types/react@19.3.0)(react@19.3.1)
       react-resizable-panels:
         specifier: ^4.14.8

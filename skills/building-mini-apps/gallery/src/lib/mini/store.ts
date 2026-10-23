@@ -20,10 +20,11 @@ interface Entry {
   snapshot: Snapshot<{ id: string }>
   listeners: Set<() => void>
   loaded: Promise<void>
-  queue: Promise<unknown>
 }
 
 const entriesByName = new Map<string, Entry>()
+// keyed by name, not entry, so an import can order itself against collections nobody has opened yet
+const queues = new Map<string, Promise<unknown>>()
 let idbStore: UseStore | undefined
 
 function db(): UseStore {
@@ -40,6 +41,10 @@ function publish(entry: Entry, snapshot: Snapshot<{ id: string }>) {
   entry.listeners.forEach((listener) => listener())
 }
 
+function queueTail(name: string): Promise<unknown> {
+  return queues.get(name) ?? Promise.resolve()
+}
+
 function getEntry(name: string, seed?: { id: string }[]): Entry {
   const existing = entriesByName.get(name)
   if (existing) return existing
@@ -48,12 +53,13 @@ function getEntry(name: string, seed?: { id: string }[]): Entry {
     snapshot: { items: [], status: "loading" },
     listeners: new Set(),
     loaded: Promise.resolve(),
-    queue: Promise.resolve(),
   }
   entriesByName.set(name, entry)
 
+  const pending = queueTail(name)
   entry.loaded = (async () => {
     try {
+      await pending
       const stored = await get<{ id: string }[]>(name, db())
       if (stored !== undefined) {
         publish(entry, { items: stored, status: "ready" })
@@ -70,13 +76,13 @@ function getEntry(name: string, seed?: { id: string }[]): Entry {
   return entry
 }
 
-/** Serializes writes per collection so concurrent calls never drop each other's changes. */
+/** Serializes writes per collection, imports included, so concurrent calls never drop each other's changes. */
 function mutate<T extends { id: string }>(
   name: string,
   entry: Entry,
   change: (items: T[]) => T[] | null
 ): Promise<void> {
-  const run = entry.queue.then(async () => {
+  const run = queueTail(name).then(async () => {
     await entry.loaded
     const { items, status, error } = entry.snapshot
     if (status === "error") throw error
@@ -85,7 +91,7 @@ function mutate<T extends { id: string }>(
     await set(name, next, db())
     publish(entry, { items: next, status: "ready" })
   })
-  entry.queue = run.catch(() => undefined)
+  queues.set(name, run.catch(() => undefined))
   return run
 }
 
@@ -132,7 +138,7 @@ export function useCollection<T extends { id: string }>(
 
 /** Serializes every stored collection as `{"version":1,"collections":{...}}`. */
 export async function exportAll(): Promise<string> {
-  await Promise.all([...entriesByName.values()].map((entry) => entry.queue))
+  await Promise.all([...queues.values()])
   await Promise.all([...entriesByName.values()].map((entry) => entry.loaded))
   const collections: Record<string, unknown> = {}
   for (const [key, value] of await entries(db())) collections[String(key)] = value
@@ -159,10 +165,18 @@ export async function importAll(json: string): Promise<void> {
     if (!Array.isArray(items)) throw new Error(`Collection "${name}" is not an array`)
   }
 
-  await Promise.all([...entriesByName.values()].map((entry) => entry.loaded))
-  await setMany(incoming, db())
-  for (const [name, items] of incoming) {
-    const entry = entriesByName.get(name)
-    if (entry) publish(entry, { items: items as { id: string }[], status: "ready" })
-  }
+  // reserve every affected queue before the first await so mutations called after this point wait for the import
+  const settled = incoming.map(([name]) => queueTail(name))
+  const opened = incoming.flatMap(([name]) => entriesByName.get(name) ?? [])
+  const run = Promise.all(settled).then(async () => {
+    await Promise.all(opened.map((entry) => entry.loaded))
+    await setMany(incoming, db())
+    for (const [name, items] of incoming) {
+      const entry = entriesByName.get(name)
+      if (entry) publish(entry, { items: items as { id: string }[], status: "ready" })
+    }
+  })
+  const tail = run.catch(() => undefined)
+  for (const [name] of incoming) queues.set(name, tail)
+  return run
 }
