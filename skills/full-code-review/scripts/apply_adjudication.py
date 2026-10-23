@@ -20,6 +20,7 @@ _DISAGREEMENT_KIND = {"issue_wrong": "issue", "fix_wrong": "fix", "unreachable":
 _RULINGS = ("agree", *_DISAGREEMENT_KIND)
 _LABELS = ("Common path", "Edge case", "Unreachable", "Would miss", "N/A")
 _TEST_DIMENSIONS = {"tests", "test-adequacy", "test-coverage"}
+_DIFF_FENCE = re.compile(r"(?m)^```diff")
 _IDENTITY = re.compile(r"(?i)\b(adjudicat\w*|lens(es)?|opus|sonnet|reviewer)\b")
 _FINDING_ID = re.compile(r"A[1-9][0-9]*")
 _PATH_CAP = 200
@@ -50,9 +51,12 @@ def _required_text(value: object, label: str) -> str:
 
 
 def _one_line(value: object, limit: int | None, label: str) -> str:
-    """Return `value` trimmed; it must be a non-empty line free of the characters the report renderer rejects, within `limit` if given."""
+    """Return `value` trimmed; it must be a non-empty line free of the characters the report renderer rejects, within `limit` if given.
+
+    The renderer's check runs on the raw value so edge characters are rejected, not trimmed away.
+    """
     text = _required_text(value, label)
-    if UNSAFE_LINE.search(text):
+    if UNSAFE_LINE.search(value):
         raise ValueError("%s must be a single line" % label)
     if limit is not None and len(text) > limit:
         raise ValueError("%s exceeds %d characters" % (label, limit))
@@ -160,7 +164,7 @@ def _validate_ruling(raw: dict, finding: dict) -> dict:
     if kind == "agree":
         _optional_absent(objection, "%s: objection" % where, kind, "a disagreement")
     else:
-        objection = _required_text(objection, "%s: objection" % where)
+        objection = _one_line(objection, None, "%s: objection" % where)
         _reject_identity(objection, "%s: objection" % where)
     if kind == "unreachable":
         trigger = _one_line(trigger, None, "%s: lens_trigger_path" % where)
@@ -171,6 +175,8 @@ def _validate_ruling(raw: dict, finding: dict) -> dict:
         replacement = _object(replacement, "%s: replacement" % where)
         fix_md = _one_line(replacement.get("fix_md"), _FIX_MD_CAP, "%s: replacement.fix_md" % where)
         recommendation = _required_text(replacement.get("recommendation"), "%s: replacement.recommendation" % where)
+        if not _DIFF_FENCE.search(recommendation):
+            raise ValueError("%s: replacement.recommendation must contain a ```diff fenced block" % where)
         _reject_identity(fix_md, "%s: replacement.fix_md" % where)
         _reject_identity(recommendation, "%s: replacement.recommendation" % where)
         replacement = {"fix_md": fix_md, "recommendation": recommendation}
@@ -219,6 +225,14 @@ def _claims(finding: dict, ruling: dict, where: str) -> tuple[str, str]:
     return issue, ruling["objection"]
 
 
+def _packet_claims(finding: dict, ruling: dict, a_is: str, where: str) -> dict:
+    """Return the packet fields that carry the claims under test, with sides assigned by `a_is`."""
+    lens_claim, adjudicator_claim = _claims(finding, ruling, where)
+    claim_a, claim_b = (lens_claim, adjudicator_claim) if a_is == "lens" else (adjudicator_claim, lens_claim)
+    return {"file": str(finding.get("file", "")), "line": str(finding.get("line", "")),
+            "kind": _DISAGREEMENT_KIND[ruling["ruling"]], "claim_a": claim_a, "claim_b": claim_b}
+
+
 def build_jobs(input_doc: dict, rulings_doc: dict, seed: int, execution: str = "disabled") -> dict:
     """Return the prover jobs, one per disagreement, with the A/B side drawn per job from `seed`.
 
@@ -233,20 +247,20 @@ def build_jobs(input_doc: dict, rulings_doc: dict, seed: int, execution: str = "
             continue
         finding = findings[identifier]
         job_id = "J%d" % (len(jobs) + 1)
-        lens_claim, adjudicator_claim = _claims(finding, ruling, "adjudication-input.json finding %s" % identifier)
         a_is = rng.choice(("lens", "adjudicator"))
-        claim_a, claim_b = (lens_claim, adjudicator_claim) if a_is == "lens" else (adjudicator_claim, lens_claim)
+        fields = _packet_claims(finding, ruling, a_is, "adjudication-input.json finding %s" % identifier)
         jobs.append({
             "job": job_id, "finding": identifier, "ruling": ruling, "a_is": a_is,
-            "packet": {"job": job_id, "file": str(finding.get("file", "")), "line": str(finding.get("line", "")),
-                       "kind": _DISAGREEMENT_KIND[ruling["ruling"]], "claim_a": claim_a, "claim_b": claim_b,
-                       "execution": execution},
+            "packet": {"job": job_id, **fields, "execution": execution},
         })
     return {"seed": seed, "jobs": jobs}
 
 
-def _load_jobs(doc: dict, rulings: dict[str, dict]) -> dict[str, dict]:
-    """Return the jobs keyed by finding id; they must cover exactly the disagreement rulings, one job each."""
+def _load_jobs(doc: dict, rulings: dict[str, dict], findings: dict[str, dict]) -> dict[str, dict]:
+    """Return the jobs keyed by finding id; they must cover exactly the disagreement rulings, one job each.
+
+    A job whose packet no longer matches the claims rebuilt from the current rulings and input is stale.
+    """
     jobs = _items(doc.get("jobs"), "prover-jobs.json jobs")
     by_finding: dict[str, dict] = {}
     seen: set[str] = set()
@@ -268,6 +282,12 @@ def _load_jobs(doc: dict, rulings: dict[str, dict]) -> dict[str, dict]:
             raise ValueError("prover-jobs.json job %s ruling does not match the %s ruling for %s" % (identifier, kind, finding_id))
         if finding_id in by_finding:
             raise ValueError("prover-jobs.json job %s is a second job for %s" % (identifier, finding_id))
+        packet = job.get("packet")
+        expected = _packet_claims(findings[finding_id], rulings[finding_id], job["a_is"],
+                                  "adjudication-input.json finding %s" % finding_id)
+        if not isinstance(packet, dict) or any(packet.get(key) != value for key, value in expected.items()):
+            raise ValueError("prover-jobs.json job %s is stale: its packet no longer matches the current rulings "
+                             "and input for %s; rerun jobs" % (identifier, finding_id))
         by_finding[finding_id] = job
     for identifier, ruling in rulings.items():
         if ruling["ruling"] != "agree" and identifier not in by_finding:
@@ -374,7 +394,7 @@ def apply_rulings(input_doc: dict, rulings_doc: dict, jobs_doc: dict, verdicts_d
     """Apply rulings and prover verdicts; return `{findings, adjudication, warnings}` in input order."""
     findings = _input_findings(input_doc, "adjudication-input.json")
     rulings, merges = _validate_rulings(findings, rulings_doc)
-    jobs = _load_jobs(jobs_doc, rulings)
+    jobs = _load_jobs(jobs_doc, rulings, findings)
     verdicts = _load_verdicts(verdicts_doc, jobs)
     warnings: list[str] = []
 

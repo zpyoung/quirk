@@ -12,6 +12,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "skills" / "full-code-review" / "scripts" / "apply_adjudication.py"
 IDENTITY_WORDS = re.compile(r"(?i)\b(adjudicat\w*|lens(es)?|opus|sonnet|reviewer)\b")
 NO_VERDICT = "no-verdict"
+DIFF = "```diff\n-a\n+b\n```"
 
 
 def module():
@@ -42,7 +43,7 @@ def issue_wrong(fid, **overrides):
 
 
 def fix_wrong(fid, **overrides):
-    replacement = {"fix_md": "Clamp the end index", "recommendation": "```diff\n-a\n+b\n```"}
+    replacement = {"fix_md": "Clamp the end index", "recommendation": DIFF}
     return agree(fid, ruling="fix_wrong", objection="The fix reads past the end.",
                  replacement=overrides.pop("replacement", replacement), **overrides)
 
@@ -497,7 +498,7 @@ MALFORMED = [
     ("N/A path not the dimension", lambda r: mutate(r, 0, production={"label": "N/A", "path": "comments"}), "production.path"),
     ("Would miss on a non-test finding", lambda r: mutate(r, 0, production={"label": "Would miss", "path": "p"}), "production.label"),
     ("over-cap replacement fix_md", lambda r: mutate(r, 1, ruling="fix_wrong", objection="o",
-                                                     replacement={"fix_md": "x" * 161, "recommendation": "r"}), "fix_md"),
+                                                     replacement={"fix_md": "x" * 161, "recommendation": DIFF}), "fix_md"),
     ("replacement without recommendation", lambda r: mutate(r, 1, ruling="fix_wrong", objection="o",
                                                             replacement={"fix_md": "x"}), "recommendation"),
     ("identity word in objection", lambda r: mutate(r, 1, ruling="issue_wrong", objection="The lens missed the guard."), "objection"),
@@ -505,7 +506,7 @@ MALFORMED = [
                                                        production={"label": "Unreachable", "path": "p"},
                                                        lens_trigger_path="Opus says it runs"), "lens_trigger_path"),
     ("identity word in replacement", lambda r: mutate(r, 1, ruling="fix_wrong", objection="o",
-                                                      replacement={"fix_md": "x", "recommendation": "per the reviewer"}), "replacement"),
+                                                      replacement={"fix_md": "x", "recommendation": "```diff\n+per the reviewer\n```"}), "replacement"),
     ("ruling not an object", lambda r: r + ["oops"], "rulings"),
     ("merge not an object", None, "merges"),
 ]
@@ -709,7 +710,7 @@ UNSAFE_CHARS = [" ", " ", "\r", "\n"]
 def one_line_cases():
     return [
         ("production.path", lambda ch: issue_wrong("A1", production={"label": "Common path", "path": "a%sb" % ch})),
-        ("fix_md", lambda ch: fix_wrong("A1", replacement={"fix_md": "a%sb" % ch, "recommendation": "r"})),
+        ("fix_md", lambda ch: fix_wrong("A1", replacement={"fix_md": "a%sb" % ch, "recommendation": DIFF})),
         ("severity_reason", lambda ch: issue_wrong("A1", severity="Nit", severity_reason="a%sb" % ch)),
         ("lens_trigger_path", lambda ch: {**unreachable("A1"), "lens_trigger_path": "a%sb" % ch}),
     ]
@@ -747,7 +748,7 @@ def test_apply_accepts_exactly_what_the_renderer_accepts(tmp_path, capsys):
     path = "POST /x‧ handler \u0085\u000b\u000c end"
     fix_md = "Clamp​ the end\u0085 index"
     rulings = [agree("A1", production={"label": "Common path", "path": path}),
-               fix_wrong("A2", replacement={"fix_md": fix_md, "recommendation": "r"})]
+               fix_wrong("A2", replacement={"fix_md": fix_md, "recommendation": DIFF})]
     result = pipeline(tmp_path, capsys, [finding(1), finding(2)], rulings,
                       verdicts={"A2": "adjudicator"})
     for item in result["findings"]:
@@ -755,3 +756,135 @@ def test_apply_accepts_exactly_what_the_renderer_accepts(tmp_path, capsys):
     assert result["findings"][0]["production"]["path"] == path
     renderer._validate_posted_text(result["findings"][1], "finding")
     assert result["findings"][1]["fix_md"] == fix_md
+
+
+EDGE_CHARS = [" ", " ", "\n", "\r"]
+
+
+def edge_cases():
+    return [
+        ("production.path", lambda text: agree("A1", production={"label": "Common path", "path": text})),
+        ("fix_md", lambda text: fix_wrong("A1", replacement={"fix_md": text, "recommendation": DIFF})),
+        ("objection", lambda text: {**issue_wrong("A1"), "objection": text}),
+        ("severity_reason", lambda text: agree("A1", severity="Nit", severity_reason=text)),
+        ("lens_trigger_path", lambda text: {**unreachable("A1"), "lens_trigger_path": text}),
+    ]
+
+
+@pytest.mark.parametrize("char", EDGE_CHARS, ids=["u2028", "u2029", "lf", "cr"])
+@pytest.mark.parametrize("edge", ["leading", "trailing"])
+@pytest.mark.parametrize("field,make", edge_cases(), ids=[case[0] for case in edge_cases()])
+@pytest.mark.parametrize("command", ["jobs", "apply"])
+def test_one_line_fields_reject_unsafe_characters_at_either_end(tmp_path, capsys, field, make, edge, char, command):
+    text = char + "value" if edge == "leading" else "value" + char
+    mod, paths = build(tmp_path, capsys, [finding(1)], [make(text)])
+    if command == "jobs":
+        code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--out", paths["jobs"], "--seed", "1")
+    else:
+        write(Path(paths["jobs"]), {"seed": 1, "jobs": []})
+        write(Path(paths["verdicts"]), {"verdicts": []})
+        code, out = run(mod, capsys, "apply", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--jobs", paths["jobs"], "--verdicts", paths["verdicts"], "--out", paths["out"])
+    assert code == 2 and field in out["error"]
+    assert not Path(paths["jobs" if command == "jobs" else "out"]).exists()
+
+
+@pytest.mark.parametrize("command", ["jobs", "apply"])
+@pytest.mark.parametrize("name,ruling,needle", [
+    ("multi-line objection", lambda: {**issue_wrong("A1"), "objection": "first line\nsecond line"}, "objection"),
+    ("unfenced recommendation", lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "change a to b"}),
+     "recommendation"),
+    ("differently fenced recommendation",
+     lambda: fix_wrong("A1", replacement={"fix_md": "x", "recommendation": "```python\na = b\n```"}), "recommendation"),
+])
+def test_prompt_contract_shapes_are_enforced(tmp_path, capsys, command, name, ruling, needle):
+    mod, paths = build(tmp_path, capsys, [finding(1)], [ruling()])
+    if command == "jobs":
+        code, out = run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--out", paths["jobs"], "--seed", "1")
+    else:
+        write(Path(paths["jobs"]), {"seed": 1, "jobs": []})
+        write(Path(paths["verdicts"]), {"verdicts": []})
+        code, out = run(mod, capsys, "apply", "--input", paths["input"], "--rulings", paths["rulings"],
+                        "--jobs", paths["jobs"], "--verdicts", paths["verdicts"], "--out", paths["out"])
+    assert code == 2 and needle in out["error"]
+
+
+def test_recommendation_with_prose_around_a_diff_fence_is_accepted(tmp_path, capsys):
+    recommendation = "Guard the index:\n```diff\n-a\n+b\n```"
+    result = pipeline(tmp_path, capsys, [finding(1)],
+                      [fix_wrong("A1", replacement={"fix_md": "x", "recommendation": recommendation})],
+                      verdicts={"A1": "adjudicator"})
+    assert result["findings"][0]["recommendation"] == recommendation
+
+
+def stale_apply(tmp_path, capsys, findings, rulings, changed_rulings=None, changed_findings=None):
+    """Build jobs from one rulings/input pair, then apply against a changed pair."""
+    mod, paths = build(tmp_path, capsys, findings, rulings)
+    assert run(mod, capsys, "jobs", "--input", paths["input"], "--rulings", paths["rulings"],
+               "--out", paths["jobs"], "--seed", "1")[0] == 0
+    jobs = json.loads(Path(paths["jobs"]).read_text())["jobs"]
+    write(Path(paths["verdicts"]), {"verdicts": [
+        {"job": job["job"], "verdict": "A" if job["a_is"] == "adjudicator" else "B", "evidence_kind": "quote",
+         "evidence": "users.py:12", "production_path": None, "what_would_settle": None} for job in jobs]})
+    if changed_rulings is not None:
+        write(Path(paths["rulings"]), {"rulings": changed_rulings, "merges": []})
+    if changed_findings is not None:
+        doc = json.loads(Path(paths["input"]).read_text())
+        doc["findings"] = changed_findings(doc["findings"])
+        write(Path(paths["input"]), doc)
+    code, out = run(mod, capsys, "apply", "--input", paths["input"], "--rulings", paths["rulings"],
+                    "--jobs", paths["jobs"], "--verdicts", paths["verdicts"], "--out", paths["out"])
+    return code, out, paths
+
+
+def test_apply_with_unchanged_rulings_and_input_is_not_stale(tmp_path, capsys):
+    findings = [finding(1), finding(2), finding(3)]
+    rulings = [issue_wrong("A1"), fix_wrong("A2"), unreachable("A3")]
+    code, out, paths = stale_apply(tmp_path, capsys, findings, rulings)
+    assert code == 0, out
+    assert Path(paths["out"]).exists()
+
+
+@pytest.mark.parametrize("name,original,changed,finding_id", [
+    ("objection", issue_wrong("A1"), {**issue_wrong("A1"), "objection": "A different guard at users.py:40."}, "A1"),
+    ("replacement recommendation", fix_wrong("A1"),
+     fix_wrong("A1", replacement={"fix_md": "Clamp the end index", "recommendation": "```diff\n-a\n+c\n```"}), "A1"),
+    ("lens_trigger_path", unreachable("A1"),
+     {**unreachable("A1"), "lens_trigger_path": "client.fetch called from a cron entry point"}, "A1"),
+    ("unreachable objection", unreachable("A1"),
+     {**unreachable("A1"), "objection": "Only tests/other.py:3 calls it."}, "A1"),
+])
+def test_apply_rejects_a_job_whose_rulings_changed_with_the_same_ruling_kind(
+        tmp_path, capsys, name, original, changed, finding_id):
+    code, out, paths = stale_apply(tmp_path, capsys, [finding(1)], [original], changed_rulings=[changed])
+    assert code == 2
+    assert "prover-jobs.json" in out["error"] and "J1" in out["error"] and "stale" in out["error"]
+    assert not Path(paths["out"]).exists()
+
+
+@pytest.mark.parametrize("key,rulings", [
+    ("issue", [issue_wrong("A1")]),
+    ("recommendation", [fix_wrong("A1")]),
+    ("file", [issue_wrong("A1")]),
+    ("line", [issue_wrong("A1")]),
+])
+def test_apply_rejects_a_job_whose_input_finding_changed(tmp_path, capsys, key, rulings):
+    def change(items):
+        items[0][key] = "changed"
+        return items
+
+    code, out, paths = stale_apply(tmp_path, capsys, [finding(1)], rulings, changed_findings=change)
+    assert code == 2 and "stale" in out["error"] and "J1" in out["error"]
+    assert not Path(paths["out"]).exists()
+
+
+def test_apply_rejects_a_job_with_a_tampered_packet_side(tmp_path, capsys):
+    def swap(jobs):
+        packet = jobs[0]["packet"]
+        packet["claim_a"], packet["claim_b"] = packet["claim_b"], packet["claim_a"]
+        return jobs
+
+    code, out, paths = jobs_apply(tmp_path, capsys, [finding(1)], [issue_wrong("A1")], swap)
+    rejected(code, out, paths, "J1", "stale")
