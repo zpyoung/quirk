@@ -1749,6 +1749,26 @@ def test_failed_and_disabled_summary_lines(tmp_path):
     assert payload["adjudication"] == "Not adjudicated (turned off by policy)"
 
 
+def test_failed_adjudication_carrying_a_tally_exits_2(tmp_path):
+    value = adjudicated_report("failed", tally=dict(ADJ_TALLY))
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 2 and "run.adjudication.tally" in payload["error"]
+
+
+def test_disabled_adjudication_carrying_a_dropped_entry_exits_2(tmp_path):
+    entry = {"file": "d.py", "line": "8", "title": "Guarded", "reason": "A guard exists"}
+    value = adjudicated_report("disabled", checked_and_dropped=[entry])
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 2 and "run.adjudication.checked_and_dropped" in payload["error"]
+
+
+def test_failed_adjudication_with_null_tally_and_empty_dropped_still_renders_the_warning(tmp_path):
+    value = adjudicated_report("failed", tally=None, checked_and_dropped=[])
+    rc, payload, _, _ = invoke(tmp_path, value)
+    assert rc == 0 and payload["adjudication"] == "⚠️ Not adjudicated: adjudicator <timed out>"
+    assert "Checked and dropped" not in m.render_md(value)
+
+
 def test_stdout_omits_adjudication_when_the_run_has_none(tmp_path):
     rc, payload, _, _ = invoke(tmp_path, report())
     assert rc == 0 and "adjudication" not in payload

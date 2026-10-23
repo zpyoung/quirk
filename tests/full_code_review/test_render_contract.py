@@ -396,3 +396,23 @@ def test_failed_and_disabled_adjudication_require_a_reason_but_not_production(st
     prepared, warnings = m._prepare_report(report(adjudication=dict(base, reason="turned off by policy")))
     assert not [w for w in warnings if "Unknown" in w]
     assert prepared["run"]["adjudication"]["status"] == status
+
+
+@pytest.mark.parametrize("status", ["failed", "disabled"])
+@pytest.mark.parametrize("changes, message", [
+    ({"tally": TALLY}, "run.adjudication.tally"),
+    ({"tally": {}}, "run.adjudication.tally"),
+    ({"checked_and_dropped": [{"file": "a.py", "line": "1", "title": "t", "reason": "r"}]},
+     "run.adjudication.checked_and_dropped"),
+])
+def test_failed_and_disabled_adjudication_reject_a_tally_or_dropped_entries(status, changes, message):
+    base = {"status": status, "model": None, "reason": "adjudicator timed out",
+            "tally": None, "checked_and_dropped": []}
+    with pytest.raises(ValueError, match=message):
+        m._prepare_report(report(adjudication=dict(base, **changes)))
+
+
+@pytest.mark.parametrize("status", ["failed", "disabled"])
+def test_failed_and_disabled_adjudication_accept_absent_tally_and_dropped(status):
+    prepared, _ = m._prepare_report(report(adjudication={"status": status, "reason": "adjudicator timed out"}))
+    assert prepared["run"]["adjudication"]["status"] == status

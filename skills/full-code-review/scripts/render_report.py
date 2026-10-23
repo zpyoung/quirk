@@ -311,8 +311,13 @@ def _validate_run_adjudication(run, findings):
             if "production" not in finding:
                 raise ValueError("finding %s is missing production, which a complete adjudication requires" %
                                  finding["id"])
-    elif not _non_empty_text(adjudication.get("reason")):
-        raise ValueError("run.adjudication.reason is required when status is %s" % status)
+    else:
+        if not _non_empty_text(adjudication.get("reason")):
+            raise ValueError("run.adjudication.reason is required when status is %s" % status)
+        if adjudication.get("tally") is not None:
+            raise ValueError("run.adjudication.tally must be null when status is %s" % status)
+        if adjudication.get("checked_and_dropped"):
+            raise ValueError("run.adjudication.checked_and_dropped must be empty when status is %s" % status)
 
 
 def adjudication_summary(run):
