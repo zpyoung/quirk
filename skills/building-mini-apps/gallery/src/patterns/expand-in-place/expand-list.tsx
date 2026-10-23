@@ -47,6 +47,7 @@ function ExpandRow<T extends ExpandItem>({
     <li
       data-item-id={item.id}
       data-mini="row"
+      data-active={selected ? "" : undefined}
       className={cn(
         "flex items-center gap-2.5 rounded-md px-3 py-1 hover:bg-muted/60",
         selected && "bg-muted"
