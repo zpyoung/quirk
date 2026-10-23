@@ -428,6 +428,16 @@ def test_gate_checks_ring_at_3_to_1(styles: ModuleType, neutral: Dict[str, Any])
     assert [(f.fg, f.bg, f.needed) for f in failures if f.mode == "dark"] == [("ring", "background", 3.0)]
 
 
+@pytest.mark.parametrize("token", ["mini-added", "mini-removed", "mini-pending"])
+def test_gate_checks_foreground_on_staged_tints(
+    styles: ModuleType, neutral: Dict[str, Any], token: str
+) -> None:
+    weak = copy.deepcopy(neutral)
+    weak["light"][token] = weak["light"]["foreground"]
+    failures = styles.contrast_failures(weak)
+    assert [(f.mode, f.fg, f.bg, f.needed) for f in failures] == [("light", "foreground", token, 4.5)]
+
+
 def test_gate_does_not_check_borders(styles: ModuleType, neutral: Dict[str, Any]) -> None:
     faint = copy.deepcopy(neutral)
     faint["light"]["border"] = faint["light"]["background"]
@@ -741,8 +751,31 @@ def test_extra_css_rules_that_set_both_colours_keep_text_readable(styles: Module
     for rule in styles.load_style(STYLES_DIR / f"{slug}.json")["extra_css"]:
         declared = rule["declarations"]
         if "color" in declared and "background-color" in declared:
+            if "var(" in declared["color"] + declared["background-color"]:
+                continue  # token pairs are covered by the contrast gate
             ratio = styles.contrast_ratio(declared["color"], declared["background-color"])
             assert ratio >= styles.AA_TEXT, f"{slug} {rule['selector']}: {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("tint", ["added", "removed", "pending"])
+def test_dense_dark_selected_staged_cells_keep_their_tint(styles: ModuleType, tint: str) -> None:
+    style = styles.load_style(STYLES_DIR / "dense-dark.json")
+    selected = '[data-mini="row"][aria-selected="true"] [data-mini="cell"]'
+    selectors = [r["selector"] for r in style["extra_css"]]
+    rule = style["extra_css"][selectors.index(f'{selected}[data-tint="{tint}"]')]
+    assert rule["mode"] == "both"
+    assert rule["declarations"] == {
+        "background-color": f"var(--mini-{tint})",
+        "color": "var(--foreground)",
+    }
+    assert selectors.index(rule["selector"]) > selectors.index(selected)
+
+
+def test_staged_table_cells_expose_their_staged_state() -> None:
+    source = (STYLES_DIR.parent / "gallery/src/patterns/staged-table-edit/staged-table.tsx").read_text()
+    assert "data-tint={stagedState}" in source
+    for state in ("added", "removed", "pending"):
+        assert f'"{state}"' in source
 
 
 def test_dense_dark_selected_cells_set_a_background_with_their_text_colour(styles: ModuleType) -> None:

@@ -1,4 +1,4 @@
-/* mini-style: dense-dark sha256=e4989f44f8841ae65a4e3d0d212c880a0a85a17a655958ab8774b3c20a57863f */
+/* mini-style: dense-dark sha256=abbc1ba5b60ff1b7958e02d107fa2e666fa779d5770d74ca1607ebd528e55232 */
 html:root {
   font-size: 15px;
 
@@ -93,6 +93,9 @@ html.dark {
 [data-mini="group-header"] { font-weight: 600; letter-spacing: 0.04em; }
 [data-mini="row"][aria-selected="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
 [data-mini="row"][aria-selected="true"] [data-mini="cell"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
+[data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint="added"] { background-color: var(--mini-added); color: var(--foreground); }
+[data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint="removed"] { background-color: var(--mini-removed); color: var(--foreground); }
+[data-mini="row"][aria-selected="true"] [data-mini="cell"][data-tint="pending"] { background-color: var(--mini-pending); color: var(--foreground); }
 [data-mini="row"][aria-selected="true"] [class*="text-muted-foreground"] { color: oklch(1 0 0); }
 [data-mini="row"][aria-current="true"] { background-color: oklch(0.5 0.1 235); color: oklch(1 0 0); }
 [data-mini="row"][aria-current="true"] [data-mini="cell"] { color: oklch(1 0 0); }
