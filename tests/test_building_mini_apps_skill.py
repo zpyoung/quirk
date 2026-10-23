@@ -22,9 +22,11 @@ PATTERNS_DIR = SKILL_DIR / "gallery" / "src" / "patterns"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 
 APPS = ["linear", "things", "raycast", "craft", "obsidian",
-        "tableplus", "fantastical", "notion", "granola", "figma"]
+        "tableplus", "fantastical", "notion", "granola", "figma",
+        "home-assistant", "pagerduty", "incident-io"]
 PATTERNS = ["list-peek", "expand-in-place", "action-palette", "doc-collections", "workspace-panes",
-            "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector"]
+            "staged-table-edit", "mini-full", "view-switcher", "assisted-notes", "inspector",
+            "command-center"]
 STYLES = ["neutral-house", "calm-paper", "airy-white", "cool-tool",
           "dense-dark", "glass-launcher", "split-tone"]
 REQUIRED_SECTIONS = ["When to use", "Pattern index", "Style index", "Building a new app",

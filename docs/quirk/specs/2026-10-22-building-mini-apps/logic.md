@@ -7,6 +7,7 @@
 **Amendments:**
 - 2026-10-23: block sources move from `registry/` to `gallery/src/` (base files at their target paths, each pattern in `gallery/src/patterns/<pattern>/`). A prototype showed sources outside the gallery's `src/` can't resolve their npm imports when the gallery compiles them. `registry/` keeps `registry.json` and the built items in `registry/r/`. Approved by the user.
 - 2026-10-23: the one neutral house style becomes one of seven named styles drawn from the studied apps, picked per app at scaffold time. Brand assets stay out, but an app's character (mood, radius, type feel, accent family) may now carry over. See [mini-app-styles](../2026-10-23-mini-app-styles/logic.md). Approved by the user.
+- 2026-10-23: an eleventh pattern, command-center, adds three app studies (Home Assistant, PagerDuty, incident.io); see [its logic spec](../2026-10-23-command-center/logic.md). Approved by the user.
 
 I build a lot of small apps for my own local use, and an agent asked to "make it nice" produces a
 generic dashboard. This skill gives the agent proven interaction patterns to start from instead. The
