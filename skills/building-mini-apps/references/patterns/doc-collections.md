@@ -54,16 +54,17 @@ Opened record replaces the document column:
 - **Document column**: one scrolling column of blocks; the table width matches the text column.
 - **Text block**: free text between collections; click to edit.
 - **Collection block**: name, a small toolbar (search, add), a header row, numbered rows, an open button beside each title.
-- **Record page**: title, a label/value property list, then the body.
+- **Record page**: title, a label/value property list, then the body, then a "Delete record" button below the column.
+- **Page footer**: "Add text" and "Add collection" buttons below the last block. A new collection is named "Collection N" and starts with one text field, Notes.
 
 ## Interaction
 
 | Key | Does | Notes |
 |---|---|---|
-| ↓ / ↑ or j / k | Move row selection within the focused collection | Ignored while typing in an input; stops at first and last row |
-| Enter | Open the selected record | Same as clicking the open button; ignored in inputs |
+| ↓ / ↑ or j / k | Move row selection within the focused collection | Act only while the collection grid itself has focus, so they are ignored in the search box and in property inputs; stops at first and last row |
+| Enter | Open the selected record | Same as clicking the open button; needs a selected row and grid focus |
 | Esc | Close the open record and return to the document | If focus is in a property input or the body, the first Esc blurs it and the second closes |
-| n | Add a record to the focused collection and open it | Ignored in inputs; our design |
+| n | Add a record to the focused collection and open it | Same focus rule as the arrows; our design |
 
 Focus rules:
 - Opening a new record puts focus in its title with the text selected; opening an existing record focuses the record page container so Esc works.
@@ -74,12 +75,13 @@ Focus rules:
 | State | Shows |
 |---|---|
 | Empty collection | Block name, header row, then an inline `EmptyState` ("No records", Add button). Craft shows only an empty numbered grid; we add the message |
-| Empty document | `EmptyState` with an "Add text" and "Add collection" action |
+| No search matches | Inline `EmptyState` "No matches" naming the search text; the header row stays |
+| Empty document | `EmptyState` "Empty page" with an "Add text" and "Add collection" action |
 | Empty property | Grey "Empty" in the value slot |
 | Empty record body | Placeholder "Write something" in the textarea; properties still show |
-| Loading | `LoadingState` in place of the document column; the breadcrumb stays |
-| Error (load) | `ErrorState` with retry in place of the document column |
-| Error (save) | The last good rows stay; a `sonner` toast shows the storage error |
+| Loading | The block takes no `status`; the app renders `LoadingState` in place of `DocCollections`, as the demo does |
+| Error (load) | Same: the app renders `ErrorState` with retry in place of `DocCollections` |
+| Error (save) | A rejected write shows a `sonner` toast ("Could not save: …"), and an edited title, body or property snaps back to its last good value |
 | Long title | One line with ellipsis in the table; wraps in full in the record title |
 | Many rows | The block grows to about 14 rows, then scrolls inside itself; wide field sets scroll sideways inside the block |
 | Many collections | The page grows; the document column scrolls as one |
@@ -110,7 +112,7 @@ Leave out:
 
 ## Block API
 
-`index.ts` exports the components and types below. It uses `useCollection` for the page and records, `EmptyState`, `LoadingState`, `ErrorState`, `useHotkeys` from `react-hotkeys-hook`, and shadcn `button`, `input`, `textarea`, `popover`, `command`, `checkbox`, `badge`, `scroll-area`, `separator`, `sonner`. No new dependencies.
+`index.ts` exports `DocCollections`, `RecordPage`, `CollectionBlock`, `PropertyValue` and the types `PropValue`, `FieldDef`, `DocRecord`, `CollectionDef`, `DocBlock` and `DocPage`. It does not read the store: `page` and `records` come in as props, and the demo wires them to `useCollection`. It uses `EmptyState` from the base, `useHotkeys` from `react-hotkeys-hook`, and shadcn `button`, `input`, `textarea`, `popover`, `command`, `checkbox`, `badge`, `separator`, plus `sonner` for save errors (the app's single `AppShell` mounts the `Toaster`). No new dependencies.
 
 ```ts
 CONTRACT: type PropValue = string | number | boolean | null
@@ -131,12 +133,13 @@ CONTRACT: CollectionBlock<T extends DocRecord>(props: { def: CollectionDef; reco
 CONTRACT: PropertyValue(props: { field: FieldDef; value: PropValue; onChange(value: PropValue): void })
 ```
 
-- `DocCollections` is controlled for the page and records, so the app owns storage. `openId` is optional; without it the component keeps the open record in its own state. Callers pass `useCollection<DocPage>("doc-page")` and `useCollection<DocRecord>("doc-records")`.
+- `DocCollections` is controlled for the page and records, so the app owns storage. `openId` is optional; without it the component keeps the open record in its own state. Callers back `page` with a `useCollection<DocPage>` record and `records` with a `useCollection<DocRecord>`, as the demo does.
 - Open state is not persisted, and a stale `openId` (record removed) closes to the document.
 - `onAdd` creates the record in the store and resolves with it so the block can open it.
 - `status` from `useCollection` maps to `LoadingState` and `ErrorState` in the caller; `DocCollections` renders `EmptyState` when `page.blocks` is empty.
+- The open record page offers "Delete record", which calls `onRemove` and returns to the document.
 
-`demo.tsx`: default-exports `Demo`, a reading journal with one page: an intro text block, a "Books" collection (Status select, Rating number, Started date, Owned checkbox) of about 12 records, a text block, and a second small "Quotes" collection of about 5 records. About half the books have a short body, one has a very long title, and one has no body. The demo wraps the block in `AppShell` and seeds both stores through `useCollection`.
+`demo.tsx`: default-exports `Demo`, a reading journal with one page: an intro text block, a "Books" collection (Status select, Rating number, Started date, Owned checkbox) of about 12 records, a text block, and a second small "Quotes" collection of about 5 records. About half the books have a short body, one has a very long title, and one has no body. The demo renders no `AppShell`; the app provides it. It seeds two collections, `doc-collections-demo-page` (the page) and `doc-collections-demo` (the records), through `useCollection`. A "Preview state" group (live, empty, loading, error) forces each state; the empty preview edits an in-memory copy so it never touches the stored journal.
 
 ## Sources
 

@@ -1,21 +1,24 @@
-# React + TypeScript + Vite + shadcn/ui
+# Mini-app patterns gallery
 
-This is a template for a new Vite project with React, TypeScript, and shadcn/ui.
-
-## Adding components
-
-To add components to your app, run the following command:
+A Vite app that runs every pattern block next to its reference, so each demo can be tried, read and adapted. The sidebar lists the ten patterns; each page shows the block's `demo.tsx` and the matching `references/patterns/<pattern>.md`.
 
 ```bash
-npx shadcn@latest add button
+pnpm install && pnpm dev
 ```
 
-This will place the ui components in the `src/components` directory.
+## Where things live
 
-## Using components
+- `src/patterns/<pattern>/`: one block. `index.ts` is its public API, `demo.tsx` the worked example, `registry-item.json` its manifest.
+- `src/components/mini/`, `src/lib/mini/`, `src/styles/`: the base every block builds on (shell, states, store, tokens).
+- `src/gallery/`: the gallery's own chrome. It is not shipped to apps.
+- `../registry/r/`: the built items that `shadcn add` installs into an app.
 
-To use the components in your app, import them as follows:
+## After editing a block or a base file
 
-```tsx
-import { Button } from "@/components/ui/button"
+Rebuild the registry so the built items match the source:
+
+```bash
+python3 ../scripts/build_registry.py
 ```
+
+`python3 ../scripts/build_registry.py --check` reports whether the built items are stale without writing anything.
