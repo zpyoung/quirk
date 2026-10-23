@@ -45,6 +45,8 @@ export type ActionPaletteProps<T extends PaletteItem> = {
 export type ActionPanelProps<T extends PaletteItem> = {
   item: T
   actions: PaletteAction<T>[]
+  /** Sub-menu chain to open drilled into, outermost first. */
+  initialPath?: PaletteAction<T>[]
   onClose: () => void
   onRun: (action: PaletteAction<T>) => void
 }

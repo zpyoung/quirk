@@ -23,6 +23,18 @@ function flattenActions<T extends PaletteItem>(actions: PaletteAction<T>[]): Pal
   return actions.flatMap((action) => [action, ...flattenActions(action.children ?? [])])
 }
 
+function pathTo<T extends PaletteItem>(
+  actions: PaletteAction<T>[],
+  id: string
+): PaletteAction<T>[] | undefined {
+  for (const action of actions) {
+    if (action.id === id) return [action]
+    const below = pathTo(action.children ?? [], id)
+    if (below) return [action, ...below]
+  }
+  return undefined
+}
+
 function isTextField(element: EventTarget | null): boolean {
   return (
     element instanceof HTMLElement &&
@@ -52,7 +64,11 @@ export function ActionPalette<T extends PaletteItem>({
   const baseId = useId()
   const [query, setQuery] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [openFor, setOpenFor] = useState<string | null>(null)
+  const [panel, setPanel] = useState<{
+    itemId: string
+    path: PaletteAction<T>[]
+    nonce: number
+  } | null>(null)
   const [pending, setPending] = useState<string[]>([])
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -69,7 +85,7 @@ export function ActionPalette<T extends PaletteItem>({
   const selectedItem = visible.find((item) => item.id === activeId)
   const actions = selectedItem ? getActions(selectedItem) : []
   const canOpen = ready && actions.length > 0
-  const panelOpen = canOpen && openFor === activeId
+  const panelOpen = canOpen && panel?.itemId === activeId
   const optionId = (id: string) => `${baseId}-${id}`
 
   useEffect(() => {
@@ -79,7 +95,7 @@ export function ActionPalette<T extends PaletteItem>({
   }, [activeId, baseId])
 
   const closePanel = useCallback(() => {
-    setOpenFor(null)
+    setPanel(null)
     inputRef.current?.focus()
     // a click outside moves focus to the body after this handler returns
     setTimeout(() => {
@@ -89,8 +105,9 @@ export function ActionPalette<T extends PaletteItem>({
 
   async function run(item: T, action: PaletteAction<T>) {
     if (action.children) {
+      const path = pathTo(getActions(item), action.id) ?? [action]
       setSelectedId(item.id)
-      setOpenFor(item.id)
+      setPanel((open) => ({ itemId: item.id, path, nonce: (open?.nonce ?? 0) + 1 }))
       return
     }
     closePanel()
@@ -132,7 +149,7 @@ export function ActionPalette<T extends PaletteItem>({
 
   function togglePanel() {
     if (panelOpen) closePanel()
-    else if (canOpen && activeId !== undefined) setOpenFor(activeId)
+    else if (canOpen && activeId !== undefined) setPanel({ itemId: activeId, path: [], nonce: 0 })
   }
 
   useHotkeys("mod+k", togglePanel, { enableOnFormTags: true, preventDefault: true })
@@ -341,9 +358,10 @@ export function ActionPalette<T extends PaletteItem>({
 
       {panelOpen && selectedItem ? (
         <ActionPanel
-          key={selectedItem.id}
+          key={`${selectedItem.id}:${panel?.nonce ?? 0}`}
           item={selectedItem}
           actions={actions}
+          initialPath={panel?.path}
           onClose={closePanel}
           onRun={(action) => void run(selectedItem, action)}
         />
