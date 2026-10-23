@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { useCollection } from "@/lib/mini/store"
@@ -165,6 +166,15 @@ function buildSeed(): Workshop[] {
   ]
 }
 
+/** Surfaces a rejected storage write as a toast instead of an unhandled rejection. */
+function reportWrite(write: Promise<void>, action: string): void {
+  write.catch((cause: unknown) => {
+    toast.error(`Couldn't ${action} the workshop`, {
+      description: cause instanceof Error ? cause.message : String(cause),
+    })
+  })
+}
+
 type Preview = "live" | "empty" | "loading" | "error"
 const PREVIEWS: Preview[] = ["live", "empty", "loading", "error"]
 
@@ -216,15 +226,20 @@ export default function Demo() {
           }
           onRetry={() => setPreview("live")}
           onCreate={(defaults) =>
-            void workshops.add({
-              stage: "Idea",
-              ...defaults,
-              id: crypto.randomUUID(),
-              title: "New workshop",
-            })
+            reportWrite(
+              workshops.add({
+                stage: "Idea",
+                ...defaults,
+                id: crypto.randomUUID(),
+                title: "New workshop",
+              }),
+              "add",
+            )
           }
-          onUpdate={(id, patch) => void workshops.update(id, patch)}
-          onDelete={(id) => void workshops.remove(id)}
+          onUpdate={(id, patch) =>
+            reportWrite(workshops.update(id, patch), "update")
+          }
+          onDelete={(id) => reportWrite(workshops.remove(id), "delete")}
         />
       </div>
     </div>
