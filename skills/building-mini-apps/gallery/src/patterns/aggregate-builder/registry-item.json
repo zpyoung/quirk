@@ -1,0 +1,6 @@
+{
+  "name": "aggregate-builder",
+  "title": "Aggregate builder",
+  "description": "A rail of Visualize, Group by and Sort by controls driving an SVG chart over time buckets, one series per group, and a table with Samples and Aggregates tabs.",
+  "registryDependencies": ["button", "select", "table", "tabs", "toggle-group"]
+}
