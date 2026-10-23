@@ -89,12 +89,14 @@ export function parseEntry(text: string, now: Date = new Date(), tags?: string[]
   let minutes: { start: number; end?: number } | undefined
   const range = TIME_RANGE.exec(work)
   if (range) {
-    const startMer = range[3] ?? range[6]
-    const endMer = range[6] ?? range[3]
-    const h1 = hourOf(Number(range[1]), startMer)
-    const h2 = hourOf(Number(range[4]), endMer)
     const m1 = Number(range[2] ?? 0)
     const m2 = Number(range[5] ?? 0)
+    const h2 = hourOf(Number(range[4]), range[6] ?? range[3])
+    let h1 = hourOf(Number(range[1]), range[3] ?? range[6])
+    if (!range[3] && range[6] && h1 !== undefined && h2 !== undefined && h1 * 60 + m1 > h2 * 60 + m2) {
+      // "11-1pm" shares the end meridiem only when that keeps the start before the end
+      h1 = hourOf(Number(range[1]), range[6].toLowerCase() === "pm" ? "am" : "pm")
+    }
     if (h1 !== undefined && h2 !== undefined && m1 < 60 && m2 < 60) {
       const start = h1 * 60 + m1
       let end: number | undefined = h2 * 60 + m2
