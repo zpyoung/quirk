@@ -36,7 +36,8 @@ MODELS = ("sonnet", "opus", "haiku")
 RUN_WHEN = ("always", "has_description", "code_changed", "source_or_config_changed",
             "tests_changed", "source_without_tests", "not_diff_only")
 KNOWN_KEYS = ("severity_floor", "escalation", "models", "skip", "cross_family",
-              "critical_paths", "skip_globs", "cross_repo")
+              "critical_paths", "skip_globs", "cross_repo", "adjudicator")
+ADJUDICATOR_MODEL = "opus"
 PROJECT_PACK = ".quirk/review"
 MAX_SYMLINK_DEPTH = 8
 
@@ -176,7 +177,8 @@ class Policy:
         self.settings = {"severity_floor": "Should fix", "escalation": True, "models": {},
                          "cross_family": {"enabled": False, "alias": None},
                          "critical_paths": [], "skip_globs": [],
-                         "cross_repo": {"search_agent": None}}
+                         "cross_repo": {"search_agent": None},
+                         "adjudicator": {"enabled": True}}
         self.skipped = {}
         self.sources = []
         self.guidance = []
@@ -215,6 +217,8 @@ class Policy:
                 if model not in MODELS:
                     raise PolicyError("%s: models.%s must be one of %s" % (label, lens_id, ", ".join(MODELS)))
                 self.settings["models"][lens_id] = model
+                if lens_id == "adjudicator":
+                    continue
                 stamp = (self.layer, 1)
                 self.model_pins[lens_id] = (stamp, model)
                 if lens_id in self.lenses:
@@ -241,6 +245,16 @@ class Policy:
             if not isinstance(value, dict) or not isinstance(value.get("search_agent"), (str, type(None))):
                 raise PolicyError("%s: cross_repo.search_agent must be a subagent type or null" % label)
             self.settings["cross_repo"]["search_agent"] = value.get("search_agent")
+
+        if "adjudicator" in values:
+            value = values["adjudicator"]
+            if not isinstance(value, dict) or not isinstance(value.get("enabled", True), bool):
+                raise PolicyError("%s: adjudicator must be a mapping with enabled (true/false)" % label)
+            for key in value:
+                if key != "enabled":
+                    self.warnings.append("%s: unknown adjudicator key ignored: %s" % (label, key))
+            if "enabled" in value:
+                self.settings["adjudicator"]["enabled"] = value["enabled"]
 
     def add_lens(self, meta, checklist, source, label, builtin=False):
         lens_id = meta.get("id") or Path(label).stem
@@ -300,7 +314,7 @@ class Policy:
 
     def finish(self):
         for lens_id in self.settings["models"]:
-            if lens_id not in self.lenses:
+            if lens_id not in self.lenses and lens_id != "adjudicator":
                 self.warnings.append("models: unknown lens %s ignored" % lens_id)
         for lens_id in self.skipped:
             if lens_id not in self.lenses:
@@ -315,6 +329,8 @@ class Policy:
             "critical_paths": self.settings["critical_paths"],
             "skip_globs": self.settings["skip_globs"],
             "cross_repo": self.settings["cross_repo"],
+            "adjudicator": {"enabled": self.settings["adjudicator"]["enabled"],
+                            "model": self.settings["models"].get("adjudicator", ADJUDICATOR_MODEL)},
             "diff_only": self.diff_only,
             "sources": self.sources,
             "guidance_files": self.guidance,
