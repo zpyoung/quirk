@@ -71,7 +71,7 @@ export function ItemList<T extends WorkspaceItem>({
     <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block">
       <ul aria-label="Items" className="flex flex-col gap-px p-1">
         {items.map((item) => (
-          <li key={item.id}>
+          <li key={item.id} data-mini="row">
             <Row
               item={item}
               active={item.id === activeId}

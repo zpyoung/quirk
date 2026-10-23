@@ -52,7 +52,7 @@ export function TableLayout(props: LayoutProps) {
               {...recordProps(props, item.id)}
               className={cn("group h-8 cursor-pointer", recordClasses)}
             >
-              <TableCell className="py-0">
+              <TableCell data-mini="cell" className="py-0">
                 <div className="flex items-center gap-2">
                   <span
                     className="max-w-[20rem] truncate font-medium"
@@ -69,7 +69,7 @@ export function TableLayout(props: LayoutProps) {
                 </div>
               </TableCell>
               {columns.map((f) => (
-                <TableCell key={f.key} className="py-0">
+                <TableCell key={f.key} data-mini="cell" className="py-0">
                   <Cell field={f} raw={valueOf(item, f.key)} />
                 </TableCell>
               ))}

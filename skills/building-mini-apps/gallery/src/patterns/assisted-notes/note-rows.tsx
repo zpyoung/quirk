@@ -44,6 +44,7 @@ export function UserRow({
         aria-label="Note line"
         data-row-id={segment.id}
         data-row-origin="user"
+        data-mini="row"
         onChange={(event) => onTextChange(segment.id, event.target.value)}
         className={cn(
           "min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 dark:bg-transparent",

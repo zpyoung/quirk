@@ -102,6 +102,7 @@ export function ExpandCard<T extends ExpandItem>({
         <div
           ref={cardRef}
           role="group"
+          data-mini="surface"
           aria-label={`Edit ${item.title || "new item"}`}
           className="-mx-3.5 my-1.5 flex flex-col gap-2 rounded-xl bg-card p-3 text-card-foreground shadow-md"
         >

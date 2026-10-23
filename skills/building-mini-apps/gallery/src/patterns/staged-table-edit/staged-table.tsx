@@ -69,8 +69,8 @@ type Cell = { id: string; col: string }
 
 const GUTTER = 44
 const DEFAULT_WIDTH = 160
-const NEW_TINT = "bg-[oklch(0.95_0.05_150)] dark:bg-[oklch(0.3_0.05_150)]"
-const REMOVED_TINT = "bg-[oklch(0.95_0.04_25)] dark:bg-[oklch(0.3_0.05_25)]"
+const NEW_TINT = "bg-[var(--mini-added)]"
+const REMOVED_TINT = "bg-[var(--mini-removed)]"
 
 const sameCell = (a: Cell | null, b: Cell | null) => !!a && !!b && a.id === b.id && a.col === b.col
 const textOf = (value: unknown) => (value === undefined || value === null ? "" : String(value))
@@ -412,7 +412,7 @@ export function StagedTableView<T extends { id: string; title: string }>({
   const gridWidth = GUTTER + columns.reduce((sum, c) => sum + (c.width ?? DEFAULT_WIDTH), 0)
   const header = (
     <TableHeader>
-      <TableRow className="hover:bg-transparent">
+      <TableRow data-mini="group-header" className="hover:bg-transparent">
         <TableHead className="sticky top-0 z-10 h-8 bg-background px-0 text-center text-xs font-normal text-muted-foreground shadow-[inset_0_-1px_0_var(--border)]">
           #
         </TableHead>
@@ -656,6 +656,7 @@ function GridRow<T extends { id: string; title: string }>({
 
   return (
     <TableRow
+      data-mini="row"
       aria-selected={selected}
       className="h-[30px] even:bg-muted/30"
     >
@@ -773,6 +774,7 @@ function StagedCell({
       <TooltipTrigger asChild>
         <TableCell
           role="gridcell"
+          data-mini="cell"
           data-row-id={cell.id}
           data-col={cell.col}
           tabIndex={isActive ? 0 : -1}

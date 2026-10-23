@@ -131,6 +131,7 @@ export function ActionPanel<T extends PaletteItem>({
     <div
       ref={panelRef}
       role="group"
+      data-mini="surface"
       aria-label={`Actions for ${item.title}`}
       className="absolute right-3 bottom-12 z-20 w-[45%] max-w-sm min-w-64 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
     >
