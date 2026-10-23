@@ -25,6 +25,10 @@ Source fields:
 - Source access and diff-only limitation: `run.source_access*`
 - Dimensions run/skipped, diff size, coverage, guidance, run notes: `run.*`
 - Mutation summary when the probe ran: derived from `mutation_probe`
+- Adjudication line when `run.adjudication` is present, beside the tally:
+  `Adjudicated 23: 15 agreed, 3 dropped, 2 fixes replaced, 1 unreachable, 1 survived,
+  1 disputed, 2 merged` when complete, `⚠️ Not adjudicated: <reason>` when failed, and
+  `Not adjudicated (turned off by policy)` when disabled
 
 `run.dimensions_run` and `run.dimensions_skipped` carry the lens ids and,
 for a skip, the reason: `test-adequacy, tests (no test files)`,
@@ -105,6 +109,13 @@ checker's command and observed output as a Reproduction block; for `plausible`,
 show `what_would_confirm` beside a clear warning. A plausible finding remains
 in the report for triage but never posts, even if marked Blocking or Will fix.
 
+Adjudicated findings also show `production` as `**In production:** <label>: <path>`
+under the impact. Any outcome other than `agreed` adds an `**Adjudication:**` line
+(Survived challenge, Fix replaced, Unreachable, or Disputed); a Disputed finding adds
+`**What would settle this:**` with `adjudication.what_would_settle`. The HTML page shows
+the same outcome as a badge, the Disputed condition as a callout, and the objection,
+proof, original fix, severity change, and merged members in a collapsed aside.
+
 ```markdown
 ## 3. Findings
 
@@ -133,10 +144,11 @@ Accumulate at full precision and quantize each emitted final amount once.
 ...
 ```
 
-In deep mode, append a collapsed `<details><summary>Checked and dropped
-(N)</summary>...</details>` at the end of this section from
-`run.deep.checked_and_dropped`. Each entry includes its anchor and the
-checker's specific refutation. Dropped claims are not counted as findings.
+When either source has entries, append a collapsed `<details><summary>Checked and dropped
+(N)</summary>...</details>` at the end of this section from the union of
+`run.deep.checked_and_dropped` and `run.adjudication.checked_and_dropped`. Each entry
+includes its anchor and the specific refutation; an adjudicator entry also shows its
+`proof`. Dropped claims are not counted as findings.
 
 When empty, emit `No findings — see per-dimension notes below.` followed by one
 bold-labeled line per `run.clean_notes` entry. Missing clean notes produce a generic

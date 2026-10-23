@@ -269,3 +269,130 @@ def test_malformed_deep_hunk_summaries_are_rejected(key, value, path):
     deep[key] = value
     with pytest.raises(ValueError, match=path):
         m._prepare_report(report(deep=deep))
+
+
+PRODUCTION = {"label": "Common path", "path": "POST /refunds retried -> RefundService.apply"}
+TALLY = {"checked": 3, "agreed": 1, "dropped": 1, "fixes_replaced": 0, "unreachable": 0,
+         "survived": 1, "disputed": 0, "merged": 0}
+
+
+def adjudicated(**changes):
+    """A report whose findings all carry production and whose run.adjudication is complete."""
+    value = report(adjudication=dict(
+        {"status": "complete", "model": "opus", "reason": None, "tally": dict(TALLY),
+         "checked_and_dropped": [{"file": "c.py", "line": "4", "title": "Guarded", "reason": "Checked",
+                                  "proof": "c.py:3 guards it"}]}, **changes))
+    for finding in value["findings"]:
+        finding["production"] = dict(PRODUCTION)
+    return value
+
+
+def test_adjudication_fields_are_accepted_without_warnings():
+    value = adjudicated()
+    value["findings"][0]["adjudication"] = {
+        "outcome": "fix_replaced", "objection": "Off by one", "proof": "a.py:3 quote",
+        "what_would_settle": None,
+        "severity_change": {"from": "Must fix", "to": "Should fix", "reason": "Edge case only"},
+        "original_fix": {"fix_md": "Old fix.", "recommendation": "```diff\n-a\n+b\n```"},
+        "merged_from": [{"file": "z.py", "line": "1", "dimension": "safety"}]}
+    value["findings"][1]["adjudication"] = {"outcome": "unreachable", "objection": "No caller",
+                                            "proof": None, "what_would_settle": None,
+                                            "severity_change": None, "original_fix": None}
+    prepared, warnings = m._prepare_report(value)
+    assert not [w for w in warnings if "Unknown" in w]
+    assert prepared["findings"][0]["production"] == PRODUCTION
+    assert prepared["run"]["adjudication"]["status"] == "complete"
+
+
+@pytest.mark.parametrize("production", [
+    "Common path", {"label": "Likely", "path": "x"}, {"label": "Common path"},
+    {"label": "Common path", "path": ""}, {"label": "Common path", "path": 3},
+    {"label": "Common path", "path": "a\nb"}, {"label": "Common path", "path": "a b"},
+    {"label": "Common path", "path": "x" * 201},
+])
+def test_malformed_production_is_rejected(production):
+    value = report()
+    value["findings"][0]["production"] = production
+    with pytest.raises(ValueError, match="production"):
+        m._prepare_report(value)
+
+
+@pytest.mark.parametrize("label", ["Common path", "Edge case", "Unreachable", "Would miss", "N/A"])
+def test_every_production_label_is_accepted_and_the_cap_is_inclusive(label):
+    value = report()
+    value["findings"][0]["production"] = {"label": label, "path": "x" * 200}
+    m._prepare_report(value)
+
+
+def test_existing_posted_text_caps_are_unchanged():
+    assert m._POSTED_TEXT_CAPS == {"impact": 200, "fix_md": 160}
+
+
+@pytest.mark.parametrize("adjudication, message", [
+    ("agreed", "adjudication must be an object"),
+    ({"outcome": "kept"}, "adjudication.outcome"),
+    ({}, "adjudication.outcome"),
+    ({"outcome": "disputed"}, "what_would_settle"),
+    ({"outcome": "disputed", "what_would_settle": "  "}, "what_would_settle"),
+    ({"outcome": "fix_replaced"}, "original_fix"),
+    ({"outcome": "fix_replaced", "original_fix": {"fix_md": "x"}}, "original_fix"),
+    ({"outcome": "fix_replaced", "original_fix": {"recommendation": 3}}, "original_fix"),
+    ({"outcome": "unreachable"}, "Nit"),
+    ({"outcome": "agreed", "objection": 3}, "objection"),
+    ({"outcome": "agreed", "merged_from": "z.py"}, "merged_from"),
+])
+def test_malformed_finding_adjudication_is_rejected(adjudication, message):
+    value = report()
+    value["findings"][0]["adjudication"] = adjudication
+    with pytest.raises(ValueError, match=message):
+        m._prepare_report(value)
+
+
+def test_unreachable_outcome_is_accepted_on_a_nit():
+    value = report()
+    value["findings"][1]["adjudication"] = {"outcome": "unreachable"}
+    m._prepare_report(value)
+
+
+@pytest.mark.parametrize("changes, message", [
+    ({"status": "done"}, "run.adjudication.status"),
+    ({"tally": None}, "run.adjudication.tally"),
+    ({"tally": []}, "run.adjudication.tally"),
+    ({"tally": dict(TALLY, agreed=-1)}, "run.adjudication.tally"),
+    ({"tally": dict(TALLY, agreed=1.5)}, "run.adjudication.tally"),
+    ({"tally": dict(TALLY, agreed=True)}, "run.adjudication.tally"),
+    ({"tally": dict(TALLY, agreed="1")}, "run.adjudication.tally"),
+    ({"checked_and_dropped": "x"}, "run.adjudication.checked_and_dropped"),
+    ({"checked_and_dropped": [{"file": "a", "line": "1", "title": "t"}]},
+     "run.adjudication.checked_and_dropped"),
+    ({"checked_and_dropped": [{"file": "a", "line": 1, "title": "t", "reason": "r"}]},
+     "run.adjudication.checked_and_dropped"),
+    ({"checked_and_dropped": [{"file": "a", "line": "1", "title": "t", "reason": "r", "proof": 3}]},
+     "run.adjudication.checked_and_dropped"),
+])
+def test_malformed_run_adjudication_is_rejected(changes, message):
+    with pytest.raises(ValueError, match=message):
+        m._prepare_report(adjudicated(**changes))
+
+
+def test_run_adjudication_must_be_an_object():
+    with pytest.raises(ValueError, match="run.adjudication must be an object"):
+        m._prepare_report(report(adjudication="complete"))
+
+
+def test_complete_adjudication_requires_production_on_every_finding():
+    value = adjudicated()
+    del value["findings"][1]["production"]
+    with pytest.raises(ValueError, match="production"):
+        m._prepare_report(value)
+
+
+@pytest.mark.parametrize("status", ["failed", "disabled"])
+def test_failed_and_disabled_adjudication_require_a_reason_but_not_production(status):
+    base = {"status": status, "model": None, "tally": None, "checked_and_dropped": []}
+    for reason in (None, "", "  "):
+        with pytest.raises(ValueError, match="run.adjudication.reason"):
+            m._prepare_report(report(adjudication=dict(base, reason=reason)))
+    prepared, warnings = m._prepare_report(report(adjudication=dict(base, reason="turned off by policy")))
+    assert not [w for w in warnings if "Unknown" in w]
+    assert prepared["run"]["adjudication"]["status"] == status

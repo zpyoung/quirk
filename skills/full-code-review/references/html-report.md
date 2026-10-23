@@ -98,6 +98,7 @@ remains `branch`.
 | `severity_floor` | `Must fix`, `Should fix` (default), or `Nit`. Findings below it render but never post. |
 | `since` | Optional (`run.since`) `{"ref": "…", "sha": "<40-char lowercase hex>"}`, copied from `context.since` for a `--since` delta review (`prepare_diff.py --since`); rendered as a Reviewed since row. A report that carries it is report only: `review_memory.py save` and both posting scripts refuse it. |
 | `deep` | Optional deep-mode object; see below. Omit in standard runs. |
+| `adjudication` | Optional `{status, model, reason, tally, checked_and_dropped}`. `status` is `complete`, `failed`, or `disabled`. `complete` carries `tally` (`checked`, `agreed`, `dropped`, `fixes_replaced`, `unreachable`, `survived`, `disputed`, `merged`, all non-negative integers) and requires `production` on every finding. `failed` and `disabled` carry `tally: null` and a `reason`. `checked_and_dropped` entries are `{file, line, title, reason, proof}`. Rendered as one summary line and merged into the Checked and dropped section. |
 
 `run.deep` records the bounded hunt, not another lens in `dimensions_run`:
 
@@ -260,11 +261,21 @@ must never be required to:
 | `verification_status` | Deep-mode checker's `"confirmed"` or `"plausible"`; never label an unchecked claim confirmed. `plausible` stays visible for triage but cannot post. |
 | `repro` | `{"command": string, "output": string}` from the checker's own run, required when deep `evidence` is `"reproduced"`; omit when not reproduced. |
 | `what_would_confirm` | Non-empty condition needed to validate a `"plausible"` claim; show beside its warning badge. |
+| `production` | `{"label": "Common path" \| "Edge case" \| "Unreachable" \| "Would miss" \| "N/A", "path": string}`. `path` is one line of at most 200 characters (the dimension id for `N/A`). Shown under the impact line; required on every finding when `run.adjudication.status` is `complete`. |
+| `adjudication` | `{outcome, objection, proof, what_would_settle, severity_change, original_fix, merged_from}`. `outcome` is `agreed`, `survived`, `fix_replaced`, `unreachable`, or `disputed`; every other key is optional. Every outcome except `agreed` shows a badge, and the other keys fill a collapsed Adjudication aside. |
 
 In deep reports, `evidence` is `"reproduced"` or `"read from code"`. Render
 `verification_status` visibly; show the repro command and observed output in a
 Reproduction block, or a What would confirm this callout for plausible findings.
 Refuted candidates go only into `run.deep.checked_and_dropped`.
+
+Adjudication fields fail render (rc 2) when `production.label` is not one of the five
+labels, `production.path` is multi-line or over 200 characters, `outcome` is unknown,
+`disputed` lacks a non-empty `what_would_settle`, `fix_replaced` lacks an `original_fix`
+with a string `recommendation`, `unreachable` is not severity `Nit`, or `run.adjudication`
+is `complete` with a finding missing `production` or a `tally` that is not non-negative
+integers. A `disputed` finding shows a What would settle this callout, and `render_report.py`
+returns the summary line as `adjudication` in its stdout JSON.
 
 `file:line` is the finding identity. Duplicate normalized identities are a hard
 error because paste-back validation cannot safely distinguish them. The renderer

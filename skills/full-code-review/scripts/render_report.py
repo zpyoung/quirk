@@ -26,7 +26,8 @@ _META_FIELDS = {"target", "forge", "number", "branch", "project", "ticket", "hea
 _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", "guidance",
                "clean_notes", "notes_md", "source_access", "source_access_reason",
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
-               "excluded_generated", "policy_sources", "severity_floor", "deep", "since"}
+               "excluded_generated", "policy_sources", "severity_floor", "deep", "since",
+               "adjudication"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
 _INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes", "incomplete review"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -49,7 +50,8 @@ _SNAPSHOT_FIELDS = {"schemaVersion", "target_key", "identity", "seat", "base_sha
                     "head_sha", "dimensions", "guidance_hash", "started_at",
                     "findings", "discussions", "discussions_available", "warnings",
                     "invalidation_reason", "file_hashes", "unchanged_files"}
-_FINDING_FIELDS = {"id", "dedup_key", "severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory", "verification_status", "repro", "what_would_confirm"}
+_FINDING_FIELDS = {"id", "dedup_key", "severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory", "verification_status", "repro", "what_would_confirm", "production",
+                   "adjudication"}
 
 
 def severity_floor(prepared):
@@ -217,6 +219,123 @@ def _validate_posted_text(raw, label):
             raise ValueError("%s %s contains a line-breaking character" % (label, field))
         if len(value) > cap:
             raise ValueError("%s %s exceeds %d characters" % (label, field, cap))
+
+
+_PRODUCTION_LABELS = ("Common path", "Edge case", "Unreachable", "Would miss", "N/A")
+_PRODUCTION_PATH_CAP = 200
+_ADJUDICATION_OUTCOMES = ("agreed", "survived", "fix_replaced", "unreachable", "disputed")
+_ADJUDICATION_STATUSES = ("complete", "failed", "disabled")
+_OUTCOME_TOKENS = {"survived": ("Survived challenge", "green"), "fix_replaced": ("Fix replaced", "blue"),
+                   "unreachable": ("Unreachable", "gray"), "disputed": ("Disputed", "yellow")}
+_TALLY_KEYS = ("agreed", "dropped", "fixes_replaced", "unreachable", "survived", "disputed", "merged")
+
+
+def _non_empty_text(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_production(value, label):
+    """Require a likelihood label and a one-line trigger path of at most 200 characters."""
+    if not isinstance(value, dict):
+        raise ValueError("%s production must be an object" % label)
+    if value.get("label") not in _PRODUCTION_LABELS:
+        raise ValueError("%s production label must be one of %s" % (label, ", ".join(_PRODUCTION_LABELS)))
+    path = value.get("path")
+    if not _non_empty_text(path):
+        raise ValueError("%s production path must be a non-empty string" % label)
+    if UNSAFE_LINE.search(path):
+        raise ValueError("%s production path contains a line-breaking character" % label)
+    if len(path) > _PRODUCTION_PATH_CAP:
+        raise ValueError("%s production path exceeds %d characters" % (label, _PRODUCTION_PATH_CAP))
+
+
+def _validate_finding_adjudication(value, severity, label):
+    """Check one finding's adjudication object against the outcome-specific requirements."""
+    if not isinstance(value, dict):
+        raise ValueError("%s adjudication must be an object" % label)
+    outcome = value.get("outcome")
+    if outcome not in _ADJUDICATION_OUTCOMES:
+        raise ValueError("%s adjudication.outcome must be one of %s" %
+                         (label, ", ".join(_ADJUDICATION_OUTCOMES)))
+    for key in ("objection", "proof", "what_would_settle"):
+        if value.get(key) is not None and not isinstance(value[key], str):
+            raise ValueError("%s adjudication.%s must be a string" % (label, key))
+    if value.get("severity_change") is not None and not isinstance(value["severity_change"], dict):
+        raise ValueError("%s adjudication.severity_change must be an object" % label)
+    merged = value.get("merged_from")
+    if merged is not None and (not isinstance(merged, list) or
+                               any(not isinstance(item, dict) for item in merged)):
+        raise ValueError("%s adjudication.merged_from must be a list of objects" % label)
+    original = value.get("original_fix")
+    if original is not None and (not isinstance(original, dict) or
+                                 not isinstance(original.get("recommendation"), str)):
+        raise ValueError("%s adjudication.original_fix must be an object with a string recommendation" % label)
+    if outcome == "disputed" and not _non_empty_text(value.get("what_would_settle")):
+        raise ValueError("%s adjudication.what_would_settle must be a non-empty string when disputed" % label)
+    if outcome == "fix_replaced" and original is None:
+        raise ValueError("%s adjudication.original_fix is required when fix_replaced" % label)
+    if outcome == "unreachable" and severity != "Nit":
+        raise ValueError("%s adjudication outcome unreachable requires severity Nit" % label)
+
+
+def _validate_dropped_entries(dropped, label, allow_proof=False):
+    if not isinstance(dropped, list) or any(
+            not isinstance(item, dict) or
+            any(not isinstance(item.get(key), str) for key in ("file", "line", "title", "reason")) or
+            (allow_proof and item.get("proof") is not None and not isinstance(item["proof"], str))
+            for item in dropped):
+        raise ValueError("%s must contain objects with string file, line, title, and reason%s" %
+                         (label, ", and an optional string proof" if allow_proof else ""))
+
+
+def _validate_run_adjudication(run, findings):
+    """Validate run.adjudication; a complete run must also have given every finding a production line."""
+    if "adjudication" not in run:
+        return
+    adjudication = run["adjudication"]
+    if not isinstance(adjudication, dict):
+        raise ValueError("run.adjudication must be an object")
+    status = adjudication.get("status")
+    if status not in _ADJUDICATION_STATUSES:
+        raise ValueError("run.adjudication.status must be complete, failed, or disabled")
+    if "checked_and_dropped" in adjudication:
+        _validate_dropped_entries(adjudication["checked_and_dropped"],
+                                  "run.adjudication.checked_and_dropped", allow_proof=True)
+    if status == "complete":
+        tally = adjudication.get("tally")
+        if not isinstance(tally, dict) or any(
+                isinstance(count, bool) or not isinstance(count, int) or count < 0
+                for count in tally.values()):
+            raise ValueError("run.adjudication.tally must be an object of non-negative integers")
+        for finding in findings:
+            if "production" not in finding:
+                raise ValueError("finding %s is missing production, which a complete adjudication requires" %
+                                 finding["id"])
+    elif not _non_empty_text(adjudication.get("reason")):
+        raise ValueError("run.adjudication.reason is required when status is %s" % status)
+
+
+def adjudication_summary(run):
+    """The one-line adjudication summary for a prepared run, or None when it was not adjudicated at all."""
+    adjudication = run.get("adjudication") if isinstance(run, dict) else None
+    if not isinstance(adjudication, dict):
+        return None
+    status = adjudication.get("status")
+    if status == "disabled":
+        return "Not adjudicated (turned off by policy)"
+    if status == "failed":
+        return "⚠️ Not adjudicated: %s" % " ".join(str(adjudication.get("reason")).split())
+    tally = adjudication.get("tally") or {}
+    counts = {key: tally.get(key, 0) for key in ("checked",) + _TALLY_KEYS}
+    return ("Adjudicated %(checked)d: %(agreed)d agreed, %(dropped)d dropped, %(fixes_replaced)d fixes replaced, "
+            "%(unreachable)d unreachable, %(survived)d survived, %(disputed)d disputed, %(merged)d merged" % counts)
+
+
+def _checked_and_dropped(run):
+    """Deep mode's and the adjudicator's dropped candidates as one list, deep entries first."""
+    deep = run.get("deep") if isinstance(run.get("deep"), dict) else {}
+    adjudication = run.get("adjudication") if isinstance(run.get("adjudication"), dict) else {}
+    return list(deep.get("checked_and_dropped") or []) + list(adjudication.get("checked_and_dropped") or [])
 
 
 def _positive_number(value):
@@ -450,14 +569,7 @@ def _validate_contract_run(run, meta, warnings):
             run["incomplete"] = True
             meta["verdict"] = "Incomplete review"
         if "checked_and_dropped" in deep:
-            dropped = deep["checked_and_dropped"]
-            if not isinstance(dropped, list) or any(
-                    not isinstance(item, dict) or
-                    any(not isinstance(item.get(key), str)
-                        for key in ("file", "line", "title", "reason"))
-                    for item in dropped):
-                raise ValueError("run.deep.checked_and_dropped must contain objects with "
-                                 "string file, line, title, and reason")
+            _validate_dropped_entries(deep["checked_and_dropped"], "run.deep.checked_and_dropped")
         if deep.get("unreached_areas"):
             run["incomplete"] = True
             meta["verdict"] = "Incomplete review"
@@ -593,6 +705,10 @@ def _prepare_report(report):
         if "dimensions" in raw:
             _list_of_strings(raw["dimensions"], "finding %d dimensions" % (index + 1))
         _validate_posted_text(raw, "finding %d (%s:%s)" % (index + 1, raw["file"], raw["line"]))
+        if "production" in raw:
+            _validate_production(raw["production"], "finding %d" % (index + 1))
+        if "adjudication" in raw:
+            _validate_finding_adjudication(raw["adjudication"], raw["severity"], "finding %d" % (index + 1))
         value = normalize_finding(raw, warnings)
         for field in ("title", "file", "line"):
             _line_safe(value[field], "finding %d %s" % (index + 1, field))
@@ -638,6 +754,7 @@ def _prepare_report(report):
                 warnings.append("run.%s is not a list; omitting it." % key)
                 run[key] = []
         _validate_contract_run(run, meta, warnings)
+        _validate_run_adjudication(run, prepared["findings"])
     for key in ("recommended_order", "assumptions", "process_notes"):
         if key in prepared and not isinstance(prepared[key], list):
             warnings.append("%s is not a list; omitting it." % key)
@@ -1196,6 +1313,39 @@ def _reply_targets(finding):
     return sorted(candidates, key=lambda item: item["note_id"])
 
 
+def _adjudication_details(adjudication):
+    """The collapsed aside holding whichever adjudication parts a finding actually has."""
+    rows = []
+    if adjudication.get("objection"):
+        rows.append(("Objection", "<p>%s</p>" % _esc(adjudication["objection"])))
+    if adjudication.get("proof"):
+        rows.append(("Proof", "<pre><code>%s</code></pre>" % _esc(adjudication["proof"])))
+    original = adjudication.get("original_fix")
+    if isinstance(original, dict):
+        parts = []
+        if original.get("fix_md"):
+            parts.append("<p>%s</p>" % render_inline(original["fix_md"]))
+        parts.append(_md(original.get("recommendation")))
+        rows.append(("Original fix", "".join(parts)))
+    change = adjudication.get("severity_change")
+    if isinstance(change, dict) and any(change.get(key) for key in ("from", "to", "reason")):
+        text = "%s → %s" % (change.get("from") or "?", change.get("to") or "?")
+        if change.get("reason"):
+            text += ": %s" % change["reason"]
+        rows.append(("Severity change", "<p>%s</p>" % _esc(text)))
+    merged = [item for item in adjudication.get("merged_from") or [] if isinstance(item, dict)]
+    if merged:
+        items = "".join("<li><span class=\"mono\">%s:%s</span>%s</li>" %
+                        (_esc(item.get("file", "")), _esc(item.get("line", "")),
+                         (" (%s)" % _esc(item["dimension"])) if item.get("dimension") else "")
+                        for item in merged)
+        rows.append(("Merged from", "<ul>%s</ul>" % items))
+    if not rows:
+        return ""
+    return ('<details class="adjudication"><summary>Adjudication</summary><dl class="adj-detail">%s</dl></details>' %
+            "".join("<dt>%s</dt><dd>%s</dd>" % row for row in rows))
+
+
 def _finding_card(finding, seat="author"):
     severity = SEVERITY_SLUG[finding["severity"]]
     location = "%s:%s" % (finding["file"], finding["line"])
@@ -1226,11 +1376,19 @@ def _finding_card(finding, seat="author"):
         out.append(_token(finding["evidence"], tone="blue"))
     if finding.get("verification_status") == "plausible":
         out.append(_token("plausible", tone="yellow"))
+    adjudication = finding.get("adjudication") if isinstance(finding.get("adjudication"), dict) else {}
+    if adjudication.get("outcome") in _OUTCOME_TOKENS:
+        text, tone = _OUTCOME_TOKENS[adjudication["outcome"]]
+        out.append(_token(text, tone=tone))
     out.append('</div><h2 class="f-title">%s</h2>' % _esc(finding["title"]))
     out.append('<span class="anchor">%s<span class="ln">:%s</span></span>' %
                (_esc(finding["file"]), _esc(finding["line"])))
     if finding.get("impact"):
         out.append('<p class="f-impact">%s</p>' % render_inline(finding["impact"]))
+    production = finding.get("production")
+    if isinstance(production, dict):
+        out.append('<p class="f-production"><strong>In production:</strong> %s: %s</p>' %
+                   (_esc(production["label"]), render_inline(production["path"])))
     body = _md(finding.get("body_md"))
     if body:
         out.append(body)
@@ -1240,6 +1398,12 @@ def _finding_card(finding, seat="author"):
     if finding.get("verification_status") == "plausible":
         out.append('<div class="aside-note"><strong>What would confirm this:</strong> %s</div>' %
                    _esc(finding["what_would_confirm"]))
+    if adjudication.get("outcome") == "disputed":
+        out.append('<div class="aside-note"><strong>What would settle this:</strong> %s</div>' %
+                   _esc(adjudication["what_would_settle"]))
+    details = _adjudication_details(adjudication)
+    if details:
+        out.append(details)
     repro = finding.get("repro")
     if isinstance(repro, dict) and repro.get("command") and repro.get("output"):
         out.append('<div class="repro"><span class="rec-k">Reproduction</span>'
@@ -1393,13 +1557,14 @@ def _memory_sections_md(report):
 
 
 def _checked_dropped_section(report):
-    run = report.get("run") or {}
-    deep = run.get("deep") if isinstance(run.get("deep"), dict) else {}
-    dropped = deep.get("checked_and_dropped") or []
+    dropped = _checked_and_dropped(report.get("run") or {})
     if not dropped:
         return ""
     rows = [_row('<span class="mono">%s:%s</span>' % (_esc(item["file"]), _esc(item["line"])),
-                 '<strong>%s</strong> — %s' % (_esc(item["title"]), _esc(item["reason"])))
+                 '<strong>%s</strong> — %s%s' % (
+                     _esc(item["title"]), _esc(item["reason"]),
+                     ('<div class="dropped-proof"><span class="rec-k">Proof</span><pre><code>%s</code></pre></div>'
+                      % _esc(item["proof"])) if item.get("proof") else ""))
             for item in dropped]
     return ('<details class="checked-dropped"><summary>Checked and dropped (%d)</summary>'
             '<div class="rows">%s</div></details>' % (len(dropped), "".join(rows)))
@@ -1498,9 +1663,12 @@ def _panes(report):
     """
     panes = [("findings", "Findings", len(report["findings"]), _findings_section(report))]
     standfirst = _md(report["meta"].get("standfirst_md"))
+    adjudication_line = adjudication_summary(report.get("run"))
     summary = "\n".join(filter(None, [
-        ('<section class="astryx-section" id="summary">%s%s</section>' %
-         (_sec_head("Summary"), standfirst)) if standfirst else "",
+        ('<section class="astryx-section" id="summary">%s%s%s</section>' %
+         (_sec_head("Summary"), standfirst,
+          ('<p class="adjudication-summary">%s</p>' % _esc(adjudication_line)) if adjudication_line else ""))
+        if standfirst or adjudication_line else "",
         _risk_section(report.get("risk"))]))
     if summary:
         panes.append(("summary", "Summary & risk", None, '<div class="doc">%s</div>' % summary))
@@ -1524,7 +1692,7 @@ _HANDOFF_META = ("forge", "project", "number", "branch", "source_branch", "web_u
                  "head_sha", "repo_root", "title", "verdict", "ticket")
 _HANDOFF_FINDING = ("id", "severity", "dimensions", "file", "line", "anchor_side", "title",
                     "impact", "fix_md", "evidence", "body_md", "recommendation_md", "aside_md",
-                    "verification_status", "repro", "what_would_confirm")
+                    "verification_status", "repro", "what_would_confirm", "production", "adjudication")
 _SCRIPT_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026",
                         "\u2028": "\\u2028", "\u2029": "\\u2029"}
 
@@ -1613,8 +1781,11 @@ def _render_md_prepared(report):
     if _raw_md(meta.get("standfirst_md")):
         lines.extend([_raw_md(meta["standfirst_md"]), ""])
     lines.extend(["**Tally:** %d Must fix · %d Should fix · %d Nit" %
-                  (tally["must"], tally["should"], tally["nit"]), "",
-                  "**Verdict:** %s" % meta["verdict"], "",
+                  (tally["must"], tally["should"], tally["nit"]), ""])
+    adjudication_line = adjudication_summary(run)
+    if adjudication_line:
+        lines.extend([adjudication_line, ""])
+    lines.extend(["**Verdict:** %s" % meta["verdict"], "",
                   "**Seat:** %s" % meta.get("seat", "author"), ""])
     if run.get("source_access"):
         source_line = "**Source access:** %s" % run["source_access"]
@@ -1716,6 +1887,11 @@ def _render_md_prepared(report):
                           "**Location:** `%s:%s`" % (finding["file"], finding["line"]), ""])
             if finding.get("evidence"):
                 lines.extend(["**Evidence:** %s" % finding["evidence"], ""])
+            adjudication = finding.get("adjudication") if isinstance(finding.get("adjudication"), dict) else {}
+            if adjudication.get("outcome") in _OUTCOME_TOKENS:
+                lines.extend(["**Adjudication:** %s" % _OUTCOME_TOKENS[adjudication["outcome"]][0], ""])
+                if adjudication["outcome"] == "disputed":
+                    lines.extend(["**What would settle this:** %s" % adjudication["what_would_settle"], ""])
             if finding.get("verification_status") == "plausible":
                 lines.extend(["**Status:** Plausible — what would confirm: %s" %
                               finding["what_would_confirm"], ""])
@@ -1727,6 +1903,9 @@ def _render_md_prepared(report):
                 lines.extend(["**Reproduction:**", "", fence, command, repro["output"], fence, ""])
             if finding.get("impact"):
                 lines.extend(["**Impact:** %s" % finding["impact"], ""])
+            production = finding.get("production")
+            if isinstance(production, dict):
+                lines.extend(["**In production:** %s: %s" % (production["label"], production["path"]), ""])
             if _raw_md(finding.get("body_md")):
                 lines.extend([_raw_md(finding["body_md"]), ""])
             if _raw_md(finding.get("recommendation_md")):
@@ -1744,12 +1923,14 @@ def _render_md_prepared(report):
         else:
             lines.extend(["No per-dimension clean notes were supplied.", ""])
 
-    dropped = deep.get("checked_and_dropped") or []
+    dropped = _checked_and_dropped(run)
     if dropped:
         lines.extend(["<details><summary>Checked and dropped (%d)</summary>" % len(dropped), ""])
         for item in dropped:
             lines.append("- `%s:%s` — **%s**: %s" %
                          (item["file"], item["line"], item["title"], item["reason"]))
+            if item.get("proof"):
+                lines.append("  - Proof: %s" % " ".join(item["proof"].split()))
         lines.extend(["", "</details>", ""])
     memory_lines = _memory_sections_md(report)
     if memory_lines:
@@ -1864,6 +2045,9 @@ def main(argv=None):
                        "line": item["line"], "title": item["title"]}
                       for item in prepared["findings"]],
         }
+        adjudication_line = adjudication_summary(prepared.get("run"))
+        if adjudication_line:
+            meta["adjudication"] = adjudication_line
         if html_path and highlight.backend() == "builtin":
             warnings.append("Pygments is not installed, so code outside Python, Bash, JSON, YAML, "
                             "SQL and diff renders uncoloured. Install it with: %s" % highlight.INSTALL_HINT)
