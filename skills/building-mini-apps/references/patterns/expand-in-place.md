@@ -53,7 +53,7 @@ Do not use it when:
 | Click on a row | Opens that row; any open card collapses first | Our design (one card open at a time) |
 | Esc | Closes an open field popover first, otherwise collapses the card | Our design. Works while typing in the card; never discards edits |
 | ⌘Enter | Collapses the card | Our design. Works while typing in the card |
-| ⌘N | Adds a new item and opens its card at the end of the list | Hint text in S1-0003 shows ⌘N for a new to-do. Ignored while typing in an input |
+| N | Adds a new item and opens its card at the end of the list | Things uses ⌘N (hint text in S1-0003); `n` is our design because the browser reserves ⌘N. Ignored while typing in an input |
 | ↑ / ↓ | Moves row selection | Our design. Ignored while typing in an input |
 | Click an icon in the strip | Opens that field's editor and focuses it | The icon becomes a labeled field with a popover (S1-0107, S1-0040) |
 | Click an x on a field row | Clears the field; its icon returns to the strip | Chip shows the x on hover only (S3-0020, S3-0021) |
@@ -69,7 +69,7 @@ Focus rules:
 
 | State | Shows |
 |---|---|
-| Empty | `EmptyState` with the title, one line of hint ("Press ⌘N to add an item"), and an add button. S1-0002 shows a nearly blank list and S1-0003 a grey italic hint; the button is our design |
+| Empty | `EmptyState` with the title, one line of hint ("Press N to add an item"), and an add button. S1-0002 shows a nearly blank list and S1-0003 a grey italic hint; the button is our design |
 | Loading | `LoadingState` in place of the list; the footer bar and page title stay |
 | Error | `ErrorState` with retry in place of the list. A failed save keeps the card open with the last good values and raises a toast. Both are our design; no source shows an error |
 | Long title | Collapsed row truncates to one line with an ellipsis; the open card wraps the title over several lines. Our design |
@@ -126,7 +126,7 @@ CONTRACT: ExpandList<T extends ExpandItem>(props: {
   collection: string                                 // useCollection name
   seed?: T[]
   fields: ExpandField<T>[]                           // strip and row order follows this array
-  newItem(): T                                       // defaults for ⌘N, including context pre-fill
+  newItem(): T                                       // defaults for N, including context pre-fill
   renderRow?(item: T): ReactNode                     // replaces the default one-line title
   emptyTitle?: string
   onError?(error: Error): void                       // called when a write rejects; default is a sonner toast
@@ -160,7 +160,7 @@ CONTRACT: TextField<T extends ExpandItem>(key: keyof T & string, label: string, 
 - Remove x on hover: S3-0020, S3-0021.
 - Field editor popovers and the icon becoming a labeled field: S1-0107, S1-0040, S2-0028, S3-0021 (Clear when a value is set).
 - Footer bar swap: S1-0013 compared with S1-0002.
-- Empty state and ⌘N hint: S1-0002, S1-0003.
+- Empty state and new-item hint (⌘N in Things; `n` is our design because the browser reserves ⌘N): S1-0002, S1-0003.
 - Trailing glyphs on collapsed rows: S4 features-checklists-mac, S4 features-today-mac.
 - Intent quote ("tucked away in the corner until you need them"): S4 text.
 - Smaller hints, not studied in depth: [fantastical study note](../apps/fantastical.md) (compact card with a "show more" chevron), [craft study note](../apps/craft.md) (child page as a row with excerpt, S2-0004), [notion study note](../apps/notion.md) (S1-0014 expand control).
