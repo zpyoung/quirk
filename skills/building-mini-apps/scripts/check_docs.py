@@ -9,8 +9,10 @@ Usage:
     check_docs.py observations <app> <bullets_file> [--frames]
 
 Names come from the files on disk (references/apps, references/patterns, references/blueprints,
-references/styles) and must match [a-z0-9][a-z0-9-]*. `observations` never edits a file; with
---frames it also requires each cited references/media/<app>/<file>.png to exist.
+references/styles) and must match [a-z0-9][a-z0-9-]*. `observations` never edits a file; every
+non-blank line must be a '- S<n>, ...' bullet or an 'Unseen: <text>' line (the capture brief's
+note on what the source can't show; not checked for source IDs or frames). With --frames it also
+requires each cited references/media/<app>/<file>.png to exist.
 
 Exits 0 when the document is complete, 1 when it is missing or incomplete (each problem is
 printed), and 2 on a usage error.
@@ -45,6 +47,7 @@ ROW_START_RE = re.compile(r"^(J[0-9]+\b|Screen:)")
 FRAME_NAME_RE = re.compile(r"[A-Z][0-9]+-[A-Za-z0-9_-]+\.png")
 SOURCE_ID_RE = re.compile(r"\bS[0-9]+\b")
 BULLET_RE = re.compile(r"^- (S[0-9]+), ")
+UNSEEN_RE = re.compile(r"^Unseen:\s*\S")
 FRAME_PATH_RE = re.compile(r"references/media/[A-Za-z0-9_./-]+?\.png")
 
 
@@ -191,6 +194,8 @@ def check_observations(name: str, bullets: Path, frames: bool) -> List[str]:
     problems = []
     for number, line in enumerate(bullets.read_text().splitlines(), start=1):
         if not line.strip():
+            continue
+        if UNSEEN_RE.match(line):
             continue
         match = BULLET_RE.match(line)
         if not match:
