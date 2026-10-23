@@ -78,7 +78,7 @@ Keys never fire while focus is in an input, textarea or contenteditable, except 
 - The input commits on blur, so what is shown is what is applied. A suggestion click does not blur the input.
 - When the host changes the value from outside (a saved view, the URL, Clear search), the input shows the new text and the chips follow.
 
-**Free text.** A word that is not `key:value` with a known key stays text, so `cuisine:` with no value, `foo:bar` with an unknown key and `"cuisine:thai"` in quotes are all search text. A word in double quotes keeps its spaces: `ingredient:"coconut milk"`.
+**Free text.** A word that is not `key:value` with a known key stays text, so `cuisine:` with no value, `foo:bar` with an unknown key and `"cuisine:thai"` in quotes are all search text. A word in double quotes keeps its spaces: `ingredient:"coconut milk"`. Repeated spaces inside quotes are kept too, and a suggested value that holds quotes or backslashes is escaped when it is inserted.
 
 | State | Shows |
 |-------|-------|

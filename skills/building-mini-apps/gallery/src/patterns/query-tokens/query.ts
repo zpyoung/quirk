@@ -93,15 +93,28 @@ export function serializeToken(token: QueryToken): string {
   return `${token.negated ? "-" : ""}${token.key}:${SYMBOLS[token.op]}${value}`
 }
 
-/** Free text as the input shows it: words that would read as a chip or break the quoting are quoted. */
+/**
+ * Free text as the input shows it. Words that would read as a chip or break the quoting are quoted,
+ * and so is any word holding whitespace other than a single separating space, so it comes back intact.
+ */
 export function serializeText(text: string): string {
-  return text
-    .split(/\s+/)
+  const parts = text.split(/(\s+)/)
+  const words: string[] = []
+  let current = ""
+  parts.forEach((part, i) => {
+    if (i % 2 === 0) current += part
+    else if (part === " " && parts[i - 1] !== "" && parts[i + 1] !== "") {
+      words.push(current)
+      current = ""
+    } else current += part
+  })
+  words.push(current)
+  return words
     .filter(Boolean)
     .map((word) => {
       const head = HEAD.exec(word)
       const lookalike = head !== null && word.length > head[0].length
-      return quoteIf(word, lookalike || /["\\]/.test(word))
+      return quoteIf(word, lookalike || /[\s"\\]/.test(word))
     })
     .join(" ")
 }
