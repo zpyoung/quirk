@@ -11,6 +11,11 @@
 - 2026-10-23: SC-7 holds focus rings to 3:1 and treats borders and input outlines as decorative.
   Neutral House's locked values (border 1.27:1, input 1.37:1 in light) could not meet 3:1 without
   moving the default look. Approved by the user.
+- 2026-10-24: An eighth style, Ink Panel, studied from Sentry, is added by
+  [its own spec](../2026-10-24-ink-panel-style/logic.md), which also extends the extra rules with
+  motion, component hooks and a high-contrast fallback. SC-3 no longer forbids an eighth style; it
+  forbids inventing one. SC-6 lists eight names. Counts of seven elsewhere describe what this spec
+  added. Approved by the user with the Ink Panel design.
 
 Every mini app the skill builds today looks the same, because the skill ships one neutral house style
 and its spec bans copying the studied apps' looks
@@ -132,7 +137,7 @@ existing light/dark toggle.
 3. **SC-3: The user names a look the styles don't cover**
    - **Given** the user asks for an app that "looks like Things 3 but green"
    - **When** the agent chooses the style
-   - **Then** it maps "Things 3" to Airy White as in SC-2 and says so. It doesn't invent an eighth style.
+   - **Then** it maps "Things 3" to Airy White as in SC-2 and says so. It doesn't invent a new style.
      For the "but green" part, it tunes the accent in the app's tokens file itself and says so, including
      that the app no longer matches a shipped style, so a later style switch needs force (SC-5).
    - **Walkthrough:**
@@ -165,7 +170,7 @@ existing light/dark toggle.
 6. **SC-6: An unknown style name**
    - **Given** the user or the agent asks for a style called "neon"*
    - **When** the scaffold or style script runs
-   - **Then** it exits with the bad-arguments code and lists the seven valid style names. No app is
+   - **Then** it exits with the bad-arguments code and lists the eight valid style names. No app is
      created or changed.
 
 7. **SC-7: A style fails contrast**
