@@ -28,6 +28,10 @@ SHADCN = "shadcn@4.22.1"
 DEV_TIMEOUT = 30
 TAIL_LINES = 20
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+PRESS_REL = Path("src") / "lib" / "mini" / "press.ts"
+PRESS_SOURCE = SKILL_ROOT / "gallery" / PRESS_REL
+PRESS_IMPORT = 'import "./lib/mini/press"'
+INDEX_CSS_IMPORT_RE = re.compile(r"""^import\s+["']\./index\.css["'];?[ \t]*$""", re.MULTILINE)
 TOKENS_IMPORT = '@import "./styles/mini-tokens.css";'
 TOP_LEVEL_IMPORT_RE = re.compile(r"^@import\b")
 THEME_INLINE_RE = re.compile(r"@theme\s+inline\s*\{")
@@ -284,6 +288,36 @@ def tokens_step(app: Path) -> int:
     except OSError as exc:
         return step_failed("tokens", str(exc))
     print(f"+ [tokens] wired {TOKENS_IMPORT} and the font lines into {css}")
+    return 0
+
+
+def press_step(app: Path) -> int:
+    """Install the press marker: copy `src/lib/mini/press.ts` when absent and import it from `src/main.tsx`.
+
+    Idempotent. An existing module is never overwritten and a `main.tsx` that already imports it is
+    not rewritten. The import goes on the line after `import "./index.css"`, else first in the file.
+    """
+    main = app / "src" / "main.tsx"
+    try:
+        text = main.read_text(encoding="utf-8")
+    except OSError as exc:
+        return step_failed("press", str(exc))
+    target = app / PRESS_REL
+    try:
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(PRESS_SOURCE.read_bytes())
+        if "./lib/mini/press" not in text:
+            anchor = INDEX_CSS_IMPORT_RE.search(text)
+            if anchor is None:
+                text = PRESS_IMPORT + "\n" + text
+            else:
+                rest = text[anchor.end():]
+                text = f"{text[: anchor.end()]}\n{PRESS_IMPORT}{rest or chr(10)}"
+            main.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        return step_failed("press", str(exc))
+    print(f"+ [press] press marker in place: {target} imported from {main}")
     return 0
 
 
