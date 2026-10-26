@@ -579,7 +579,7 @@ def test_build_regenerates_outputs_byte_for_byte(
     for path in outputs:
         path.write_text("stale", encoding="utf-8")
     assert build_styles.main([], skill_root=root) == 0
-    assert "styles built: 7" in capsys.readouterr().out
+    assert "styles built: 8" in capsys.readouterr().out
     assert [p.read_bytes() for p in outputs] == expected
 
 
@@ -732,7 +732,7 @@ def test_check_file_rejects_out_of_range_colours_quickly(
     assert "finite" in capsys.readouterr().err
 
 
-# --- the seven real sources ---
+# --- the real sources ---
 
 STUDIED_FROM = {
     "neutral-house": [],
@@ -742,12 +742,13 @@ STUDIED_FROM = {
     "dense-dark": ["tableplus", "obsidian"],
     "glass-launcher": ["raycast"],
     "split-tone": ["fantastical"],
+    "ink-panel": ["sentry"],
 }
 APP_DISPLAY_NAMES = ("Linear", "Things", "Raycast", "Craft", "Obsidian", "TablePlus",
-                     "Fantastical", "Notion", "Granola", "Figma")
+                     "Fantastical", "Notion", "Granola", "Figma", "Sentry")
 
 
-def test_all_seven_sources_exist_and_stems_equal_slugs(styles: ModuleType) -> None:
+def test_every_source_exists_and_stems_equal_slugs(styles: ModuleType) -> None:
     stems = sorted(p.stem for p in STYLES_DIR.glob("*.json"))
     assert stems == sorted(styles.SLUGS)
     assert list(styles.load_styles(STYLES_DIR)) == list(styles.SLUGS)
@@ -833,11 +834,19 @@ def test_no_studied_app_name_appears_in_generated_output() -> None:
         assert not pattern.search(name), source.name
 
 
-def test_style_list_lists_the_seven_in_slug_order(styles: ModuleType) -> None:
+def test_style_list_lists_every_style_in_slug_order(styles: ModuleType) -> None:
     data = json.loads((SKILL_DIR / "gallery" / "src" / "gallery" / "style-list.json").read_text())
     loaded = styles.load_styles(STYLES_DIR)
     assert [entry["slug"] for entry in data] == list(styles.SLUGS)
     assert data == [{"slug": s, "name": loaded[s]["name"]} for s in styles.SLUGS]
+
+
+def test_ink_panel_wraps_motion_hover_and_forced_colors_rules() -> None:
+    css = (STYLES_DIR / "dist" / "ink-panel.css").read_text(encoding="utf-8")
+    assert "@media (prefers-reduced-motion: no-preference)" in css
+    assert "@media (hover: hover)" in css
+    assert "@media (forced-colors: active)" in css
+    assert "Sentry" not in css
 
 
 # --- outlines, press motion and media-guarded rules ---

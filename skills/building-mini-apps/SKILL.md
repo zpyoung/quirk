@@ -1,6 +1,6 @@
 ---
 name: building-mini-apps
-description: Use when the user asks to "build me a mini app", "a little app to track…", "a local tool with saved data", or to "analyze <app> as a mini app" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard, in one of seven looks. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
+description: Use when the user asks to "build me a mini app", "a little app to track…", "a local tool with saved data", or to "analyze <app> as a mini app" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard, in one of eight looks. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
 ---
 
 # Building mini apps
@@ -58,14 +58,15 @@ A style is the look of one app: colors (light and dark), radius, fonts, border a
 | dense-dark | Flat charcoal, steel-blue solid selection, monospace data cells | TablePlus, Obsidian |
 | glass-launcher | Translucent blurred panels, large radius, warm orange accent | Raycast |
 | split-tone | Dark sidebar on a light canvas, rose accent, edge-striped selection | Fantastical |
+| ink-panel | Warm paper, 2px ink outlines and hard offset shadows, cobalt actions, marker-yellow selection, buttons that press in | Sentry |
 
-References: [neutral-house](references/styles/neutral-house.md), [calm-paper](references/styles/calm-paper.md), [airy-white](references/styles/airy-white.md), [cool-tool](references/styles/cool-tool.md), [dense-dark](references/styles/dense-dark.md), [glass-launcher](references/styles/glass-launcher.md), [split-tone](references/styles/split-tone.md).
+References: [neutral-house](references/styles/neutral-house.md), [calm-paper](references/styles/calm-paper.md), [airy-white](references/styles/airy-white.md), [cool-tool](references/styles/cool-tool.md), [dense-dark](references/styles/dense-dark.md), [glass-launcher](references/styles/glass-launcher.md), [split-tone](references/styles/split-tone.md), [ink-panel](references/styles/ink-panel.md).
 
 ## Building a new app
 
 1. **Read the matching references.** Pick the patterns from the index by what the user does with the records, then read each chosen `references/patterns/<p>.md` in full, including its When to use and what it leaves out. For a clone of an analyzed app, read `references/blueprints/<app>.md` first and use the patterns it names.
 2. **Name the patterns and why**, in your reply, before building: one line per pattern tying it to the user's request. Two or three is normal; one is fine; more than three usually means the request is two apps. Then pick the style:
-   - **No look named.** Name one style with one line on why it fits, list the other six names, and say "Say the word to switch." Scaffold with the one you named; do not wait for an answer.
+   - **No look named.** Name one style with one line on why it fits, list the other seven names, and say "Say the word to switch." Scaffold with the one you named; do not wait for an answer.
    - **A studied app named** ("make it look like Linear"). Map it through the Studied from column of the Style index and use that style. Say the style keeps the feel of the app, not its exact look.
    - **A variation** ("like Things 3 but green"). Use the nearest style, then tune the accent in `src/styles/mini-tokens.css` after the scaffold. Run `python3 "$SKILL_DIR/scripts/build_styles.py" --check-file <app>/src/styles/mini-tokens.css` and fix any contrast failure it reports. Tell the user the app no longer matches a shipped style, so a later style switch needs `--force`.
 3. **Scaffold.** The target must not exist and its parent must:

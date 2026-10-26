@@ -29,7 +29,7 @@ PATTERNS = ["list-peek", "expand-in-place", "action-palette", "doc-collections",
             "command-center", "bulk-select", "query-tokens", "conditional-status", "stack-trace",
             "event-timeline", "span-waterfall", "replay-player", "aggregate-builder"]
 STYLES = ["neutral-house", "calm-paper", "airy-white", "cool-tool",
-          "dense-dark", "glass-launcher", "split-tone"]
+          "dense-dark", "glass-launcher", "split-tone", "ink-panel"]
 REQUIRED_SECTIONS = ["When to use", "Pattern index", "Style index", "Building a new app",
                      "When no pattern fits", "Adding a pattern", "Changing an app's style",
                      "Rules"]

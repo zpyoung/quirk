@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 SLUGS = (
     "neutral-house", "calm-paper", "airy-white", "cool-tool",
-    "dense-dark", "glass-launcher", "split-tone",
+    "dense-dark", "glass-launcher", "split-tone", "ink-panel",
 )
 DEFAULT_SLUG = SLUGS[0]
 
