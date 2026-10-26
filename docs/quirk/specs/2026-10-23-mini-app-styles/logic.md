@@ -276,7 +276,7 @@ Not in scope:
 ## Deferred Ideas
 
 - **Density as its own option** (compact or comfortable, independent of style). Every block hard-codes
-  its sizes today, so this needs a refactor across all ten blocks first. Logged as DEFER-26.
+  its sizes today, so this needs a refactor across all ten blocks first. Logged as DEFER-27.
 - `[tech-spec]` Which named hooks the blocks expose for style stylesheets, and how the gallery-scoped
   CSS is selected.
 - `[tech-spec]` How the style script recognises a hand-edited tokens file (SC-5).

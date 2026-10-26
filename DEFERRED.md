@@ -213,7 +213,14 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Priority**: P2
 - **Proposed owner**: unassigned
 
-## DEFER-26: Density as its own mini-app option
+## DEFER-26: making-videos: ship a scene-kit build helper
+- **Deferred**: 2026-10-23
+- **Session context**: Skill review after the 2026-10-23 stacking-prs explainer; the other five recommendations shipped on zpyoung/video-stack-trial
+- **Why deferred**: Two runs each hand-built their own way to expand a shared CSS head into every composition and write index.html audio tags from lines.json and scene times (2026-10-23 stacking-prs: kit/build.py with @@HEAD@@ substitution, kit/index.py, kit/scenes.json; the 2026-10-22 explainer did it differently). Two data points don't fix a shape; wait for a third run to confirm the pattern before building it.
+- **Estimated effort**: M
+- **Priority**: P3
+
+## DEFER-27: Density as its own mini-app option
 - **Deferred**: 2026-10-23
 - **Session context**: brainstorming the building-mini-apps style presets (docs/quirk/specs/2026-10-23-mini-app-styles/logic.md)
 - **Why deferred**: a compact or comfortable density, independent of the chosen style, was wanted but left out of the styles work. Every block in skills/building-mini-apps/gallery/src/patterns/ hard-codes its sizes (h-10, px-3 and so on); only mini-full's upcoming list reads --mini-row-height. Density needs all ten blocks moved onto size tokens first, then a --density option on new_app.py and set_style.py.

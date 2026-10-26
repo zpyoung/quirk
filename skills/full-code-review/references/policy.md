@@ -60,7 +60,12 @@ cross_family:                  # opt-in second-family verification of Must/Shoul
   alias: codex
 cross_repo:
   search_agent: null           # a subagent type the cross-repo lens may dispatch
+adjudicator:
+  enabled: true                # opt out of the adjudication pass that rules on each finding
 ```
+
+`models.adjudicator` sets the adjudicator's model (default opus, unaffected by
+`escalation`).
 
 Scalars override; `skip`, `critical_paths`, and `skip_globs` accumulate; `models`
 merges per lens. Unknown keys produce a warning. A malformed file stops the run with

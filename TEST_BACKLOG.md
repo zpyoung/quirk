@@ -38,3 +38,10 @@ Reviewed every 2 weeks. Use `/quirk:artifacts:test-skip` to append.
 - **Edge cases to cover**: After reauthenticating Anthropic, run every applicable lens and every area twice at 3605fd8777b60646bcad11aba08f83c2c858e6b9 with unseeded prompts, measured whole-run budgets, fresh per-claim checkers, and independent spot checks; score against the corrected answer key.
 - **Priority**: P1
 
+## TEST-4: Live-model adjudicator smoke runs not yet run
+- **File under test**: skills/full-code-review/references/orchestration.md
+- **Test type**: e2e
+- **Reason skipped**: The smoke corpus needs live Opus and Sonnet dispatch through the installed plugin, and this build ran in a worktree; CI only checks that the new cases' patches apply. Structural coverage exists: apply_adjudication unit tests, renderer, posting and policy tests, and smoke_check absent/marker tests. The adjudicator and prover prompts (references/lenses/_adjudicator.md, _prover.md) have never run against a live model.
+- **Edge cases to cover**: All five existing smoke cases still exit 0 with production statements under complete adjudication; correctness-guarded passes with absent: true; correctness-wrong-fix passes recommendation_contains ceil_div (a correct fix written as (total + size - 1) // size would miss the marker); a run with adjudicator.enabled false still passes all five baseline cases
+- **Priority**: P1
+

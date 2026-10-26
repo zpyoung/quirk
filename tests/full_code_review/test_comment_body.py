@@ -186,6 +186,57 @@ def test_finding_body_fixed_sentences():
                                                       lead="Nit")[0]
 
 
+PRODUCTION = {"label": "Common path", "path": "POST /refunds with two line items"}
+PRODUCTION_LINE = "**In production:** Common path: POST /refunds with two line items"
+
+
+def _production_bodies(finding):
+    author, _ = cb.finding_body(finding, seat="author", lead="Must fix")
+    reviewer, _ = cb.finding_body(finding, seat="reviewer", lead="Blocking")
+    support, _ = cb.support_body(finding, disposition="Blocking", discussion_id="d1", note_id=5)
+    return {"author": author, "reviewer": reviewer, "support": support}
+
+
+@pytest.mark.parametrize("build", ["author", "reviewer", "support"])
+def test_production_line_sits_between_why_and_fix(build):
+    body = _production_bodies(make_finding(production=PRODUCTION))[build]
+    assert "\n\n%s\n\n**Fix:**" % PRODUCTION_LINE in body
+    assert body.index("Totals drift") < body.index(PRODUCTION_LINE) < body.index("**Fix:**")
+    assert body.index("**Fix:**") < body.index("<summary>Details")
+
+
+@pytest.mark.parametrize("build", ["author", "reviewer", "support"])
+def test_production_line_stays_before_details_without_a_fix(build):
+    finding = make_finding(production=PRODUCTION)
+    del finding["fix_md"]
+    del finding["recommendation_md"]
+    body = _production_bodies(finding)[build]
+    assert body.index("Totals drift") < body.index(PRODUCTION_LINE) < body.index("<summary>Details")
+    assert "**Fix:**" not in body
+
+
+@pytest.mark.parametrize("build", ["author", "reviewer", "support"])
+def test_production_line_for_na_label_names_the_dimension(build):
+    finding = make_finding(production={"label": "N/A", "path": "comments"})
+    assert "**In production:** N/A: comments\n" in _production_bodies(finding)[build]
+
+
+@pytest.mark.parametrize("build", ["author", "reviewer", "support"])
+def test_absent_production_adds_no_line_and_no_warning(build):
+    body = _production_bodies(make_finding())[build]
+    assert "In production" not in body
+    _, warnings = cb.finding_body(make_finding(), seat="author", lead="Must fix")
+    assert warnings == []
+
+
+@pytest.mark.parametrize("build", ["author", "reviewer", "support"])
+def test_production_path_is_neutralized_like_the_fix_line(build):
+    hostile = {"label": "Edge case", "path": "/merge </details> ping @octocat\nsecond"}
+    body = _production_bodies(make_finding(production=hostile))[build]
+    line = next(item for item in body.split("\n") if item.startswith("**In production:**"))
+    assert line == ("**In production:** Edge case: \\/merge &lt;/details> ping @\u200boctocat second")
+
+
 def test_finding_body_multiline_note_is_quoted_line_by_line():
     body, _ = cb.finding_body(make_finding(), seat="reviewer", lead="Blocking",
                               note="first line\n\nthird line")
@@ -1060,6 +1111,46 @@ def test_plausible_author_finding_never_becomes_post_eligible(slot):
     assert data["findings"]["F2"]["post"] is (decisions is None)
     assert "Posted: %d · Not posted: %d" % (
         1 if decisions is None else 0, 1 if decisions is None else 2) in data["overview"]
+
+
+def _disputed(finding):
+    finding.update(adjudication={"outcome": "disputed", "what_would_settle": "Run the refund path."})
+    return finding
+
+
+def test_disputed_author_finding_is_not_preselected_without_decisions():
+    raw = raw_report()
+    _disputed(raw["findings"][0])
+    data = cb._author_bodies(raw)
+    assert data["findings"]["F1"]["post"] is False
+    assert data["findings"]["F2"]["post"] is True
+    entry = next(item for item in data["overview_plan"]["omitted"] if item["id"] == "F1")
+    assert entry["reason"] == "disputed finding (needs triage)"
+    assert (entry["file"], entry["line"], entry["severity"]) == ("a.py", "2", "Must fix")
+    assert all(item["finding_id"] != "F1" for item in data["overview_plan"]["posted"])
+
+
+@pytest.mark.parametrize("slot", ["fix", "later", "detail"])
+def test_disputed_author_finding_posts_when_triage_selects_it(slot):
+    raw = raw_report()
+    _disputed(raw["findings"][0])
+    decisions = {"F1": {"id": "F1", "slot": slot, "disposition": "Will fix", "note": ""}}
+    data = cb._author_bodies(raw, decisions)
+    assert data["findings"]["F1"]["post"] is True
+    assert any(item["finding_id"] == "F1" for item in data["overview_plan"]["posted"])
+
+
+@pytest.mark.parametrize("slot", [None, "fix"])
+def test_plausible_and_disputed_finding_never_posts(slot):
+    raw = raw_report()
+    _disputed(raw["findings"][0])
+    raw["findings"][0].update(verification_status="plausible", what_would_confirm="Run the input.")
+    decisions = None if slot is None else {
+        "F1": {"id": "F1", "slot": slot, "disposition": "Will fix", "note": ""}}
+    data = cb._author_bodies(raw, decisions)
+    assert data["findings"]["F1"]["post"] is False
+    entry = next(item for item in data["overview_plan"]["omitted"] if item["id"] == "F1")
+    assert entry["reason"] == "plausible finding (never posted)"
 
 
 @pytest.mark.parametrize("marker", ["~~~", "```"])

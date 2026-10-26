@@ -1,0 +1,7 @@
+{
+  "lens": "correctness",
+  "file": "invoices.py",
+  "line_min": 1,
+  "line_max": 3,
+  "absent": true
+}

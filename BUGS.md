@@ -320,13 +320,13 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Diff the Chrome child's environment, rlimits and process QoS under pytest against a plain python3 parent; until then, browser tests can be run by calling the test functions directly with hand-built fixtures.
 
-
-## BUG-39: mini-full's out-of-month day numbers fail AA in every style
+## BUG-39: deep_sandbox timing tests flake under full-suite load
 - **Observed**: 2026-10-23
-- **File**: skills/building-mini-apps/gallery/src/patterns/mini-full/month-grid.tsx
-- **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
-- **Severity**: low
-- **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+- **File**: tests/full_code_review/test_deep_sandbox.py:362
+- **Description**: Full runs of tests/full_code_review failed spuriously three times during the adjudicator branch. Twice the failure was identified: once test_background_child_holding_pipes_does_not_mask_a_clean_exit, once test_timeout_kills_descendants_instead_of_only_the_parent (assert result["timed_out"] is True failed at :362). The third failing test was not captured. Each time, an immediate full rerun passed. The two identified tests pass when run alone (5/5 for :362), and deep_sandbox.py and its tests are unchanged on the branch. Timeout and elapsed-time bounds look load-sensitive, so wave gates and the adversarial-review prepass go red until rerun. On 2026-10-22 the :358 test also failed in two consecutive full-suite runs at load average about 7, while passing 8 of 8 alone; its 4 s wall-clock bound on a 1 s timeout sits close to the real duration.
+- **Severity**: medium
+- **Proposed fix**: Measure the timeout path with a generous bound (e.g. < 10 s) or assert on timed_out and the child marker only, not wall time.
+- **Blocker for**: a green full-suite gate on a busy machine
 
 ## BUG-40: Neutral House's tab labels sit just under 4.5:1
 - **Observed**: 2026-10-23
@@ -334,3 +334,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: Inactive tab triggers render foreground at 60% opacity on the background. Under real browser compositing this is about 4.48:1 in Neutral House light mode, just under AA for normal text. Neutral House's token values are locked as the default look, so the style gate does not check this pair (adding it fails the default). Found while fixing cool-tool's inactive tab contrast for the style presets work.
 - **Severity**: low
 - **Proposed fix**: Raise the inactive trigger opacity (or switch it to text-muted-foreground) in the tabs component, then add the pair to the style gate.
+
+## BUG-41: mini-full's out-of-month day numbers fail AA in every style
+- **Observed**: 2026-10-23
+- **File**: skills/building-mini-apps/gallery/src/patterns/mini-full/month-grid.tsx
+- **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
+- **Severity**: low
+- **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.

@@ -1,0 +1,125 @@
+{
+  "skill_name": "making-videos",
+  "queries": [
+    {
+      "query": "Make me a 30 second video announcing our new CLI release",
+      "should_trigger": true
+    },
+    {
+      "query": "Can you build an explainer video for how our onboarding flow works?",
+      "should_trigger": true
+    },
+    {
+      "query": "I need a short motion graphics piece for the launch of this skill",
+      "should_trigger": true
+    },
+    {
+      "query": "Create an animated demo of the dashboard as an MP4",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a narrated 90 second explainer about this repo with a 9:16 cut for social",
+      "should_trigger": true
+    },
+    {
+      "query": "Render a release announcement video from the changelog, 16:9",
+      "should_trigger": true
+    },
+    {
+      "query": "Add a voiceover to a short product video you build from our README",
+      "should_trigger": true
+    },
+    {
+      "query": "Turn this feature brief into an animated video with captions",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a 20 second silent teaser video for the plugin, in our brand colors",
+      "should_trigger": true
+    },
+    {
+      "query": "I want a video explaining how the pipeline works, with a 3D end card made in Blender",
+      "should_trigger": true
+    },
+    {
+      "query": "Use HyperFrames to make a how-it-works video for this tool",
+      "should_trigger": true
+    },
+    {
+      "query": "Build me a short animated explainer video with narration for the docs site homepage, rendered to MP4",
+      "should_trigger": true
+    },
+    {
+      "query": "Record the app's onboarding flow and put it in a polished product video with titles",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a 2 minute video walkthrough of this project, narrated, and give me the MP4",
+      "should_trigger": true
+    },
+    {
+      "query": "Trim the first ten seconds off the screen recording I made and cut out the pauses",
+      "should_trigger": false
+    },
+    {
+      "query": "Edit my vlog footage: color grade it and add a music bed",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a script for a YouTube video about our product, text only",
+      "should_trigger": false
+    },
+    {
+      "query": "Build a scroll-triggered animation for the hero section of our website",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a slide deck introducing our product to the sales team",
+      "should_trigger": false
+    },
+    {
+      "query": "Record my terminal session as a GIF with asciinema",
+      "should_trigger": false
+    },
+    {
+      "query": "Upload this MP4 to YouTube and set the title and description",
+      "should_trigger": false
+    },
+    {
+      "query": "Make an AI avatar presenter that reads this script on camera",
+      "should_trigger": false
+    },
+    {
+      "query": "Convert this MOV to MP4 with ffmpeg at a lower bitrate",
+      "should_trigger": false
+    },
+    {
+      "query": "Add a CSS hover animation to the buttons in this React app",
+      "should_trigger": false
+    },
+    {
+      "query": "Transcribe the audio from this meeting recording",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a 10 minute documentary-style video about the history of the project",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a README section describing how to record a demo",
+      "should_trigger": false
+    },
+    {
+      "query": "Create an animated SVG logo for the website header",
+      "should_trigger": false
+    },
+    {
+      "query": "Post the finished video to Twitter and LinkedIn",
+      "should_trigger": false
+    },
+    {
+      "query": "Summarize this YouTube video for me",
+      "should_trigger": false
+    }
+  ]
+}
