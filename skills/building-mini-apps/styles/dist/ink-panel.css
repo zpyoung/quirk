@@ -1,4 +1,4 @@
-/* mini-style: ink-panel sha256=3b4c4583ec34cc80225e6349e6cc5dc6710eed35762606b1eca991608d808320 */
+/* mini-style: ink-panel sha256=dc00a53be91dd6d7d468e7befb2afaf96584aece9319543eaf3e9b601a7606a2 */
 @import "@fontsource-variable/space-grotesk";
 
 html:root {
@@ -96,6 +96,8 @@ html.dark {
 [data-slot="button"][data-variant="outline"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 [data-slot="button"][data-variant="secondary"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 [data-slot="button"][data-variant="destructive"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
+[data-slot="button"][data-variant="ghost"] { translate: none; transition: none; }
+[data-slot="button"][data-variant="link"] { translate: none; transition: none; }
 [data-slot="toggle"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 [data-slot="toggle-group-item"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 [data-slot="input"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); }

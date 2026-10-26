@@ -1,7 +1,9 @@
 /**
  * Press marker: sets `data-mini-pressed` on a shadcn button or toggle while it is pressed, and keeps
- * it for at least HOLD_MS so a quick tap still shows. Styles key off the attribute; the module only
- * observes events and writes that one attribute. Import it once for its side effect.
+ * it for at least HOLD_MS so a quick tap still shows. A held key press also ends when the element
+ * blurs, the window blurs, or the page is hidden, since keyup may never arrive. Styles key off the
+ * attribute; the module only observes events and writes that one attribute. Import it once for its
+ * side effect.
  */
 
 const SELECTOR = '[data-slot="button"], [data-slot="toggle"], [data-slot="toggle-group-item"]'
@@ -98,6 +100,10 @@ function install() {
     },
     options
   )
+  window.addEventListener("blur", release)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") release()
+  })
 }
 
 const host = window as unknown as Record<string, unknown>

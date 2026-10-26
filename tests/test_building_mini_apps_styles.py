@@ -1107,6 +1107,14 @@ def test_ink_panel_base_control_rules_are_motion_free_and_precede_the_wrapped_tr
         assert plain.start() < wrapped.start(), selector
 
 
+@pytest.mark.parametrize("variant", ["ghost", "link"])
+def test_ink_panel_ghost_and_link_buttons_stay_still_without_motion_queries(variant: str) -> None:
+    css = (STYLES_DIR / "dist" / "ink-panel.css").read_text(encoding="utf-8")
+    selector = f'[data-slot="button"][data-variant="{variant}"]'
+    plain = re.search(rf"^{re.escape(selector)} \{{ translate: none; transition: none; \}}$", css, re.M)
+    assert plain, selector
+
+
 def test_a_plain_rule_is_not_wrapped_and_a_wrapped_one_does_not_leak(
     styles: ModuleType, neutral: Dict[str, Any]
 ) -> None:

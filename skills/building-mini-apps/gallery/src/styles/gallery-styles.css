@@ -701,6 +701,8 @@ html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="default"] {
 html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="outline"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="secondary"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="destructive"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
+html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="ghost"] { translate: none; transition: none; }
+html[data-mini-style="ink-panel"] [data-slot="button"][data-variant="link"] { translate: none; transition: none; }
 html[data-mini-style="ink-panel"] [data-slot="toggle"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 html[data-mini-style="ink-panel"] [data-slot="toggle-group-item"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); translate: none; transition: none; }
 html[data-mini-style="ink-panel"] [data-slot="input"] { border-width: 2px; border-style: solid; border-color: var(--foreground); border-radius: 6px; box-shadow: 3px 3px 0 var(--foreground); }

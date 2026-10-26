@@ -143,6 +143,22 @@
       }
     },
     {
+      "selector": "[data-slot=\"button\"][data-variant=\"ghost\"]",
+      "mode": "both",
+      "declarations": {
+        "translate": "none",
+        "transition": "none"
+      }
+    },
+    {
+      "selector": "[data-slot=\"button\"][data-variant=\"link\"]",
+      "mode": "both",
+      "declarations": {
+        "translate": "none",
+        "transition": "none"
+      }
+    },
+    {
       "selector": "[data-slot=\"toggle\"]",
       "mode": "both",
       "declarations": {

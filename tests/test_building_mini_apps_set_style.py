@@ -651,6 +651,35 @@ def test_press_step_does_not_count_an_import_inside_a_string(tmp_path: Path) -> 
     assert lines[1] == PRESS_IMPORT
 
 
+def test_press_step_adds_a_real_import_when_a_block_comment_holds_it(tmp_path: Path) -> None:
+    body = 'import "./index.css"\n/* Disabled while debugging:\nimport "./lib/mini/press"\n*/\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
+        f'import "./index.css"\n{PRESS_IMPORT}\n/* Disabled while debugging:\n'
+        'import "./lib/mini/press"\n*/\n'
+    )
+
+
+def test_press_step_adds_a_real_import_when_a_template_literal_holds_it(tmp_path: Path) -> None:
+    body = 'import "./index.css"\nconst note = `\nimport "./lib/mini/press"\n`\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
+        f'import "./index.css"\n{PRESS_IMPORT}\nconst note = `\nimport "./lib/mini/press"\n`\n'
+    )
+
+
+def test_press_step_counts_an_active_import_below_a_closed_block_comment(tmp_path: Path) -> None:
+    body = 'import "./index.css"\n/* press marker */\nimport "./lib/mini/press"\n'
+    app = _press_app(tmp_path, body)
+    main = app / "src" / "main.tsx"
+    before = main.stat().st_mtime_ns
+    assert _mini().press_step(app) == 0
+    assert main.read_text(encoding="utf-8") == body
+    assert main.stat().st_mtime_ns == before
+
+
 @pytest.mark.parametrize(
     "import_line",
     [
