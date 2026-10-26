@@ -142,8 +142,8 @@ only the `data-mini-pressed` attribute.
 
 - Copies `gallery/src/lib/mini/press.ts` to `<app>/src/lib/mini/press.ts` when that file is absent;
   never overwrites an existing one.
-- Adds `import "./lib/mini/press"` to `<app>/src/main.tsx` once, on the line after the
-  `import "./index.css"` line (or as the first line when that import is absent). Idempotent: a file that
+- Adds `import "./lib/mini/press"` to `<app>/src/main.tsx` once, as the first line of the
+  file; detection ignores comments, template literals and strings. Idempotent: a file that
   already has the import is not rewritten.
 - A missing `src/main.tsx` is `step_failed("press", …)` (exit 1).
 - Prints `+ [press] …` like the other steps.
@@ -256,7 +256,7 @@ Back-link: [SC-1 to SC-3](logic.md#behavior--scenarios).
   - the seven existing dist files are unchanged by the new renderer (compare with the committed bytes).
   - eight sources; `style-list.json` lists the eight; `Sentry` joins `APP_DISPLAY_NAMES`.
 - `tests/test_building_mini_apps_set_style.py`: `press_step` copies the file when absent and leaves an
-  existing one alone; adds the import once after `./index.css`; is idempotent; fails without
+  existing one alone; adds the import once as the first line; is idempotent; fails without
   `src/main.tsx`; `new_app.py` and `set_style.py` run it after `tokens`. Rename the `_seven` test names.
 - `tests/test_building_mini_apps_skill.py`: `check_docs.py style ink-panel` passes.
 - Gallery: `pnpm build` and `pnpm exec eslint src` clean.

@@ -572,10 +572,6 @@ def _press_app(tmp_path: Path, main: Any = MAIN_TSX) -> Path:
     return app
 
 
-def _main_lines(app: Path) -> List[str]:
-    return (app / "src" / "main.tsx").read_text(encoding="utf-8").splitlines()
-
-
 def test_press_step_copies_the_module_when_absent(
     tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
 ) -> None:
@@ -594,20 +590,31 @@ def test_press_step_leaves_an_existing_module_alone(tmp_path: Path) -> None:
     assert (app / PRESS_REL).read_bytes() == b"// edited by hand\n"
 
 
-def test_press_step_adds_the_import_once_after_index_css(tmp_path: Path) -> None:
+def _main_text(app: Path) -> str:
+    return (app / "src" / "main.tsx").read_text(encoding="utf-8")
+
+
+def test_press_step_adds_the_import_once_as_the_first_line(tmp_path: Path) -> None:
     app = _press_app(tmp_path)
     assert _mini().press_step(app) == 0
-    lines = _main_lines(app)
-    assert lines.count(PRESS_IMPORT) == 1
-    assert lines[lines.index('import "./index.css"') + 1] == PRESS_IMPORT
-    assert [line for line in lines if line != PRESS_IMPORT] == MAIN_TSX.splitlines()
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{MAIN_TSX}"
+    assert _main_text(app).count(PRESS_IMPORT) == 1
 
 
 def test_press_step_adds_the_import_first_without_an_index_css_import(tmp_path: Path) -> None:
     body = 'import App from "./App.tsx"\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    assert _main_lines(app) == [PRESS_IMPORT, 'import App from "./App.tsx"']
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"
+
+
+def test_press_step_does_not_land_inside_a_comment_after_index_css(tmp_path: Path) -> None:
+    body = 'import "./index.css" /* global styles\nkept for the app */\nconsole.log("app")\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    text = _main_text(app)
+    assert text.splitlines()[0] == PRESS_IMPORT
+    assert text == f"{PRESS_IMPORT}\n{body}"
 
 
 def test_press_step_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -635,39 +642,28 @@ def test_press_step_adds_a_real_import_when_only_a_comment_mentions_it(tmp_path:
     body = 'import "./index.css"\n// import "./lib/mini/press"\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    assert _main_lines(app) == [
-        'import "./index.css"',
-        PRESS_IMPORT,
-        '// import "./lib/mini/press"',
-    ]
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"
 
 
 def test_press_step_does_not_count_an_import_inside_a_string(tmp_path: Path) -> None:
     body = 'import "./index.css"\nconst note = \'import "./lib/mini/press"\'\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    lines = _main_lines(app)
-    assert lines.count(PRESS_IMPORT) == 1
-    assert lines[1] == PRESS_IMPORT
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"
 
 
 def test_press_step_adds_a_real_import_when_a_block_comment_holds_it(tmp_path: Path) -> None:
     body = 'import "./index.css"\n/* Disabled while debugging:\nimport "./lib/mini/press"\n*/\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
-        f'import "./index.css"\n{PRESS_IMPORT}\n/* Disabled while debugging:\n'
-        'import "./lib/mini/press"\n*/\n'
-    )
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"
 
 
 def test_press_step_adds_a_real_import_when_a_template_literal_holds_it(tmp_path: Path) -> None:
     body = 'import "./index.css"\nconst note = `\nimport "./lib/mini/press"\n`\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
-        f'import "./index.css"\n{PRESS_IMPORT}\nconst note = `\nimport "./lib/mini/press"\n`\n'
-    )
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"
 
 
 def test_press_step_counts_an_active_import_below_a_closed_block_comment(tmp_path: Path) -> None:
@@ -699,19 +695,8 @@ def test_press_step_accepts_equivalent_active_import_forms(tmp_path: Path, impor
     assert main.stat().st_mtime_ns == before
 
 
-def test_press_step_inserts_first_when_the_only_index_css_import_is_commented(tmp_path: Path) -> None:
+def test_press_step_ignores_a_block_comment_holding_index_css_and_press_imports(tmp_path: Path) -> None:
     body = '/* Disabled imports:\nimport "./index.css"\nimport "./lib/mini/press"\n*/\nconsole.log("app")\n'
     app = _press_app(tmp_path, body)
     assert _mini().press_step(app) == 0
-    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == f"{PRESS_IMPORT}\n{body}"
-
-
-def test_press_step_anchors_after_the_active_index_css_import_below_a_commented_one(
-    tmp_path: Path,
-) -> None:
-    body = '/*\nimport "./index.css"\n*/\nimport "./index.css"\nimport App from "./App.tsx"\n'
-    app = _press_app(tmp_path, body)
-    assert _mini().press_step(app) == 0
-    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
-        f'/*\nimport "./index.css"\n*/\nimport "./index.css"\n{PRESS_IMPORT}\nimport App from "./App.tsx"\n'
-    )
+    assert _main_text(app) == f"{PRESS_IMPORT}\n{body}"

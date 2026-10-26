@@ -35,7 +35,6 @@ PRESS_IMPORT_RE = re.compile(r"""^[ \t]*import[ \t]+["']\./lib/mini/press(?:\.ts
 NON_CODE_RE = re.compile(
     r"""/\*.*?\*/|`(?:\\.|[^`\\])*`|//[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'""", re.DOTALL
 )
-INDEX_CSS_IMPORT_RE = re.compile(r"""^import\s+["']\./index\.css["'];?[ \t]*$""", re.MULTILINE)
 TOKENS_IMPORT = '@import "./styles/mini-tokens.css";'
 TOP_LEVEL_IMPORT_RE = re.compile(r"^@import\b")
 THEME_INLINE_RE = re.compile(r"@theme\s+inline\s*\{")
@@ -312,8 +311,8 @@ def press_step(app: Path) -> int:
 
     Idempotent. An existing module is never overwritten and a `main.tsx` that already has an active
     top-level `import "./lib/mini/press"` line (a comment, template literal, or string mentioning it does not count) is
-    not rewritten. The import goes on the line after the active `import "./index.css"` (one inside a comment or
-    template literal is ignored), else first in the file. Fails without writing if no active press import results.
+    not rewritten. Otherwise the import goes on the first line of the file, which is never inside a comment or
+    template literal.
     """
     main = app / "src" / "main.tsx"
     try:
@@ -327,14 +326,7 @@ def press_step(app: Path) -> int:
             target.write_bytes(PRESS_SOURCE.read_bytes())
         code = blank_non_code(text)
         if PRESS_IMPORT_RE.search(code) is None:
-            anchor = INDEX_CSS_IMPORT_RE.search(code)
-            if anchor is None:
-                updated = PRESS_IMPORT + "\n" + text
-            else:
-                rest = text[anchor.end():]
-                updated = f"{text[: anchor.end()]}\n{PRESS_IMPORT}{rest or chr(10)}"
-            if PRESS_IMPORT_RE.search(blank_non_code(updated)) is None:
-                return step_failed("press", f"could not place an active press import in {main}")
+            updated = PRESS_IMPORT + "\n" + text
             main.write_text(updated, encoding="utf-8")
     except OSError as exc:
         return step_failed("press", str(exc))
