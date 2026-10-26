@@ -312,7 +312,8 @@ def press_step(app: Path) -> int:
 
     Idempotent. An existing module is never overwritten and a `main.tsx` that already has an active
     top-level `import "./lib/mini/press"` line (a comment, template literal, or string mentioning it does not count) is
-    not rewritten. The import goes on the line after `import "./index.css"`, else first in the file.
+    not rewritten. The import goes on the line after the active `import "./index.css"` (one inside a comment or
+    template literal is ignored), else first in the file. Fails without writing if no active press import results.
     """
     main = app / "src" / "main.tsx"
     try:
@@ -324,14 +325,17 @@ def press_step(app: Path) -> int:
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(PRESS_SOURCE.read_bytes())
-        if PRESS_IMPORT_RE.search(blank_non_code(text)) is None:
-            anchor = INDEX_CSS_IMPORT_RE.search(text)
+        code = blank_non_code(text)
+        if PRESS_IMPORT_RE.search(code) is None:
+            anchor = INDEX_CSS_IMPORT_RE.search(code)
             if anchor is None:
-                text = PRESS_IMPORT + "\n" + text
+                updated = PRESS_IMPORT + "\n" + text
             else:
                 rest = text[anchor.end():]
-                text = f"{text[: anchor.end()]}\n{PRESS_IMPORT}{rest or chr(10)}"
-            main.write_text(text, encoding="utf-8")
+                updated = f"{text[: anchor.end()]}\n{PRESS_IMPORT}{rest or chr(10)}"
+            if PRESS_IMPORT_RE.search(blank_non_code(updated)) is None:
+                return step_failed("press", f"could not place an active press import in {main}")
+            main.write_text(updated, encoding="utf-8")
     except OSError as exc:
         return step_failed("press", str(exc))
     print(f"+ [press] press marker in place: {target} imported from {main}")

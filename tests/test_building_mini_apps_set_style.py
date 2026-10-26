@@ -697,3 +697,21 @@ def test_press_step_accepts_equivalent_active_import_forms(tmp_path: Path, impor
     assert _mini().press_step(app) == 0
     assert main.read_text(encoding="utf-8") == body
     assert main.stat().st_mtime_ns == before
+
+
+def test_press_step_inserts_first_when_the_only_index_css_import_is_commented(tmp_path: Path) -> None:
+    body = '/* Disabled imports:\nimport "./index.css"\nimport "./lib/mini/press"\n*/\nconsole.log("app")\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == f"{PRESS_IMPORT}\n{body}"
+
+
+def test_press_step_anchors_after_the_active_index_css_import_below_a_commented_one(
+    tmp_path: Path,
+) -> None:
+    body = '/*\nimport "./index.css"\n*/\nimport "./index.css"\nimport App from "./App.tsx"\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert (app / "src" / "main.tsx").read_text(encoding="utf-8") == (
+        f'/*\nimport "./index.css"\n*/\nimport "./index.css"\n{PRESS_IMPORT}\nimport App from "./App.tsx"\n'
+    )
