@@ -81,6 +81,7 @@ def recorded_steps(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
     calls: List[Tuple[str, Any]] = []
     monkeypatch.setattr(mini, "style_step", lambda app, slug: calls.append(("style", slug)) or 0)
     monkeypatch.setattr(mini, "tokens_step", lambda app: calls.append(("tokens", None)) or 0)
+    monkeypatch.setattr(mini, "press_step", lambda app: calls.append(("press", None)) or 0)
     monkeypatch.setattr(mini, "build_step", lambda app: calls.append(("build", None)) or 0)
     monkeypatch.setattr(mini, "dev_step", lambda app: calls.append(("dev", None)) or 0)
     return calls
@@ -103,7 +104,7 @@ def _real_tokens() -> str:
 # --- new_app.py --style ---
 
 
-def test_new_app_exits_2_on_unknown_style_listing_the_seven_slugs(
+def test_new_app_exits_2_on_unknown_style_listing_every_slug(
     tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
 ) -> None:
     new_app = _load_script("new_app")
@@ -126,11 +127,12 @@ def test_new_app_runs_the_steps_in_order_and_reports_the_style(
     monkeypatch.setattr(mini, "add_step", lambda app, patterns: calls.append(("add", None)) or 0)
     monkeypatch.setattr(mini, "style_step", lambda app, slug: calls.append(("style", slug)) or 0)
     monkeypatch.setattr(mini, "tokens_step", lambda app: calls.append(("tokens", None)) or 0)
+    monkeypatch.setattr(mini, "press_step", lambda app: calls.append(("press", None)) or 0)
     monkeypatch.setattr(mini, "build_step", lambda app: calls.append(("build", None)) or 0)
     monkeypatch.setattr(mini, "dev_step", lambda app: calls.append(("dev", None)) or 0)
     target = tmp_path / "app"
     assert new_app.main([str(target), "--style", "calm-paper"]) == 0
-    assert [name for name, _ in calls] == ["init", "add", "style", "tokens", "build", "dev"]
+    assert [name for name, _ in calls] == ["init", "add", "style", "tokens", "press", "build", "dev"]
     assert ("style", "calm-paper") in calls
     assert "style: calm-paper" in capsys.readouterr().out
 
@@ -145,6 +147,7 @@ def test_new_app_style_defaults_to_neutral_house(
     monkeypatch.setattr(mini, "add_step", lambda app, patterns: 0)
     monkeypatch.setattr(mini, "style_step", lambda app, slug: seen.append(slug) or 0)
     monkeypatch.setattr(mini, "tokens_step", lambda app: 0)
+    monkeypatch.setattr(mini, "press_step", lambda app: 0)
     monkeypatch.setattr(mini, "build_step", lambda app: 0)
     monkeypatch.setattr(mini, "dev_step", lambda app: 0)
     assert new_app.main([str(tmp_path / "app")]) == 0
@@ -167,7 +170,7 @@ def test_set_style_exits_2_without_components_json(
     assert no_subprocess == []
 
 
-def test_set_style_exits_2_on_unknown_slug_listing_the_seven(
+def test_set_style_exits_2_on_unknown_slug_listing_every_slug(
     tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
 ) -> None:
     set_style = _load_script("set_style")
@@ -221,7 +224,7 @@ def test_set_style_accepts_an_untouched_generated_file(
     set_style = _load_script("set_style")
     app = _make_app(tmp_path, _real_tokens())
     assert set_style.main([str(app), "calm-paper"]) == 0
-    assert [name for name, _ in recorded_steps] == ["style", "tokens", "build", "dev"]
+    assert [name for name, _ in recorded_steps] == ["style", "tokens", "press", "build", "dev"]
     out = capsys.readouterr().out
     assert f"app: {app}" in out
     assert "style: calm-paper" in out
@@ -237,7 +240,7 @@ def test_set_style_force_skips_the_hand_edit_check(
     app = _make_app(tmp_path, tokens)
     assert set_style.main([str(app), "calm-paper", "--force"]) == 0
     assert recorded_steps[0] == ("style", "calm-paper")
-    assert [name for name, _ in recorded_steps] == ["style", "tokens", "build", "dev"]
+    assert [name for name, _ in recorded_steps] == ["style", "tokens", "press", "build", "dev"]
 
 
 def test_set_style_still_requires_the_tokens_file_with_force(
@@ -544,3 +547,85 @@ def test_tokens_step_rewires_fonts_even_when_the_import_is_already_present(
     text = _index_css(app).read_text(encoding="utf-8")
     assert text.count("styles/mini-tokens.css") == 1
     assert "--font-sans: var(--mini-font-sans);" in text
+
+
+# --- press_step ---
+
+PRESS_REL = Path("src") / "lib" / "mini" / "press.ts"
+PRESS_IMPORT = 'import "./lib/mini/press"'
+PRESS_SOURCE = SKILL_DIR / "gallery" / "src" / "lib" / "mini" / "press.ts"
+
+MAIN_TSX = """\
+import { StrictMode } from "react"
+import { createRoot } from "react-dom/client"
+
+import "./index.css"
+import App from "./App.tsx"
+"""
+
+
+def _press_app(tmp_path: Path, main: Any = MAIN_TSX) -> Path:
+    app = tmp_path / "app"
+    (app / "src").mkdir(parents=True)
+    if main is not None:
+        (app / "src" / "main.tsx").write_text(main, encoding="utf-8")
+    return app
+
+
+def _main_lines(app: Path) -> List[str]:
+    return (app / "src" / "main.tsx").read_text(encoding="utf-8").splitlines()
+
+
+def test_press_step_copies_the_module_when_absent(
+    tmp_path: Path, no_subprocess: List[str], capsys: pytest.CaptureFixture
+) -> None:
+    app = _press_app(tmp_path)
+    assert _mini().press_step(app) == 0
+    assert (app / PRESS_REL).read_bytes() == PRESS_SOURCE.read_bytes()
+    assert "+ [press]" in capsys.readouterr().out
+    assert no_subprocess == []
+
+
+def test_press_step_leaves_an_existing_module_alone(tmp_path: Path) -> None:
+    app = _press_app(tmp_path)
+    (app / PRESS_REL).parent.mkdir(parents=True)
+    (app / PRESS_REL).write_bytes(b"// edited by hand\n")
+    assert _mini().press_step(app) == 0
+    assert (app / PRESS_REL).read_bytes() == b"// edited by hand\n"
+
+
+def test_press_step_adds_the_import_once_after_index_css(tmp_path: Path) -> None:
+    app = _press_app(tmp_path)
+    assert _mini().press_step(app) == 0
+    lines = _main_lines(app)
+    assert lines.count(PRESS_IMPORT) == 1
+    assert lines[lines.index('import "./index.css"') + 1] == PRESS_IMPORT
+    assert [line for line in lines if line != PRESS_IMPORT] == MAIN_TSX.splitlines()
+
+
+def test_press_step_adds_the_import_first_without_an_index_css_import(tmp_path: Path) -> None:
+    body = 'import App from "./App.tsx"\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert _main_lines(app) == [PRESS_IMPORT, 'import App from "./App.tsx"']
+
+
+def test_press_step_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    app = _press_app(tmp_path)
+    assert _mini().press_step(app) == 0
+    main = app / "src" / "main.tsx"
+    once = main.read_bytes()
+    capsys.readouterr()
+    before = main.stat().st_mtime_ns
+    assert _mini().press_step(app) == 0
+    assert main.read_bytes() == once
+    assert main.stat().st_mtime_ns == before
+    assert once.decode("utf-8").count(PRESS_IMPORT) == 1
+
+
+def test_press_step_fails_without_main_tsx(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    app = _press_app(tmp_path, None)
+    assert _mini().press_step(app) == 1
+    assert "step press failed" in capsys.readouterr().err
