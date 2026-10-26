@@ -1,6 +1,6 @@
 # Sentry blueprint
 
-The build plan for a close clone of an error tracker studied from Sentry. Evidence is in the [Sentry study note](../apps/sentry.md). The clone matches the screens, layout, navigation, keys and states below and uses one of the skill's styles (Neutral House by default). Its UI never says "Sentry" and uses no Sentry copy, logos or illustrations.
+The build plan for a close clone of an error tracker studied from Sentry. Evidence is in the [Sentry study note](../apps/sentry.md). The clone matches the screens, layout, navigation, keys and states below and uses one of the skill's styles (Ink Panel by default). Its UI never says "Sentry" and uses no Sentry copy, logos or illustrations.
 
 ## Core jobs
 

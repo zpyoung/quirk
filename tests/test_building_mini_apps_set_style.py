@@ -18,7 +18,7 @@ SKILL_DIR = REPO_ROOT / "skills" / "building-mini-apps"
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 
 SLUGS = ("neutral-house", "calm-paper", "airy-white", "cool-tool",
-         "dense-dark", "glass-launcher", "split-tone")
+         "dense-dark", "glass-launcher", "split-tone", "ink-panel")
 
 HEADER_PREFIX = "/* mini-style: "
 
