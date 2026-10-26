@@ -879,6 +879,7 @@ GOOD_VALUES = [
     ("transition", "opacity 0s linear"), ("transition", "color 0.2s ease-in-out"),
     ("transition", "transform 1ms, box-shadow 2ms, background-color 3ms, border-color 4ms"),
     ("transition-duration", "0s"), ("transition-duration", "200ms"), ("transition-duration", "0.1s"),
+    ("translate", "none"),
 ]
 BAD_VALUES = [
     ("transition", "all 2s", "must name what it moves"),
@@ -891,6 +892,8 @@ BAD_VALUES = [
     ("transition", "transform 120ms, ", "<property> <time>"),
     ("transition", "transform 1ms, box-shadow 1ms, opacity 1ms, color 1ms, border-color 1ms", "at most four"),
     ("transition-duration", "201ms", "at most 200ms"),
+    ("translate", "1px", "none"),
+    ("translate", "1px 2px", "none"),
     ("transition-duration", "fast", "time"),
     ("transform", "scale(2)", "may only translate"),
     ("transform", "rotate(1deg)", "may only translate"),
@@ -966,7 +969,7 @@ def test_unknown_rule_key_is_rejected(styles: ModuleType, neutral: Dict[str, Any
 def test_motion_with_forced_colors_is_rejected(
     styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
 ) -> None:
-    rule = dict(_rule('[data-slot="button"]', transition="none"), media="forced-colors")
+    rule = dict(_rule('[data-slot="button"]', transition="transform 120ms"), media="forced-colors")
     message = _reject_rule(styles, neutral, tmp_path, rule)
     assert "forced-colors" in message
 
@@ -1055,6 +1058,55 @@ def test_wrapped_rules_render_in_the_right_media_block_with_the_prefix_inside(
         assert f"\n{selector} {{" not in css
 
 
+@pytest.mark.parametrize("declarations", [
+    {"transition": "none"},
+    {"transform": "none", "border_color": "var(--foreground)"},
+    {"translate": "none", "transition": "none", "box_shadow": "3px 3px 0 var(--foreground)"},
+    {"transition_duration": "0s"},
+])
+def test_motion_free_rules_are_not_wrapped_in_the_reduced_motion_query(
+    styles: ModuleType, neutral: Dict[str, Any], declarations: Dict[str, str]
+) -> None:
+    rule = _rule('[data-slot="button"]', **declarations)
+    for css in _render_both(styles, neutral, [rule]).values():
+        assert "@media" not in css
+
+
+def test_motion_free_rule_keeps_its_own_media_query(styles: ModuleType, neutral: Dict[str, Any]) -> None:
+    rule = dict(_rule('[data-slot="button"]:hover', transition="none"), media="hover")
+    for css in _render_both(styles, neutral, [rule]).values():
+        assert "@media (hover: hover) {" in css
+        assert "prefers-reduced-motion" not in css
+
+
+def test_motion_free_rule_may_use_forced_colors(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
+) -> None:
+    rule = dict(_rule('[data-slot="button"]', transform="none"), media="forced-colors")
+    _load_with_rule(styles, neutral, tmp_path, rule)
+
+
+def test_real_motion_stays_wrapped_beside_a_motion_free_declaration(
+    styles: ModuleType, neutral: Dict[str, Any]
+) -> None:
+    rule = _rule('[data-slot="button"]', transition_duration="0s", transform="translate(3px, 3px)")
+    for css in _render_both(styles, neutral, [rule]).values():
+        assert f"@media {MOTION_QUERY} {{" in css
+
+
+def test_ink_panel_base_control_rules_are_motion_free_and_precede_the_wrapped_transition() -> None:
+    css = (STYLES_DIR / "dist" / "ink-panel.css").read_text(encoding="utf-8")
+    for selector in ('[data-slot="button"][data-variant="default"]', '[data-slot="toggle"]',
+                     '[data-slot="toggle-group-item"]'):
+        plain = re.search(
+            rf"^{re.escape(selector)} \{{[^}}]*\btranslate: none;[^}}]*\btransition: none;[^}}]*\}}$", css, re.M)
+        wrapped = re.search(
+            rf"^@media \(prefers-reduced-motion: no-preference\) \{{\n  {re.escape(selector)} \{{ transition: "
+            rf"transform 120ms ease-out, box-shadow 120ms ease-out; \}}", css, re.M)
+        assert plain and wrapped, selector
+        assert plain.start() < wrapped.start(), selector
+
+
 def test_a_plain_rule_is_not_wrapped_and_a_wrapped_one_does_not_leak(
     styles: ModuleType, neutral: Dict[str, Any]
 ) -> None:
@@ -1073,7 +1125,7 @@ def test_each_wrapped_entry_gets_its_own_block_in_source_order(
     rules = [
         _rule('[data-slot="button"]', opacity="1"),
         dict(_rule('[data-slot="button"]', box_shadow="none"), media="hover"),
-        _rule('[data-slot="toggle"]', transition="none"),
+        _rule('[data-slot="toggle"]', transition="transform 120ms"),
         _rule('[data-slot="toggle"]', opacity="1"),
         dict(_rule('[data-slot="card"]', outline_width="2px"), media="forced-colors"),
     ]

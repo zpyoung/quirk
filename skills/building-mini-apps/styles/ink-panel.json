@@ -98,7 +98,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {
@@ -109,7 +111,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {
@@ -120,7 +124,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {
@@ -131,7 +137,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {
@@ -142,7 +150,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {
@@ -153,7 +163,9 @@
         "border-style": "solid",
         "border-color": "var(--foreground)",
         "border-radius": "6px",
-        "box-shadow": "3px 3px 0 var(--foreground)"
+        "box-shadow": "3px 3px 0 var(--foreground)",
+        "translate": "none",
+        "transition": "none"
       }
     },
     {

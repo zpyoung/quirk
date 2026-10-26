@@ -45,8 +45,10 @@ EXTRA_CSS_PROPERTIES = frozenset((
     "box-shadow", "backdrop-filter", "-webkit-backdrop-filter", "font-family", "font-weight",
     "letter-spacing", "opacity", "outline-color", "border-width", "border-style", "outline-width",
     "outline-style", "outline-offset", "transform", "transition", "transition-duration",
+    "translate",
 ))
 MOTION_PROPERTIES = frozenset(("transform", "transition", "transition-duration"))
+MOTION_FREE_VALUES = {"transform": "none", "transition": "none"}
 MEDIA_KEYS = ("hover", "forced-colors")
 RULE_KEYS = frozenset(("selector", "mode", "declarations"))
 FONT_PACKAGE_RE = re.compile(r"^@fontsource(-variable)?/[a-z0-9-]+$")
@@ -377,6 +379,10 @@ def _transform_problem(value: str) -> Optional[str]:
     return None
 
 
+def _translate_problem(value: str) -> Optional[str]:
+    return None if value == "none" else f"may only be none: {value!r}"
+
+
 def _transition_problem(value: str) -> Optional[str]:
     if value == "none":
         return None
@@ -405,17 +411,34 @@ VALUE_GRAMMARS = {
     "outline-style": _line_style_problem,
     "transform": _transform_problem,
     "transition": _transition_problem,
+    "translate": _translate_problem,
     "transition-duration": _duration_problem,
 }
+
+
+def _is_motion_free(prop: str, value: str) -> bool:
+    """True when a motion declaration's value removes motion instead of adding it."""
+    if prop == "transition-duration":
+        return _time_ms(value.strip()) == 0
+    return value.strip() == MOTION_FREE_VALUES.get(prop)
+
+
+def _has_motion(declarations: Mapping) -> bool:
+    return any(
+        prop in MOTION_PROPERTIES and not _is_motion_free(prop, str(value))
+        for prop, value in declarations.items()
+    )
 
 
 def _media_query(selector: str, declarations: Mapping, media: Optional[str]) -> Optional[str]:
     """The `@media` query an extra_css entry renders inside, or None when it renders unwrapped.
 
     A motion property always waits for `prefers-reduced-motion: no-preference`, and for hover
-    capability when the selector uses `:hover` or the entry asks for `media: "hover"`.
+    capability when the selector uses `:hover` or the entry asks for `media: "hover"`. A value that
+    removes motion (`transform: none`, `transition: none`, a zero `transition-duration`) is not
+    motion: a rule with no other motion renders as a plain rule so it also applies under reduce.
     """
-    if MOTION_PROPERTIES.intersection(declarations):
+    if _has_motion(declarations):
         if media == "forced-colors":
             raise StyleError("a motion property cannot be combined with media forced-colors")
         if media == "hover" or ":hover" in selector:

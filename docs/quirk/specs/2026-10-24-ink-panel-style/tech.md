@@ -73,11 +73,17 @@ motion property renders exactly as today, which is what keeps the seven existing
 | `transform` | `none`, or `translate(<x>, <y>)` where each is `0` or a `px` length with absolute value at most `8px` |
 | `transition` | `none`, or one to four comma-separated items `<property> <time>[ <easing>]`; property one of `transform`, `box-shadow`, `background-color`, `border-color`, `color`, `opacity`; time `0s`, or ms/s up to `200ms`; easing one of `ease`, `ease-in`, `ease-out`, `ease-in-out`, `linear` |
 | `transition-duration` | one time, `0s` up to `200ms` |
+| `translate` | `none` only |
 
 Any other value for these properties is a `StyleError` naming the source, the rule index, the property
 and the reason (for example `transition: all 2s` → "must name what it moves"; `transition: transform
-2s` → "at most 200ms"; `transform: scale(2)` → "may only translate"). `MOTION_PROPERTIES = {"transform",
-"transition", "transition-duration"}`.
+2s` → "at most 200ms"; `transform: scale(2)` → "may only translate"; `translate: 1px` → "may only be none").
+`MOTION_PROPERTIES = {"transform", "transition", "transition-duration"}`.
+
+`CONTRACT:` a motion declaration is motion-free when its value removes motion: `transform: none`,
+`transition: none`, or a zero `transition-duration` (`0s`, `0ms`). `translate: none` is always
+motion-free, so `translate` is allowed but is not in `MOTION_PROPERTIES`. A rule is a motion rule only
+when at least one of its motion declarations is not motion-free.
 
 ### Rendering
 
@@ -100,7 +106,11 @@ where `<query>` is, in this order of precedence:
 | `media: "hover"`, no motion | `(hover: hover)` |
 | `media: "forced-colors"`, no motion | `(forced-colors: active)` |
 
-A motion property together with `media: "forced-colors"` is a `StyleError`. The mode prefix
+A motion-free declaration does not count as a motion property in this table: a rule whose motion
+declarations are all motion-free is not wrapped in the reduced-motion query and renders as a plain rule,
+or under its own `media` query. That keeps `transition: none` in force under reduced motion, where
+shadcn's `transition-all` would otherwise apply (SC-8). A motion property together with `media:
+"forced-colors"` is a `StyleError`; a motion-free one is not. The mode prefix
 (`html:not(.dark) `, `html.dark `, or the gallery's `html[data-mini-style="<slug>"]…`) goes inside the
 media block, on the selector, exactly as for an unwrapped entry. Each wrapped entry gets its own media
 block, in source order, so rule order is preserved.
@@ -185,8 +195,12 @@ The rest (`secondary`, `muted`, `destructive`, `chart-*`, `mini-*`) follow the p
 - **Motion** (the four button variants, `toggle`, `toggle-group-item`): base `transition: transform
   120ms ease-out, box-shadow 120ms ease-out`; `:hover` `transform: translate(-1px, -1px)`, `box-shadow:
   4px 4px 0 var(--foreground)`; `[data-mini-pressed]` `transform: translate(3px, 3px)`, `box-shadow:
-  none`, `transition-duration: 0s`. The pressed rule must also neutralize shadcn's
-  `active:translate-y-px` (`transform` set by our rule wins because the tokens file is unlayered).
+  none`, `transition-duration: 0s`. The base outline and shadow rule of each of these controls also sets
+  `translate: none` and `transition: none` as motion-free declarations. `translate: none` cancels
+  shadcn's `active:translate-y-px`, which Tailwind compiles to the `translate` property, so the press
+  nudge does not stack; `transition: none` cancels shadcn's `transition-all` under reduced motion. Both
+  win because the tokens file is unlayered. These base rules come before the wrapped `transition` rule,
+  so with no preference the wrapped `transition` wins at equal specificity by source order.
 - **Non-motion hover and press** (so SC-8 still reads): a `media: "hover"` rule growing the shadow to
   4px, and a plain `[data-mini-pressed]` rule removing the shadow.
 - **High contrast** (`media: "forced-colors"`): each selected-row state gets `outline-width: 2px`,
