@@ -220,3 +220,11 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: L
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-28: A panel hook for list containers so heavy styles reach them
+- **Deferred**: 2026-10-26
+- **Session context**: Ink Panel style gallery pass (docs/quirk/specs/2026-10-24-ink-panel-style/)
+- **Why deferred**: Ink Panel draws its 2px ink outline and offset shadow through the `data-mini="panel"` / `"surface"` hooks and shadcn `data-slot` attributes. Some blocks' main list box (list-peek's list, for one) carries neither, so it keeps a thin border while buttons and menus around it are inked. Fixing it means adding a hook role to those containers in gallery/src/patterns/, which the styles work fences off, and checking every style still looks right with the new hook.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned
