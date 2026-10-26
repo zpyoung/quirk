@@ -629,3 +629,42 @@ def test_press_step_fails_without_main_tsx(
     app = _press_app(tmp_path, None)
     assert _mini().press_step(app) == 1
     assert "step press failed" in capsys.readouterr().err
+
+
+def test_press_step_adds_a_real_import_when_only_a_comment_mentions_it(tmp_path: Path) -> None:
+    body = 'import "./index.css"\n// import "./lib/mini/press"\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    assert _main_lines(app) == [
+        'import "./index.css"',
+        PRESS_IMPORT,
+        '// import "./lib/mini/press"',
+    ]
+
+
+def test_press_step_does_not_count_an_import_inside_a_string(tmp_path: Path) -> None:
+    body = 'import "./index.css"\nconst note = \'import "./lib/mini/press"\'\n'
+    app = _press_app(tmp_path, body)
+    assert _mini().press_step(app) == 0
+    lines = _main_lines(app)
+    assert lines.count(PRESS_IMPORT) == 1
+    assert lines[1] == PRESS_IMPORT
+
+
+@pytest.mark.parametrize(
+    "import_line",
+    [
+        "import './lib/mini/press'",
+        'import "./lib/mini/press.ts"',
+        'import "./lib/mini/press.js";',
+        '  import "./lib/mini/press";',
+    ],
+)
+def test_press_step_accepts_equivalent_active_import_forms(tmp_path: Path, import_line: str) -> None:
+    body = f'import "./index.css"\n{import_line}\n'
+    app = _press_app(tmp_path, body)
+    main = app / "src" / "main.tsx"
+    before = main.stat().st_mtime_ns
+    assert _mini().press_step(app) == 0
+    assert main.read_text(encoding="utf-8") == body
+    assert main.stat().st_mtime_ns == before

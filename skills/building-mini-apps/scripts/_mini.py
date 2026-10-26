@@ -31,6 +31,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PRESS_REL = Path("src") / "lib" / "mini" / "press.ts"
 PRESS_SOURCE = SKILL_ROOT / "gallery" / PRESS_REL
 PRESS_IMPORT = 'import "./lib/mini/press"'
+PRESS_IMPORT_RE = re.compile(r"""^[ \t]*import[ \t]+["']\./lib/mini/press(?:\.ts|\.js)?["'];?[ \t]*$""", re.MULTILINE)
 INDEX_CSS_IMPORT_RE = re.compile(r"""^import\s+["']\./index\.css["'];?[ \t]*$""", re.MULTILINE)
 TOKENS_IMPORT = '@import "./styles/mini-tokens.css";'
 TOP_LEVEL_IMPORT_RE = re.compile(r"^@import\b")
@@ -294,7 +295,8 @@ def tokens_step(app: Path) -> int:
 def press_step(app: Path) -> int:
     """Install the press marker: copy `src/lib/mini/press.ts` when absent and import it from `src/main.tsx`.
 
-    Idempotent. An existing module is never overwritten and a `main.tsx` that already imports it is
+    Idempotent. An existing module is never overwritten and a `main.tsx` that already has an active
+    top-level `import "./lib/mini/press"` line (a comment or string mentioning it does not count) is
     not rewritten. The import goes on the line after `import "./index.css"`, else first in the file.
     """
     main = app / "src" / "main.tsx"
@@ -307,7 +309,7 @@ def press_step(app: Path) -> int:
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(PRESS_SOURCE.read_bytes())
-        if "./lib/mini/press" not in text:
+        if PRESS_IMPORT_RE.search(text) is None:
             anchor = INDEX_CSS_IMPORT_RE.search(text)
             if anchor is None:
                 text = PRESS_IMPORT + "\n" + text
