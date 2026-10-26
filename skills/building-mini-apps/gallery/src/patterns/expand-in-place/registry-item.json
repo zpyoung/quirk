@@ -1,0 +1,17 @@
+{
+  "name": "expand-in-place",
+  "title": "Expand in place",
+  "description": "A one-line list row opens in place into an editable card; optional fields stay hidden behind an icon strip until asked for.",
+  "registryDependencies": [
+    "button",
+    "input",
+    "textarea",
+    "popover",
+    "calendar",
+    "checkbox",
+    "badge",
+    "tooltip",
+    "kbd",
+    "scroll-area"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "action-palette",
+  "title": "Action palette",
+  "description": "Searchable list where one row is selected and Cmd+K opens a panel of actions for it, with keyboard chords, sub-menus and a footer hint.",
+  "dependencies": ["react-hotkeys-hook", "sonner"],
+  "registryDependencies": ["badge", "button", "checkbox", "command", "input", "kbd", "scroll-area", "separator", "toggle-group", "tooltip"]
+}

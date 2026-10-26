@@ -1,0 +1,1354 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "mini-apps",
+  "homepage": "https://github.com/zpyoung/quirk/tree/main/skills/building-mini-apps",
+  "items": [
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "base",
+      "type": "registry:block",
+      "title": "Mini-app base",
+      "description": "Neutral House style tokens, IndexedDB collection store with JSON export/import, app shell, and empty/loading/error states.",
+      "dependencies": [
+        "idb-keyval",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "button",
+        "skeleton",
+        "sonner",
+        "tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/styles/mini-tokens.css",
+          "type": "registry:file",
+          "target": "src/styles/mini-tokens.css"
+        },
+        {
+          "path": "src/lib/mini/store.ts",
+          "type": "registry:file",
+          "target": "src/lib/mini/store.ts"
+        },
+        {
+          "path": "src/components/mini/app-shell.tsx",
+          "type": "registry:file",
+          "target": "src/components/mini/app-shell.tsx"
+        },
+        {
+          "path": "src/components/mini/states.tsx",
+          "type": "registry:file",
+          "target": "src/components/mini/states.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "action-palette",
+      "title": "Action palette",
+      "description": "Searchable list where one row is selected and Cmd+K opens a panel of actions for it, with keyboard chords, sub-menus and a footer hint.",
+      "dependencies": [
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "checkbox",
+        "command",
+        "input",
+        "kbd",
+        "scroll-area",
+        "separator",
+        "toggle-group",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/action-palette/action-palette.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/action-palette.tsx"
+        },
+        {
+          "path": "src/patterns/action-palette/action-panel.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/action-panel.tsx"
+        },
+        {
+          "path": "src/patterns/action-palette/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/demo.tsx"
+        },
+        {
+          "path": "src/patterns/action-palette/format-shortcut.ts",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/format-shortcut.ts"
+        },
+        {
+          "path": "src/patterns/action-palette/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/index.ts"
+        },
+        {
+          "path": "src/patterns/action-palette/selection.ts",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/selection.ts"
+        },
+        {
+          "path": "src/patterns/action-palette/shortcut-keys.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/shortcut-keys.tsx"
+        },
+        {
+          "path": "src/patterns/action-palette/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/action-palette/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "aggregate-builder",
+      "title": "Aggregate builder",
+      "description": "A rail of Visualize, Group by and Sort by controls driving an SVG chart over time buckets, one series per group, and a table with Samples and Aggregates tabs.",
+      "registryDependencies": [
+        "button",
+        "select",
+        "table",
+        "tabs",
+        "toggle-group"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/aggregate-builder/aggregate-builder.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate-builder.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/aggregate-picker.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate-picker.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/aggregate.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/aggregate.ts"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/demo.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/field-picker.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/field-picker.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/index.ts"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/query-rail.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/query-rail.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/results-table.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/results-table.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/series-chart.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/series-chart.tsx"
+        },
+        {
+          "path": "src/patterns/aggregate-builder/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/aggregate-builder/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "assisted-notes",
+      "title": "Assisted notes",
+      "description": "A note page where your own lines stay primary and generated lines sit beside them in a quieter style, each with a way back to the excerpt it came from.",
+      "dependencies": [
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "kbd",
+        "popover",
+        "scroll-area",
+        "textarea",
+        "toggle-group",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/assisted-notes/assisted-notes.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/assisted-notes.tsx"
+        },
+        {
+          "path": "src/patterns/assisted-notes/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/demo.tsx"
+        },
+        {
+          "path": "src/patterns/assisted-notes/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/index.ts"
+        },
+        {
+          "path": "src/patterns/assisted-notes/note-rows.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/note-rows.tsx"
+        },
+        {
+          "path": "src/patterns/assisted-notes/note-view.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/note-view.tsx"
+        },
+        {
+          "path": "src/patterns/assisted-notes/segments.ts",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/segments.ts"
+        },
+        {
+          "path": "src/patterns/assisted-notes/source-popover.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/source-popover.tsx"
+        },
+        {
+          "path": "src/patterns/assisted-notes/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/assisted-notes/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "bulk-select",
+      "title": "Bulk select",
+      "description": "Dense table of multi-line rows where selecting rows turns the header into an action bar in place, with an indeterminate select-all box, actions that disable themselves with a reason, a trend sparkline cell and a searchable assignee popover.",
+      "registryDependencies": [
+        "badge",
+        "button",
+        "command",
+        "dropdown-menu",
+        "input",
+        "popover",
+        "skeleton",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/bulk-select/action-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/action-bar.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/assignee-cell.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/assignee-cell.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/assignees.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/assignees.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/bulk-select.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/bulk-select.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/demo-data.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/demo-data.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/demo.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/indeterminate-checkbox.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/indeterminate-checkbox.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/index.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/selection.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/selection.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/trend-cell.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/trend-cell.tsx"
+        },
+        {
+          "path": "src/patterns/bulk-select/trend.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/trend.ts"
+        },
+        {
+          "path": "src/patterns/bulk-select/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/bulk-select/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "command-center",
+      "title": "Command center",
+      "description": "Status tiles grouped in sections, with an icon that toggles and a body that opens details, beside a needs-you queue to acknowledge, snooze and resolve, with sparklines and an optional refresh loop.",
+      "dependencies": [
+        "date-fns",
+        "lucide-react",
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "calendar",
+        "collapsible",
+        "dialog",
+        "dropdown-menu",
+        "kbd",
+        "popover",
+        "scroll-area",
+        "textarea",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/command-center/attention-queue.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/attention-queue.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/attention.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/attention.ts"
+        },
+        {
+          "path": "src/patterns/command-center/badge-row.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/badge-row.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/command-center.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/command-center.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/confirm-dialog.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/confirm-dialog.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/demo.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/format.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/format.ts"
+        },
+        {
+          "path": "src/patterns/command-center/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/index.ts"
+        },
+        {
+          "path": "src/patterns/command-center/item-detail.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/item-detail.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/snooze-menu.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/snooze-menu.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/sparkline.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/sparkline.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-board.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-board.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-dialog.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-dialog.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/tile-shared.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/tile-shared.tsx"
+        },
+        {
+          "path": "src/patterns/command-center/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/types.ts"
+        },
+        {
+          "path": "src/patterns/command-center/use-command-center.ts",
+          "type": "registry:file",
+          "target": "src/patterns/command-center/use-command-center.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "conditional-status",
+      "title": "Conditional status",
+      "description": "A split button whose primary half changes state now and whose menu offers conditional variants, with a pure lifecycle that regresses a resolved item or escalates an archived one when its condition is met.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "popover"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/conditional-status/condition-menu.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/condition-menu.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/conditional-status.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/conditional-status.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/demo.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/index.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/models.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/models.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/split-button.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/split-button.tsx"
+        },
+        {
+          "path": "src/patterns/conditional-status/status.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/status.ts"
+        },
+        {
+          "path": "src/patterns/conditional-status/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/conditional-status/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "doc-collections",
+      "title": "Doc collections",
+      "description": "A page of text and collection blocks; opening a row shows its properties above a free-text body.",
+      "dependencies": [
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "checkbox",
+        "command",
+        "input",
+        "popover",
+        "separator",
+        "textarea"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/doc-collections/breadcrumb.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/breadcrumb.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/collection-block.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/collection-block.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/column.ts",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/column.ts"
+        },
+        {
+          "path": "src/patterns/doc-collections/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/demo.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/doc-collections.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/doc-collections.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/index.ts"
+        },
+        {
+          "path": "src/patterns/doc-collections/property-value.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/property-value.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/record-page.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/record-page.tsx"
+        },
+        {
+          "path": "src/patterns/doc-collections/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/types.ts"
+        },
+        {
+          "path": "src/patterns/doc-collections/use-draft.ts",
+          "type": "registry:file",
+          "target": "src/patterns/doc-collections/use-draft.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "event-timeline",
+      "title": "Event timeline",
+      "description": "Vertical time-ordered list of typed entries with search, a type filter and an order control, plus an optional playhead that dims later entries, follows playback and seeks when a time is clicked.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "select"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/event-timeline/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/demo.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/entry-row.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/entry-row.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/event-timeline.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/event-timeline.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/index.ts"
+        },
+        {
+          "path": "src/patterns/event-timeline/playhead-divider.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/playhead-divider.tsx"
+        },
+        {
+          "path": "src/patterns/event-timeline/timeline.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/timeline.ts"
+        },
+        {
+          "path": "src/patterns/event-timeline/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/event-timeline/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "expand-in-place",
+      "title": "Expand in place",
+      "description": "A one-line list row opens in place into an editable card; optional fields stay hidden behind an icon strip until asked for.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "textarea",
+        "popover",
+        "calendar",
+        "checkbox",
+        "badge",
+        "tooltip",
+        "kbd",
+        "scroll-area"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/expand-in-place/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/demo.tsx"
+        },
+        {
+          "path": "src/patterns/expand-in-place/expand-card.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/expand-card.tsx"
+        },
+        {
+          "path": "src/patterns/expand-in-place/expand-list.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/expand-list.tsx"
+        },
+        {
+          "path": "src/patterns/expand-in-place/fields.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/fields.tsx"
+        },
+        {
+          "path": "src/patterns/expand-in-place/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/index.ts"
+        },
+        {
+          "path": "src/patterns/expand-in-place/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/expand-in-place/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "inspector",
+      "title": "Inspector",
+      "description": "Item tree, canvas slot and a properties panel whose fields follow the selection, with multi-select Mixed values, inline rename and undoable delete.",
+      "dependencies": [
+        "lucide-react",
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "button",
+        "checkbox",
+        "collapsible",
+        "input",
+        "kbd",
+        "popover",
+        "resizable",
+        "scroll-area",
+        "select",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/inspector/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/demo.tsx"
+        },
+        {
+          "path": "src/patterns/inspector/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/index.ts"
+        },
+        {
+          "path": "src/patterns/inspector/inspector.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/inspector.tsx"
+        },
+        {
+          "path": "src/patterns/inspector/item-tree.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/item-tree.tsx"
+        },
+        {
+          "path": "src/patterns/inspector/properties-panel.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/properties-panel.tsx"
+        },
+        {
+          "path": "src/patterns/inspector/shared-value.ts",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/shared-value.ts"
+        },
+        {
+          "path": "src/patterns/inspector/tree-model.ts",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/tree-model.ts"
+        },
+        {
+          "path": "src/patterns/inspector/truncated-text.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/truncated-text.tsx"
+        },
+        {
+          "path": "src/patterns/inspector/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/inspector/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "list-peek",
+      "title": "List peek",
+      "description": "Dense one-line-per-row list with j/k highlight and a click-or-Space peek side panel that follows the highlight.",
+      "registryDependencies": [
+        "badge",
+        "button",
+        "input",
+        "scroll-area"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/list-peek/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/list-peek/demo.tsx"
+        },
+        {
+          "path": "src/patterns/list-peek/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/list-peek/index.ts"
+        },
+        {
+          "path": "src/patterns/list-peek/list-peek.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/list-peek/list-peek.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "mini-full",
+      "title": "Mini and full quick-add panel",
+      "description": "A quick-add input with a live parse card, month grid and upcoming list that expands into a full list or month view of the same items.",
+      "dependencies": [
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "card",
+        "input",
+        "kbd",
+        "separator",
+        "toggle-group",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/mini-full/dates.ts",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/dates.ts"
+        },
+        {
+          "path": "src/patterns/mini-full/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/demo.tsx"
+        },
+        {
+          "path": "src/patterns/mini-full/full-month.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/full-month.tsx"
+        },
+        {
+          "path": "src/patterns/mini-full/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/index.ts"
+        },
+        {
+          "path": "src/patterns/mini-full/mini-full.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/mini-full.tsx"
+        },
+        {
+          "path": "src/patterns/mini-full/month-grid.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/month-grid.tsx"
+        },
+        {
+          "path": "src/patterns/mini-full/parse.ts",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/parse.ts"
+        },
+        {
+          "path": "src/patterns/mini-full/quick-add.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/quick-add.tsx"
+        },
+        {
+          "path": "src/patterns/mini-full/upcoming-list.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/mini-full/upcoming-list.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "query-tokens",
+      "title": "Query tokens",
+      "description": "Search box where key:value filters become removable chips, with a key and value popover, recent searches, plain-text fallback and an opt-in URL param.",
+      "dependencies": [
+        "lucide-react",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "kbd"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/query-tokens/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/demo.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/index.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/query-tokens.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/query-tokens.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/query.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/query.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/suggestion-popover.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/suggestion-popover.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/suggestions.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/suggestions.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/token-chip.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/token-chip.tsx"
+        },
+        {
+          "path": "src/patterns/query-tokens/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/types.ts"
+        },
+        {
+          "path": "src/patterns/query-tokens/use-query-state.ts",
+          "type": "registry:file",
+          "target": "src/patterns/query-tokens/use-query-state.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "replay-player",
+      "title": "Replay player",
+      "description": "Playback surface for a recorded sequence of snapshots, with transport controls, a marker lane over a seek slider, a speed stepper and tabs of timed lists that follow the playhead and seek on click.",
+      "registryDependencies": [
+        "button",
+        "input",
+        "tabs"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/replay-player/control-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/control-bar.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/demo.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/index.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/marker-lane.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/marker-lane.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/playback.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/playback.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/replay-player.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/replay-player.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/seek-slider.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/seek-slider.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/speed-stepper.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/speed-stepper.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/timed-list.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/timed-list.tsx"
+        },
+        {
+          "path": "src/patterns/replay-player/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/types.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/use-playback.ts",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/use-playback.ts"
+        },
+        {
+          "path": "src/patterns/replay-player/viewport.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/replay-player/viewport.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "span-waterfall",
+      "title": "Span waterfall",
+      "description": "Tree of timed rows beside a shared time axis with colored duration bars, squeezed idle gaps, error badges, search, and a resizable side panel with pinnable attribute columns.",
+      "dependencies": [
+        "lucide-react",
+        "react-hotkeys-hook"
+      ],
+      "registryDependencies": [
+        "button",
+        "input",
+        "resizable",
+        "scroll-area"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/span-waterfall/collapse-pill.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/collapse-pill.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/demo.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/duration-bar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/duration-bar.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/index.ts"
+        },
+        {
+          "path": "src/patterns/span-waterfall/span-panel.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/span-panel.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/span-waterfall.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/span-waterfall.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/time-axis.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/time-axis.tsx"
+        },
+        {
+          "path": "src/patterns/span-waterfall/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/types.ts"
+        },
+        {
+          "path": "src/patterns/span-waterfall/waterfall.ts",
+          "type": "registry:file",
+          "target": "src/patterns/span-waterfall/waterfall.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "stack-trace",
+      "title": "Stack trace",
+      "description": "Collapsible frames with numbered source excerpts, library frames folded into Show N more, a relevant/full toggle, an order control and chained exceptions.",
+      "registryDependencies": [
+        "badge",
+        "button",
+        "toggle-group"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/stack-trace/code-excerpt.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/code-excerpt.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/demo.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/frames.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/frames.ts"
+        },
+        {
+          "path": "src/patterns/stack-trace/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/index.ts"
+        },
+        {
+          "path": "src/patterns/stack-trace/stack-trace.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/stack-trace.tsx"
+        },
+        {
+          "path": "src/patterns/stack-trace/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/stack-trace/types.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "staged-table-edit",
+      "title": "Staged table edit",
+      "description": "An editable table where cell edits, new rows and deletions stay pending and tinted until one commit applies them or one discard throws them away.",
+      "dependencies": [
+        "sonner"
+      ],
+      "registryDependencies": [
+        "button",
+        "context-menu",
+        "dialog",
+        "input",
+        "kbd",
+        "popover",
+        "scroll-area",
+        "select",
+        "table",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/staged-table-edit/cell-editor.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/cell-editor.tsx"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/demo.tsx"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/index.ts"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/pending-preview.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/pending-preview.tsx"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/staged-table.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/staged-table.tsx"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/types.ts"
+        },
+        {
+          "path": "src/patterns/staged-table-edit/use-staged-edits.ts",
+          "type": "registry:file",
+          "target": "src/patterns/staged-table-edit/use-staged-edits.ts"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "view-switcher",
+      "title": "View switcher",
+      "description": "One set of records shown through named view tabs (table, board, list, calendar), each with its own filter and sort, and a record opening in a docked side panel.",
+      "dependencies": [
+        "react-hotkeys-hook",
+        "sonner"
+      ],
+      "registryDependencies": [
+        "button",
+        "checkbox",
+        "dialog",
+        "dropdown-menu",
+        "input",
+        "kbd",
+        "popover",
+        "select",
+        "table",
+        "tabs",
+        "tooltip",
+        "badge"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/view-switcher/apply-view.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/apply-view.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/board-layout.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/board-layout.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/calendar-layout.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/calendar-layout.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/confirm-dialog.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/confirm-dialog.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/dates.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/dates.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/demo.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/fields.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/fields.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/filter-chips.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/filter-chips.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/grouping.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/grouping.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/index.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/layout-shared.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/layout-shared.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/list-layout.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/list-layout.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/navigation.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/navigation.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/record-panel.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/record-panel.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/rule-editor.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/rule-editor.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/tab-strip.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/tab-strip.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/table-layout.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/table-layout.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/toolbar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/toolbar.tsx"
+        },
+        {
+          "path": "src/patterns/view-switcher/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/types.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/use-views.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/use-views.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/view-draft.ts",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/view-draft.ts"
+        },
+        {
+          "path": "src/patterns/view-switcher/view-switcher.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/view-switcher/view-switcher.tsx"
+        }
+      ]
+    },
+    {
+      "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+      "name": "workspace-panes",
+      "title": "Workspace panes",
+      "description": "Tabs and side-by-side groups over a sidebar of records, with a Structured and a Raw view of each record.",
+      "dependencies": [
+        "sonner"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "context-menu",
+        "dropdown-menu",
+        "input",
+        "kbd",
+        "resizable",
+        "scroll-area",
+        "separator",
+        "skeleton",
+        "textarea",
+        "toggle-group",
+        "tooltip"
+      ],
+      "type": "registry:block",
+      "files": [
+        {
+          "path": "src/patterns/workspace-panes/demo.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/demo.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/empty-pane.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/empty-pane.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/index.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/index.ts"
+        },
+        {
+          "path": "src/patterns/workspace-panes/item-list.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/item-list.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/layout.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/layout.ts"
+        },
+        {
+          "path": "src/patterns/workspace-panes/pane.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/pane.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/raw-editor.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/raw-editor.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/record-writers.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/record-writers.ts"
+        },
+        {
+          "path": "src/patterns/workspace-panes/sidebar.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/sidebar.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/tab-strip.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/tab-strip.tsx"
+        },
+        {
+          "path": "src/patterns/workspace-panes/types.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/types.ts"
+        },
+        {
+          "path": "src/patterns/workspace-panes/use-workspace-layout.ts",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/use-workspace-layout.ts"
+        },
+        {
+          "path": "src/patterns/workspace-panes/workspace-panes.tsx",
+          "type": "registry:file",
+          "target": "src/patterns/workspace-panes/workspace-panes.tsx"
+        }
+      ]
+    }
+  ]
+}

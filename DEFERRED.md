@@ -220,3 +220,18 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+## DEFER-27: Density as its own mini-app option
+- **Deferred**: 2026-10-23
+- **Session context**: brainstorming the building-mini-apps style presets (docs/quirk/specs/2026-10-23-mini-app-styles/logic.md)
+- **Why deferred**: a compact or comfortable density, independent of the chosen style, was wanted but left out of the styles work. Every block in skills/building-mini-apps/gallery/src/patterns/ hard-codes its sizes (h-10, px-3 and so on); only mini-full's upcoming list reads --mini-row-height. Density needs all ten blocks moved onto size tokens first, then a --density option on new_app.py and set_style.py.
+- **Estimated effort**: L
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-28: A panel hook for list containers so heavy styles reach them
+- **Deferred**: 2026-10-26
+- **Session context**: Ink Panel style gallery pass (docs/quirk/specs/2026-10-24-ink-panel-style/)
+- **Why deferred**: Ink Panel draws its 2px ink outline and offset shadow through the `data-mini="panel"` / `"surface"` hooks and shadcn `data-slot` attributes. Some blocks' main list box (list-peek's list, for one) carries neither, so it keeps a thin border while buttons and menus around it are inked. Fixing it means adding a hook role to those containers in gallery/src/patterns/, which the styles work fences off, and checking every style still looks right with the new hook.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned

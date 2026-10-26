@@ -1,0 +1,6 @@
+{
+  "name": "event-timeline",
+  "title": "Event timeline",
+  "description": "Vertical time-ordered list of typed entries with search, a type filter and an order control, plus an optional playhead that dims later entries, follows playback and seeks when a time is clicked.",
+  "registryDependencies": ["button", "input", "select"]
+}

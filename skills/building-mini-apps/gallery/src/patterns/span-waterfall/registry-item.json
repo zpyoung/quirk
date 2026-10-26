@@ -1,0 +1,7 @@
+{
+  "name": "span-waterfall",
+  "title": "Span waterfall",
+  "description": "Tree of timed rows beside a shared time axis with colored duration bars, squeezed idle gaps, error badges, search, and a resizable side panel with pinnable attribute columns.",
+  "dependencies": ["lucide-react", "react-hotkeys-hook"],
+  "registryDependencies": ["button", "input", "resizable", "scroll-area"]
+}

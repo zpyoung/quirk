@@ -1,0 +1,19 @@
+{
+  "name": "command-center",
+  "title": "Command center",
+  "description": "Status tiles grouped in sections, with an icon that toggles and a body that opens details, beside a needs-you queue to acknowledge, snooze and resolve, with sparklines and an optional refresh loop.",
+  "dependencies": ["date-fns", "lucide-react", "react-hotkeys-hook", "sonner"],
+  "registryDependencies": [
+    "badge",
+    "button",
+    "calendar",
+    "collapsible",
+    "dialog",
+    "dropdown-menu",
+    "kbd",
+    "popover",
+    "scroll-area",
+    "textarea",
+    "tooltip"
+  ]
+}
