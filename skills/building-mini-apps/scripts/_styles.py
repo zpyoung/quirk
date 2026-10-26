@@ -43,8 +43,12 @@ EXTRA_CSS_PROPERTIES = frozenset((
     "background", "background-color", "background-image", "color", "border-color",
     "border-left-color", "border-bottom-color", "border-left-width", "border-radius",
     "box-shadow", "backdrop-filter", "-webkit-backdrop-filter", "font-family", "font-weight",
-    "letter-spacing", "opacity", "outline-color",
+    "letter-spacing", "opacity", "outline-color", "border-width", "border-style", "outline-width",
+    "outline-style", "outline-offset", "transform", "transition", "transition-duration",
 ))
+MOTION_PROPERTIES = frozenset(("transform", "transition", "transition-duration"))
+MEDIA_KEYS = ("hover", "forced-colors")
+RULE_KEYS = frozenset(("selector", "mode", "declarations"))
 FONT_PACKAGE_RE = re.compile(r"^@fontsource(-variable)?/[a-z0-9-]+$")
 BANNED_FONTS = ("sf pro", "sf compact", "sf mono", "new york")
 FORBIDDEN_VALUE_FRAGMENTS = (
@@ -57,8 +61,16 @@ OKLCH_RE = re.compile(
     rf"^oklch\(\s*({_NUM})\s+({_NUM})\s+({_NUM})(?:\s*/\s*({_NUM})%)?\s*\)$"
 )
 LENGTH_RE = re.compile(rf"^(0|{_NUM}(px|rem|em))$")
+TIME_RE = re.compile(rf"^({_NUM})(ms|s)$")
+PX_OFFSET_RE = re.compile(rf"^(0|-?{_NUM}px)$")
+TRANSLATE_RE = re.compile(r"^translate\(\s*([^,()\s]+)\s*,\s*([^,()\s]+)\s*\)$")
+TRANSITION_PROPERTIES = ("transform", "box-shadow", "background-color", "border-color", "color", "opacity")
+TRANSITION_EASINGS = ("ease", "ease-in", "ease-out", "ease-in-out", "linear")
+MAX_TRANSITION_ITEMS = 4
+MAX_TRANSLATE_PX = 8.0
+MAX_DURATION_MS = 200.0
 _ATTR = r"""\[[A-Za-z_][\w-]*(?:[~|^$*]?=(?:"[^"\\]*"|'[^'\\]*'|[\w.-]+))?\]"""
-_COMPOUND = rf"(?:{_ATTR})+(?::hover|:focus-visible|::before|::after|::placeholder)*"
+_COMPOUND = rf"(?:{_ATTR})+(?::hover|:active|:focus-visible|::before|::after|::placeholder)*"
 SELECTOR_RE = re.compile(rf"^{_COMPOUND}(?: +{_COMPOUND})*$")
 HEADER_RE = re.compile(r"^/\* mini-style: ([a-z0-9-]+) sha256=([0-9a-f]{64}) \*/$")
 COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -321,29 +333,132 @@ def _check_tokens(source: str, mode: str, tokens: Any) -> None:
             raise _fail(source, f"{mode}.background", "alpha must be 100%")
 
 
+def _time_ms(value: str) -> Optional[float]:
+    match = TIME_RE.match(value)
+    if not match:
+        return None
+    return round(float(match.group(1)) * (1000.0 if match.group(2) == "s" else 1.0), 6)
+
+
+def _duration_problem(value: str) -> Optional[str]:
+    milliseconds = _time_ms(value)
+    if milliseconds is None:
+        return f"must be a time such as 120ms: {value!r}"
+    if milliseconds > MAX_DURATION_MS:
+        return f"must be at most {MAX_DURATION_MS:g}ms: {value!r}"
+    return None
+
+
+def _length_problem(value: str) -> Optional[str]:
+    return None if LENGTH_RE.match(value) else f"must be one length such as 2px: {value!r}"
+
+
+def _offset_problem(value: str) -> Optional[str]:
+    if LENGTH_RE.match(value) or (value.startswith("-") and LENGTH_RE.match(value[1:])):
+        return None
+    return f"must be one length such as 3px or -2px: {value!r}"
+
+
+def _line_style_problem(value: str) -> Optional[str]:
+    return None if value in ("solid", "none") else f"must be solid or none: {value!r}"
+
+
+def _transform_problem(value: str) -> Optional[str]:
+    if value == "none":
+        return None
+    match = TRANSLATE_RE.match(value)
+    if not match:
+        return f"may only translate, as none or translate(<x>, <y>): {value!r}"
+    for part in match.groups():
+        if not PX_OFFSET_RE.match(part):
+            return f"translate values must be 0 or a px length: {value!r}"
+        if abs(float(part[:-2] if part.endswith("px") else part)) > MAX_TRANSLATE_PX:
+            return f"translate values must be at most {MAX_TRANSLATE_PX:g}px: {value!r}"
+    return None
+
+
+def _transition_problem(value: str) -> Optional[str]:
+    if value == "none":
+        return None
+    items = [item.split() for item in value.split(",")]
+    if len(items) > MAX_TRANSITION_ITEMS:
+        return f"may list at most four items: {value!r}"
+    for words in items:
+        if len(words) not in (2, 3):
+            return f"each item must be <property> <time>[ <easing>]: {value!r}"
+        name, duration, easing = (words + [None])[:3]
+        if name not in TRANSITION_PROPERTIES:
+            return f"must name what it moves, one of {', '.join(TRANSITION_PROPERTIES)}: {value!r}"
+        problem = _duration_problem(duration)
+        if problem:
+            return problem
+        if easing is not None and easing not in TRANSITION_EASINGS:
+            return f"easing must be one of {', '.join(TRANSITION_EASINGS)}: {value!r}"
+    return None
+
+
+VALUE_GRAMMARS = {
+    "border-width": _length_problem,
+    "outline-width": _length_problem,
+    "outline-offset": _offset_problem,
+    "border-style": _line_style_problem,
+    "outline-style": _line_style_problem,
+    "transform": _transform_problem,
+    "transition": _transition_problem,
+    "transition-duration": _duration_problem,
+}
+
+
+def _media_query(selector: str, declarations: Mapping, media: Optional[str]) -> Optional[str]:
+    """The `@media` query an extra_css entry renders inside, or None when it renders unwrapped.
+
+    A motion property always waits for `prefers-reduced-motion: no-preference`, and for hover
+    capability when the selector uses `:hover` or the entry asks for `media: "hover"`.
+    """
+    if MOTION_PROPERTIES.intersection(declarations):
+        if media == "forced-colors":
+            raise StyleError("a motion property cannot be combined with media forced-colors")
+        if media == "hover" or ":hover" in selector:
+            return "(hover: hover) and (prefers-reduced-motion: no-preference)"
+        return "(prefers-reduced-motion: no-preference)"
+    if media == "hover":
+        return "(hover: hover)"
+    if media == "forced-colors":
+        return "(forced-colors: active)"
+    return None
+
+
 def _check_extra_css(source: str, rules: Any) -> None:
     if not isinstance(rules, list):
         raise _fail(source, "extra_css", "must be a list")
     for index, rule in enumerate(rules):
         field = f"extra_css[{index}]"
-        if not isinstance(rule, dict) or set(rule) != {"selector", "mode", "declarations"}:
-            raise _fail(source, field, "must have exactly selector, mode and declarations")
+        if not isinstance(rule, dict) or set(rule) not in (RULE_KEYS, RULE_KEYS | {"media"}):
+            raise _fail(source, field, "must have exactly selector, mode and declarations, and optionally media")
         selector = rule["selector"]
-        if not isinstance(selector, str) or "[data-mini=" not in selector:
-            raise _fail(source, f"{field}.selector", "must contain [data-mini=")
+        if not isinstance(selector, str) or not ("[data-mini=" in selector or "[data-slot=" in selector):
+            raise _fail(source, f"{field}.selector", "must contain [data-mini= or [data-slot=")
         if "\\" in selector:
             raise _fail(source, f"{field}.selector", "must not contain a backslash")
         if not SELECTOR_RE.match(selector):
             raise _fail(
                 source, f"{field}.selector",
-                "may use only attribute selectors, :hover, :focus-visible, ::before, ::after, ::placeholder "
-                "and the descendant combinator (no commas)",
+                "may use only attribute selectors ([data-mini=, [data-slot=, [data-mini-pressed]), :hover, "
+                ":active, :focus-visible, ::before, ::after, ::placeholder and the descendant combinator "
+                "(no commas)",
             )
         if rule["mode"] not in MODES:
             raise _fail(source, f"{field}.mode", f"must be one of {', '.join(MODES)}")
+        media = rule.get("media")
+        if "media" in rule and media not in MEDIA_KEYS:
+            raise _fail(source, f"{field}.media", f"must be one of {', '.join(MEDIA_KEYS)}")
         declarations = rule["declarations"]
         if not isinstance(declarations, dict) or not declarations:
             raise _fail(source, f"{field}.declarations", "must be a non-empty object")
+        try:
+            _media_query(selector, declarations, media)
+        except StyleError as exc:
+            raise _fail(source, f"{field}.media", str(exc)) from None
         for prop, value in declarations.items():
             if prop not in EXTRA_CSS_PROPERTIES:
                 raise _fail(source, f"{field}.declarations.{prop}", "property is not allowed")
@@ -357,6 +472,10 @@ def _check_extra_css(source: str, rules: Any) -> None:
                             "must not contain a backslash (CSS escapes can hide url( and fonts)")
             if prop == "font-family":
                 _check_font_stack(source, f"{field}.declarations.{prop}", checked)
+            elif prop in VALUE_GRAMMARS:
+                problem = VALUE_GRAMMARS[prop](checked.strip())
+                if problem:
+                    raise _fail(source, f"{field}.declarations.{prop}", problem)
 
 
 def validate_style(data: Any, source: str, stem: Optional[str] = None) -> None:
@@ -468,6 +587,13 @@ def _rule(selector: str, declarations: Mapping) -> str:
     return f"{selector} {{ {inner} }}\n"
 
 
+def _extra_rule(selector: str, declarations: Mapping, media: Optional[str]) -> str:
+    """One extra_css entry; a motion or `media` entry gets its own `@media` block."""
+    rule = _rule(selector, declarations)
+    query = _media_query(selector, declarations, media)
+    return rule if query is None else f"@media {query} {{\n  {rule}}}\n"
+
+
 def _style_blocks(style: Style, root: str, dark: str, both: str, light: str, dark_prefix: str) -> List[str]:
     blocks = [
         _block(root, _root_block(style)),
@@ -476,7 +602,8 @@ def _style_blocks(style: Style, root: str, dark: str, both: str, light: str, dar
         + _rule(f'{both}[data-mini="cell"]', {"font-family": "var(--mini-font-data)"}),
     ]
     prefixes = {"both": both, "light": light, "dark": dark_prefix}
-    extra = [_rule(prefixes[r["mode"]] + r["selector"], r["declarations"]) for r in style["extra_css"]]
+    extra = [_extra_rule(prefixes[r["mode"]] + r["selector"], r["declarations"], r.get("media"))
+             for r in style["extra_css"]]
     if extra:
         blocks.append("".join(extra))
     return blocks

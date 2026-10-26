@@ -838,3 +838,263 @@ def test_style_list_lists_the_seven_in_slug_order(styles: ModuleType) -> None:
     loaded = styles.load_styles(STYLES_DIR)
     assert [entry["slug"] for entry in data] == list(styles.SLUGS)
     assert data == [{"slug": s, "name": loaded[s]["name"]} for s in styles.SLUGS]
+
+
+# --- outlines, press motion and media-guarded rules ---
+
+def _load_with_rule(styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, rule: Dict[str, Any]) -> Path:
+    path = _write(tmp_path, _variant(neutral, extra_css=[rule]))
+    styles.load_style(path)
+    return path
+
+
+def _reject_rule(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, rule: Dict[str, Any]
+) -> str:
+    path = _write(tmp_path, _variant(neutral, extra_css=[rule]))
+    with pytest.raises(styles.StyleError) as err:
+        styles.load_style(path)
+    message = str(err.value)
+    assert path.name in message and "extra_css[0]" in message
+    return message
+
+
+GOOD_VALUES = [
+    ("border-width", "2px"), ("border-width", "0"), ("outline-width", "2px"),
+    ("outline-offset", "3px"), ("outline-offset", "-2px"), ("outline-offset", "0"),
+    ("border-style", "solid"), ("border-style", "none"), ("outline-style", "solid"),
+    ("transform", "none"), ("transform", "translate(3px, 3px)"), ("transform", "translate(-1px, -1px)"),
+    ("transform", "translate(0, 0)"), ("transform", "translate(8px,-8px)"),
+    ("transition", "none"), ("transition", "transform 120ms"),
+    ("transition", "transform 120ms ease-out, box-shadow 120ms ease-out"),
+    ("transition", "opacity 0s linear"), ("transition", "color 0.2s ease-in-out"),
+    ("transition", "transform 1ms, box-shadow 2ms, background-color 3ms, border-color 4ms"),
+    ("transition-duration", "0s"), ("transition-duration", "200ms"), ("transition-duration", "0.1s"),
+]
+BAD_VALUES = [
+    ("transition", "all 2s", "must name what it moves"),
+    ("transition", "all 100ms", "must name what it moves"),
+    ("transition", "transform 2s", "at most 200ms"),
+    ("transition", "transform 201ms", "at most 200ms"),
+    ("transition", "transform 0.3s", "at most 200ms"),
+    ("transition", "transform 120ms bounce", "easing"),
+    ("transition", "transform", "<property> <time>"),
+    ("transition", "transform 120ms, ", "<property> <time>"),
+    ("transition", "transform 1ms, box-shadow 1ms, opacity 1ms, color 1ms, border-color 1ms", "at most four"),
+    ("transition-duration", "201ms", "at most 200ms"),
+    ("transition-duration", "fast", "time"),
+    ("transform", "scale(2)", "may only translate"),
+    ("transform", "rotate(1deg)", "may only translate"),
+    ("transform", "translate(9px, 0)", "at most 8px"),
+    ("transform", "translate(0, -9px)", "at most 8px"),
+    ("transform", "translate(1em, 0)", "px"),
+    ("transform", "translate(1px)", "may only translate"),
+    ("border-style", "dashed", "solid or none"),
+    ("outline-style", "dotted", "solid or none"),
+    ("border-width", "thin", "length"),
+    ("border-width", "-1px", "length"),
+    ("outline-width", "2px 3px", "length"),
+    ("outline-offset", "- 2px", "length"),
+    ("outline-offset", "3%", "length"),
+]
+
+
+@pytest.mark.parametrize(("prop", "value"), GOOD_VALUES)
+def test_new_property_grammars_accept_good_forms(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, prop: str, value: str
+) -> None:
+    rule = {"selector": '[data-slot="button"]', "mode": "both", "declarations": {prop: value}}
+    _load_with_rule(styles, neutral, tmp_path, rule)
+
+
+@pytest.mark.parametrize(("prop", "value", "reason"), BAD_VALUES)
+def test_new_property_grammars_reject_bad_forms_naming_property_and_reason(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, prop: str, value: str, reason: str
+) -> None:
+    rule = {"selector": '[data-slot="button"]', "mode": "both", "declarations": {prop: value}}
+    message = _reject_rule(styles, neutral, tmp_path, rule)
+    assert prop in message
+    assert reason in message
+
+
+@pytest.mark.parametrize(("prop", "value"), [
+    ("transform", "translate(url(x), 0)"), ("border-width", "2px !important"),
+    ("transition", "transform 1ms; color: red"), ("outline-width", "'2px'"), ("transform", "none\\"),
+])
+def test_old_value_bans_still_cover_new_properties(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, prop: str, value: str
+) -> None:
+    rule = {"selector": '[data-slot="button"]', "mode": "both", "declarations": {prop: value}}
+    _reject_rule(styles, neutral, tmp_path, rule)
+
+
+def test_motion_properties_are_the_three_motion_names(styles: ModuleType) -> None:
+    assert set(styles.MOTION_PROPERTIES) == {"transform", "transition", "transition-duration"}
+
+
+@pytest.mark.parametrize("media", ["hover", "forced-colors"])
+def test_media_key_accepts_hover_and_forced_colors(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, media: str
+) -> None:
+    rule = dict(_rule('[data-mini="row"]', opacity="1"), media=media)
+    _load_with_rule(styles, neutral, tmp_path, rule)
+
+
+@pytest.mark.parametrize("media", ["print", "", None, 1, "Hover"])
+def test_media_key_rejects_other_values(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, media: Any
+) -> None:
+    rule = dict(_rule('[data-mini="row"]', opacity="1"), media=media)
+    message = _reject_rule(styles, neutral, tmp_path, rule)
+    assert "media" in message and "forced-colors" in message
+
+
+def test_unknown_rule_key_is_rejected(styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path) -> None:
+    rule = dict(_rule('[data-mini="row"]', opacity="1"), query="hover")
+    _reject_rule(styles, neutral, tmp_path, rule)
+
+
+def test_motion_with_forced_colors_is_rejected(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
+) -> None:
+    rule = dict(_rule('[data-slot="button"]', transition="none"), media="forced-colors")
+    message = _reject_rule(styles, neutral, tmp_path, rule)
+    assert "forced-colors" in message
+
+
+@pytest.mark.parametrize("selector", [
+    '[data-slot="button"]',
+    '[data-slot="button"][data-variant="default"]:hover',
+    '[data-slot="button"]:active',
+    '[data-mini="row"]:active',
+    '[data-slot="button"][data-mini-pressed]',
+    '[data-mini="panel"] [data-slot="button"]:focus-visible',
+])
+def test_slot_and_active_selectors_are_accepted(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, selector: str
+) -> None:
+    _load_with_rule(styles, neutral, tmp_path, _rule(selector, opacity="1"))
+
+
+@pytest.mark.parametrize("selector", [
+    '[data-slot="button"]:not([disabled])',
+    '[data-slot="button"]:focus',
+    '[data-slot="button"], [data-slot="toggle"]',
+    '[data-slot="button"]:disabled',
+    '.x [data-slot="button"]',
+])
+def test_disallowed_selectors_stay_rejected(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path, selector: str
+) -> None:
+    _reject_rule(styles, neutral, tmp_path, _rule(selector, opacity="1"))
+
+
+def test_selector_without_a_hook_names_both_hooks(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
+) -> None:
+    message = _reject_rule(styles, neutral, tmp_path, _rule("[data-mini-pressed]", opacity="1"))
+    assert "[data-mini=" in message and "[data-slot=" in message
+
+
+def test_pseudo_class_error_text_names_active_and_data_slot(
+    styles: ModuleType, neutral: Dict[str, Any], tmp_path: Path
+) -> None:
+    message = _reject_rule(styles, neutral, tmp_path, _rule('[data-slot="button"]:focus', opacity="1"))
+    assert ":active" in message and "[data-slot=" in message
+
+
+def _render_both(styles: ModuleType, neutral: Dict[str, Any], rules: List[Dict[str, Any]]) -> Dict[str, str]:
+    style = _variant(neutral, extra_css=rules)
+    other = _variant(neutral, slug="airy-white", name="Airy White")
+    return {
+        "app": styles.render_app_css(style),
+        "gallery": styles.render_gallery_css({"neutral-house": neutral, "calm-paper": style, "airy-white": other}),
+    }
+
+
+def _prefixes(mode: str) -> Dict[str, str]:
+    app = {"both": "", "light": "html:not(.dark) ", "dark": "html.dark "}[mode]
+    x = 'html[data-mini-style="calm-paper"]'
+    gallery = {"both": f"{x} ", "light": f"{x}:not(.dark) ", "dark": f"{x}.dark "}[mode]
+    return {"app": app, "gallery": gallery}
+
+
+MOTION_QUERY = "(prefers-reduced-motion: no-preference)"
+HOVER_MOTION_QUERY = "(hover: hover) and (prefers-reduced-motion: no-preference)"
+
+
+@pytest.mark.parametrize(("rule", "mode", "query", "inner"), [
+    (_rule('[data-slot="button"]', "both", transition="transform 120ms ease-out"),
+     "both", MOTION_QUERY, 'transition: transform 120ms ease-out;'),
+    (_rule('[data-slot="button"]:hover', "light", transform="translate(-1px, -1px)"),
+     "light", HOVER_MOTION_QUERY, 'transform: translate(-1px, -1px);'),
+    (_rule('[data-slot="button"][data-mini-pressed]', "dark", transform="translate(3px, 3px)"),
+     "dark", MOTION_QUERY, 'transform: translate(3px, 3px);'),
+    (dict(_rule('[data-slot="button"]', "both", transform="translate(1px, 1px)"), media="hover"),
+     "both", HOVER_MOTION_QUERY, 'transform: translate(1px, 1px);'),
+    (dict(_rule('[data-slot="button"]', "both", box_shadow="4px 4px 0 var(--foreground)"), media="hover"),
+     "both", "(hover: hover)", 'box-shadow: 4px 4px 0 var(--foreground);'),
+    (dict(_rule('[data-mini="row"][aria-selected="true"]', "light", outline_width="2px"), media="forced-colors"),
+     "light", "(forced-colors: active)", 'outline-width: 2px;'),
+])
+def test_wrapped_rules_render_in_the_right_media_block_with_the_prefix_inside(
+    styles: ModuleType, neutral: Dict[str, Any], rule: Dict[str, Any], mode: str, query: str, inner: str
+) -> None:
+    for where, css in _render_both(styles, neutral, [rule]).items():
+        selector = _prefixes(mode)[where] + rule["selector"]
+        assert f"\n@media {query} {{\n  {selector} {{ {inner} }}\n}}\n" in css
+        assert f"\n{selector} {{" not in css
+
+
+def test_a_plain_rule_is_not_wrapped_and_a_wrapped_one_does_not_leak(
+    styles: ModuleType, neutral: Dict[str, Any]
+) -> None:
+    rules = [_rule('[data-slot="button"]', border_width="2px"),
+             _rule('[data-slot="button"]:active', outline_offset="3px")]
+    for css in _render_both(styles, neutral, rules).values():
+        assert "@media" not in css
+    app = _render_both(styles, neutral, rules)["app"]
+    assert '\n[data-slot="button"] { border-width: 2px; }\n' in app
+    assert '\n[data-slot="button"]:active { outline-offset: 3px; }\n' in app
+
+
+def test_each_wrapped_entry_gets_its_own_block_in_source_order(
+    styles: ModuleType, neutral: Dict[str, Any]
+) -> None:
+    rules = [
+        _rule('[data-slot="button"]', opacity="1"),
+        dict(_rule('[data-slot="button"]', box_shadow="none"), media="hover"),
+        _rule('[data-slot="toggle"]', transition="none"),
+        _rule('[data-slot="toggle"]', opacity="1"),
+        dict(_rule('[data-slot="card"]', outline_width="2px"), media="forced-colors"),
+    ]
+    app = _render_both(styles, neutral, rules)["app"]
+    assert app.count("@media") == 3
+    positions = [
+        app.index('\n[data-slot="button"] { opacity: 1; }'),
+        app.index("@media (hover: hover) {"),
+        app.index("@media (prefers-reduced-motion: no-preference) {"),
+        app.index('\n[data-slot="toggle"] { opacity: 1; }'),
+        app.index("@media (forced-colors: active) {"),
+    ]
+    assert positions == sorted(positions)
+
+
+def test_parse_extra_css_returns_the_rule_inside_a_media_block(
+    styles: ModuleType, neutral: Dict[str, Any]
+) -> None:
+    rule = dict(_rule('[data-mini="row"][aria-selected="true"]', "light", outline_width="2px"),
+                media="forced-colors")
+    plain = _rule('[data-mini="row"]', "dark", opacity="1")
+    css = styles.render_app_css(_variant(neutral, extra_css=[rule, plain]))
+    assert "@media (forced-colors: active) {" in css
+    parsed = styles.parse_extra_css(css)
+    assert parsed[2:] == [_rule('[data-mini="row"][aria-selected="true"]', "light", outline_width="2px"), plain]
+
+
+@pytest.mark.parametrize("slug", [
+    "neutral-house", "calm-paper", "airy-white", "cool-tool", "dense-dark", "glass-launcher", "split-tone",
+])
+def test_existing_sources_render_to_the_committed_dist_bytes(styles: ModuleType, slug: str) -> None:
+    rendered = styles.render_app_css(styles.load_style(STYLES_DIR / f"{slug}.json"))
+    assert rendered.encode("utf-8") == (STYLES_DIR / "dist" / f"{slug}.css").read_bytes()
