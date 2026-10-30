@@ -9,7 +9,8 @@ Contents: [Private instance](#private-instance-and-seeded-data) · [Stopping](#s
 Run your own copy of the app that nothing real can reach, and show only data you seeded.
 
 - **A private instance** means a port the user's own dev server isn't on, a fresh data directory or database (never the user's real one), a fresh browser profile, and no real accounts or credentials. Start it from `$REPO` as it is and edit nothing in the repo. Stop it when the run ends, by the rules in [Stopping what you started](#stopping-what-you-started).
-- **Seed it under a temp folder or `$E`,** never in the user's own project folders. A fixture's repo path can appear on screen (a project path in a header or a recent-files list), and a path under `$E` carries the home directory, so the frame check looks for it.
+- **Run everything you start with `HOME` set to a folder under `$E/harness/`,** as well as the app's own data-dir variable if it has one, so the cleanup check can find survivors by their `HOME`. If the app can't run that way, the check can't find its survivors: rely on the recorded PIDs and say so in the delivery note.
+- **Seed it under `$E/harness/`,** never in a system temp folder or the user's own project folders, because a write outside `~/Studio` and the repo's `.quirk/` breaks the write boundary. A fixture's repo path can appear on screen (a project path in a header or a recent-files list), and a path under `$E` carries the home directory, so the frame check looks for it.
 - **Use the repo's seed data or fixtures if it has them,** after reading them for anything real: names, emails, paths, tokens.
 - **If the repo has none, build your own** under `$E/harness/` and load it through the app's own import path or API. Invent the names (a made-up company, made-up people), fix the dates, and keep it small. Never add a fixture to the user's repo. The video caption discloses that the data is seeded ([page.md](page.md#the-staging-caption)).
 - **Seeded data only.** If a screen can't be shown without real data, don't show that screen.
@@ -20,14 +21,16 @@ Stop only the processes you started, by PID, because the user's own instance of 
 
 - **Record the PID of everything you start,** at launch, in `$E/harness/pids`. Before stopping a process, also record its children (`pgrep -P <pid>` lists them by parent, not by name), because children can outlive their parent.
 - **Stop only those PIDs.** Never stop anything by name or pattern: no `pkill`, no `killall`, no `kill $(pgrep -f ...)`. A pattern that matches your instance's path or binary also matches the user's.
-- **After stopping, check that nothing is left** whose working directory or `HOME` is under `$E`:
+- **After stopping, check what is left under `$E`:**
 
   ```bash
-  lsof -w +D "$E" | awk 'NR>1 {print $2, $1}' | sort -u
-  ps -axeww -o pid=,command= | grep -F "HOME=$E" | grep -v grep
+  python3 "$SKILL_DIR/scripts/leftovers.py" --explainer "$E"
   ```
 
-  Anything listed is yours, because nothing else works under `$E`. Stop it by its PID, then run both commands again until they print nothing.
+  It prints `yours` (processes whose `HOME` is under `$E`) and `check_by_hand` (processes that only have their working directory there). It never stops anything.
+  - Stop each PID in `yours` by its PID, then run it again until `yours` is empty.
+  - Never stop anything in `check_by_hand`, because it may be the user's own shell or editor. If an entry looks like your own, name it in the delivery note.
+  - Exit 3 means the check didn't run (`ps` or `lsof` is missing or failed). Say so in the delivery note instead of reporting that nothing is left.
 
 ## Resets between takes
 

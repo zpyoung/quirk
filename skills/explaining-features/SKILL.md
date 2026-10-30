@@ -16,7 +16,7 @@ Make one offline page about one feature, at one commit, for one reader, showing 
 - **One feature per explainer.** Out of scope, and you say so if asked: publishing or attaching to a PR (unless the user asks in that run), refreshing an old explainer in place, roundups of a release or an epic, recording a native macOS app, and adding a fixture to the user's repo.
 - **Frozen, not refreshable.** To update an explainer, run the skill again. Nothing checks whether the app has moved on since.
 - **Never** write outside `~/Studio` and the repo's self-ignoring `.quirk/` (the page goes in `.quirk/html`, and `quirk:using-apps-like-a-user` keeps its run state in `.quirk/using-apps-like-a-user`) during a run, and never send anything to a cloud service the brief didn't name. Don't work around this with a working directory outside the repo or a test override. Ask the user before departing from any rule here.
-- **Stop only what you started.** Record the PID of everything you start and stop only those PIDs. Never stop anything by name or pattern (`pkill`, `killall`), because the user's own instance of the same app may be running. After stopping, check that nothing is left under `$E`, including children that outlive their parent: see [capture.md](references/capture.md#stopping-what-you-started).
+- **Stop only what you started.** Record the PID of everything you start and stop only those PIDs. Never stop anything by name or pattern (`pkill`, `killall`), because the user's own instance of the same app may be running. After stopping, run `scripts/leftovers.py` to check that nothing is left under `$E`, including children that outlive their parent, and never stop what it lists as `check_by_hand`: see [capture.md](references/capture.md#stopping-what-you-started).
 
 ## Required sub-skills
 
@@ -163,5 +163,5 @@ Pressure scenarios for the rules a script can't enforce: [test-pressure-1.md](te
 Read a reference when its step starts, not before.
 
 - [evidence.md](references/evidence.md): the ledger columns and results, how each row is filled, verifying first, and features with no UI.
-- [capture.md](references/capture.md): the private instance and seeded data, resets between takes, the parent-commit build, the frame check, the real-data search, and label timing.
+- [capture.md](references/capture.md): the private instance and seeded data, stopping what you started, resets between takes, the parent-commit build, the frame check, the real-data search, and label timing.
 - [page.md](references/page.md): the section outline, reader variants, the staging caption, reasoning and the dated record, and the size budget.

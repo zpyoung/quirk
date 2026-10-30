@@ -171,7 +171,7 @@ def test_every_script_named_in_the_skill_exists() -> None:
     named: set[str] = set()
     for doc in _markdown_files():
         named.update(SCRIPT_REF.findall(doc.read_text()))
-    assert {"verify_outcome.py", "fit_video.py"} <= named
+    assert {"verify_outcome.py", "fit_video.py", "leftovers.py"} <= named
     for name in named:
         assert (SKILL_DIR / "scripts" / name).is_file(), name
 
@@ -205,6 +205,19 @@ def test_stopping_processes_is_a_hard_rule_in_skill_and_capture() -> None:
     section = capture.split("## Stopping what you started", 1)[1].split("\n## ", 1)[0]
     for needle in ("working directory", "HOME", "$E", "outlive"):
         assert needle in section, needle
+
+
+def test_capture_finds_survivors_with_leftovers_not_a_lsof_sweep() -> None:
+    capture = (REFERENCES_DIR / "capture.md").read_text()
+    section = capture.split("## Stopping what you started", 1)[1].split("\n## ", 1)[0]
+    assert "leftovers.py" in section
+    assert "lsof -w +D" not in capture
+    assert "+D" not in capture
+    assert "Anything listed is yours" not in capture
+    assert re.search(r"[Nn]ever stop anything in `check_by_hand`", section)
+    assert "$E/harness/" in capture and "HOME" in capture
+    assert "temp folder or `$E`" not in capture
+    assert "leftovers.py" in SKILL_PATH.read_text()
 
 
 def test_skill_points_at_every_reference() -> None:

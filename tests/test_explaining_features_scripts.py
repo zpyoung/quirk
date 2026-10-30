@@ -1,13 +1,15 @@
-"""Behavior of the explaining-features scripts: verify_outcome.py sorts a verify.json, fit_video.py fits a film."""
+"""Behavior of the explaining-features scripts: verify_outcome.py sorts a verify.json, fit_video.py fits a film, leftovers.py finds survivors."""
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import pytest
 
@@ -454,3 +456,137 @@ class TestFitVideoReencode:
         src.write_bytes(b"this is not a video" * 500)
         proc = fit("--in", str(src), "--budget-bytes", "100", "--out", str(tmp_path / "o.mp4"))
         assert proc.returncode == 2
+
+
+LEFTOVERS = SCRIPTS_DIR / "leftovers.py"
+SLEEPER = "import sys, time\nheld = open(sys.argv[1]) if len(sys.argv) > 1 else None\nprint('ready', flush=True)\ntime.sleep(120)\n"
+
+
+@contextlib.contextmanager
+def sleeper(*, home: Path, cwd: Path, holding: Optional[Path] = None) -> Iterator[int]:
+    """A real process with the given HOME and working directory, optionally holding a file open; stopped on exit."""
+    argv = [sys.executable, "-c", SLEEPER] + ([str(holding)] if holding else [])
+    env = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout is not None and proc.stdout.readline().strip() == "ready"
+        yield proc.pid
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def leftovers(folder: Path, *, env: Optional[dict[str, str]] = None, cwd: Optional[Path] = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(LEFTOVERS), "--explainer", str(folder)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=cwd,
+    )
+
+
+def groups(folder: Path) -> tuple[set[int], set[int]]:
+    done = leftovers(folder)
+    assert done.returncode == 0, done.stderr
+    doc = json.loads(done.stdout)
+    assert set(doc) == {"yours", "check_by_hand"}
+    for row in doc["yours"] + doc["check_by_hand"]:
+        assert isinstance(row["pid"], int) and row["command"]
+    return {r["pid"] for r in doc["yours"]}, {r["pid"] for r in doc["check_by_hand"]}
+
+
+@pytest.fixture
+def folders(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """The explainer folder with a harness home inside it, plus an unrelated folder."""
+    explainer = tmp_path / "explainer"
+    home = explainer / "harness" / "home"
+    elsewhere = tmp_path / "elsewhere"
+    for folder in (home, elsewhere):
+        folder.mkdir(parents=True)
+    return explainer, home, elsewhere
+
+
+class TestLeftovers:
+    def test_home_under_the_folder_is_yours(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, home, elsewhere = folders
+        with sleeper(home=home, cwd=elsewhere) as pid:
+            assert groups(explainer) == ({pid}, set())
+
+    def test_an_open_file_alone_lists_nothing(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, _, elsewhere = folders
+        held = explainer / "notes.txt"
+        held.write_text("an editor has this open\n")
+        with sleeper(home=elsewhere, cwd=elsewhere, holding=held) as pid:
+            opened = subprocess.run(["lsof", "-w", "-p", str(pid)], capture_output=True, text=True).stdout
+            assert str(held.resolve()) in opened, "the process must really hold the file"
+            assert groups(explainer) == (set(), set())
+
+    def test_working_directory_alone_is_check_by_hand(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, _, elsewhere = folders
+        with sleeper(home=elsewhere, cwd=explainer) as pid:
+            assert groups(explainer) == (set(), {pid})
+
+    def test_home_and_working_directory_list_it_once_as_yours(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, home, _ = folders
+        with sleeper(home=home, cwd=explainer) as pid:
+            assert groups(explainer) == ({pid}, set())
+
+    def test_a_sibling_folder_sharing_the_prefix_is_not_matched(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, _, _ = folders
+        sibling = explainer.parent / "explainer-2"
+        sibling.mkdir()
+        with sleeper(home=sibling, cwd=sibling):
+            assert groups(explainer) == (set(), set())
+
+    def test_a_symlinked_path_to_the_folder_matches_the_real_one(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, home, elsewhere = folders
+        link = explainer.parent / "link"
+        link.symlink_to(explainer)
+        with sleeper(home=home, cwd=elsewhere) as pid:
+            assert groups(link) == ({pid}, set())
+
+    def test_a_folder_with_spaces_in_its_name(self, tmp_path: Path) -> None:
+        explainer = tmp_path / "my explainer 1"
+        home = explainer / "harness" / "home dir"
+        sibling = tmp_path / "my explainer 1 extra"
+        for folder in (home, sibling):
+            folder.mkdir(parents=True)
+        with sleeper(home=home, cwd=tmp_path) as under, sleeper(home=explainer, cwd=tmp_path) as exact, sleeper(
+            home=sibling, cwd=tmp_path
+        ):
+            assert groups(explainer) == ({under, exact}, set())
+
+    def test_it_never_lists_itself_or_its_parent(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, home, _ = folders
+        env = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
+        alone = leftovers(explainer, env=env, cwd=explainer)
+        assert alone.returncode == 0 and json.loads(alone.stdout) == {"yours": [], "check_by_hand": []}
+        parent_code = (
+            "import subprocess, sys\n"
+            f"done = subprocess.run([sys.executable, {str(LEFTOVERS)!r}, '--explainer', {str(explainer)!r}], capture_output=True, text=True)\n"
+            "print(done.stdout)\n"
+        )
+        via_parent = subprocess.run([sys.executable, "-c", parent_code], capture_output=True, text=True, env=env, cwd=explainer)
+        assert json.loads(via_parent.stdout) == {"yours": [], "check_by_hand": []}
+
+    def test_a_missing_folder_exits_2(self, tmp_path: Path) -> None:
+        done = leftovers(tmp_path / "nope")
+        assert done.returncode == 2 and done.stdout == "" and done.stderr
+
+    @pytest.mark.parametrize("broken", ["none", "lsof", "ps"])
+    def test_a_missing_or_failing_tool_exits_3_without_json(self, tmp_path: Path, broken: str) -> None:
+        folder = tmp_path / "explainer"
+        folder.mkdir()
+        fakes = tmp_path / "fakes"
+        fakes.mkdir()
+        if broken == "none":
+            path = str(fakes)
+        else:
+            fake = fakes / broken
+            fake.write_text("#!/bin/sh\necho 'boom' >&2\nexit 2\n")
+            fake.chmod(0o755)
+            real = {t: Path(shutil.which(t) or "").parent for t in ("ps", "lsof")}
+            path = os.pathsep.join([str(fakes), *{str(d) for d in real.values()}])
+        done = leftovers(folder, env={"PATH": path})
+        assert done.returncode == 3 and done.stdout == "" and done.stderr
