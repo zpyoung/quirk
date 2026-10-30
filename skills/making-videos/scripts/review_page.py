@@ -1161,7 +1161,7 @@ def _still_figure(project: Path, still: Path, scenes: "Optional[list[Scene]]", c
     else:
         caption = still.name
         alt = "%s frame %s" % (cut, still.name)
-    return '<figure><img src="%s" alt="%s"><figcaption>%s</figcaption></figure>' % (
+    return '<figure data-span="1"><img src="%s" alt="%s"><figcaption>%s</figcaption></figure>' % (
         rel_url(still, project), esc(alt), esc(caption))
 
 

@@ -55,6 +55,9 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "~/Studio/explainers/",
         ".quirk/html",
         "Never",
+        "self-ignoring",
+        "reencoded: true",
+        "This skill's own scripts",
     ),
     "references/evidence.md": (
         "Behavior | Claim | Result | How checked | Proof",
@@ -63,6 +66,8 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "Unit test only",
         "Not proven",
         "Failed",
+        "pass_without_effect",
+        "one file at a time",
         "sources.md",
         "diagram",
         "using-apps-like-a-user",
@@ -81,6 +86,9 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "beats.json",
         "copy",
         "fitted",
+        "reencoded: true",
+        "fresh home",
+        "fixture's repo path",
     ),
     "references/page.md": (
         "Staged for the camera",
@@ -185,6 +193,18 @@ def test_sibling_skills_are_named_not_pathed(doc: Path) -> None:
 @pytest.mark.parametrize("doc", _markdown_files(), ids=lambda p: p.name)
 def test_docs_have_no_em_dashes(doc: Path) -> None:
     assert "—" not in doc.read_text()
+
+
+def test_stopping_processes_is_a_hard_rule_in_skill_and_capture() -> None:
+    skill = SKILL_PATH.read_text()
+    assert "Stop only what you started" in skill
+    for text in (skill, (REFERENCES_DIR / "capture.md").read_text()):
+        for needle in ("PID", "pkill", "killall", "by name or pattern"):
+            assert needle in text, needle
+    capture = (REFERENCES_DIR / "capture.md").read_text()
+    section = capture.split("## Stopping what you started", 1)[1].split("\n## ", 1)[0]
+    for needle in ("working directory", "HOME", "$E", "outlive"):
+        assert needle in section, needle
 
 
 def test_skill_points_at_every_reference() -> None:

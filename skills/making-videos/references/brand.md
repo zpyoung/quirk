@@ -1,6 +1,6 @@
 # Brand: studio layout, extraction, reuse
 
-With `stops: none` in the brief, never confirm a brand: see the last step under First video. Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
+With `stops: none` in the brief, never confirm a brand, and reuse an existing unconfirmed draft as is without saving over it: see [First video](#first-video-extract-and-save). Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
 storyboard at stop 1, and confirm it only when the user approves that storyboard. Commands are
 `python3 "$SKILL_DIR/scripts/studio.py" ...`.
 
@@ -71,6 +71,8 @@ brand, so re-save a confirmed brand with `--confirm`.
 Do this when `studio.py brand show --product P` prints `"brand": null`, or a brand with `confirmed: false`
 (a draft whose storyboard was never approved). If the brand is already confirmed, reuse it and skip steps 6 and 8: there
 is no draft file to save, and studio folders are shared across runs, so another run may have confirmed it since you looked.
+
+With `stops: none` and an unconfirmed draft already in `~/Studio/brands/<product>`, reuse the draft as is and do not save over it: it may belong to another run. Extract and save only when no draft exists, and skip the rest of this list.
 
 1. **Colors.** If the product has no site, CSS or design system, skip the search: propose a palette (ground, ink, accent) and a display and mono type pair that suit it, write them into the draft, and mark them as proposed in what you show. Ask at stop 1 whether to keep them. Otherwise find CSS custom properties first: grep `--[a-z-]+:` in `:root` blocks of `site.css`,
    `tokens.css`, `globals.css`, and theme or Tailwind config files. Keep the product's own token names and

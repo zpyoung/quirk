@@ -7,7 +7,7 @@ description: Use when the user asks for a walkthrough, to explain this feature, 
 
 Make one offline page about one feature, at one commit, for one reader, showing only what was really run. The page's results table is the evidence ledger. The film, when there is one, is a tour of that table. This skill runs the steps in order and hands the work to three required sub-skills; it doesn't render video, drive apps or build pages itself.
 
-`SKILL_DIR` is the directory holding this `SKILL.md`, which the host shows when the skill loads. Run its scripts as `python3 "$SKILL_DIR/scripts/<script>.py" ...`. Never build paths from a plugin-root environment variable. Scripts print one JSON object to stdout and diagnostics to stderr, and never prompt. `$E` is the explainer folder, `~/Studio/explainers/<date>-<slug>/`.
+`SKILL_DIR` is the directory holding this `SKILL.md`, which the host shows when the skill loads. Run its scripts as `python3 "$SKILL_DIR/scripts/<script>.py" ...`. Never build paths from a plugin-root environment variable. This skill's own scripts print one JSON object to stdout and diagnostics to stderr, and never prompt. `$E` is the explainer folder, `~/Studio/explainers/<date>-<slug>/`.
 
 ## Before anything else
 
@@ -15,7 +15,8 @@ Make one offline page about one feature, at one commit, for one reader, showing 
 - **Only when asked.** Never offer an explainer when a branch finishes, a PR opens or a feature merges.
 - **One feature per explainer.** Out of scope, and you say so if asked: publishing or attaching to a PR (unless the user asks in that run), refreshing an old explainer in place, roundups of a release or an epic, recording a native macOS app, and adding a fixture to the user's repo.
 - **Frozen, not refreshable.** To update an explainer, run the skill again. Nothing checks whether the app has moved on since.
-- **Never** write outside `~/Studio` and the repo's `.quirk/html` during a run, and never send anything to a cloud service the brief didn't name. Ask the user before departing from any rule here.
+- **Never** write outside `~/Studio` and the repo's self-ignoring `.quirk/` (the page goes in `.quirk/html`, and `quirk:using-apps-like-a-user` keeps its run state in `.quirk/using-apps-like-a-user`) during a run, and never send anything to a cloud service the brief didn't name. Don't work around this with a working directory outside the repo or a test override. Ask the user before departing from any rule here.
+- **Stop only what you started.** Record the PID of everything you start and stop only those PIDs. Never stop anything by name or pattern (`pkill`, `killall`), because the user's own instance of the same app may be running. After stopping, check that nothing is left under `$E`, including children that outlive their parent: see [capture.md](references/capture.md#stopping-what-you-started).
 
 ## Required sub-skills
 
@@ -60,6 +61,7 @@ State the plan in one line. It doesn't wait for a reply, so carry on. The line h
 
 Build the ledger in `$E/evidence.md`, one row per behavior, as [evidence.md](references/evidence.md) describes. Read the spec, existing app runs and tests into it first.
 
+- **Start the instance when verification needs one.** Start it by the rules in [capture.md](references/capture.md#private-instance-and-seeded-data), even though step 3 is where staging is described. To find how to start it, look for the repo's own fixture or test helpers first (an e2e setup, a seed script, a dev command), and build your own only when it has none.
 - **Minimum: the main behavior was run for real.** If it wasn't, verify it with `quirk:using-apps-like-a-user` (web, Electron or native), or run the real command or test for a feature with no UI. Every ledger row then comes from that run, and a behavior it couldn't check is listed as not proven.
 - **Nothing verified yet is normal.** A shipped feature that nobody checked in the app gets verified first, then explained.
 - **Stop 1, the main behavior doesn't work as the spec says.** Stop before building anything and tell the user what you saw, with the screenshot. Say: "The main behavior doesn't work as the spec says: <what you saw>. Screenshot: <path>. I stopped before building anything, so there's no film and no page." Don't render a film or write a page around it, however far along the run is.
@@ -68,6 +70,8 @@ Build the ledger in `$E/evidence.md`, one row per behavior, as [evidence.md](ref
 ### 3. Stage
 
 Start a private instance with seeded data, and build the parent commit for "before". The rules are in [capture.md](references/capture.md).
+
+- **The film's project gets created before capture.** When the plan says film, run `studio.py project new` as `quirk:making-videos` describes, before any footage is recorded, because `record.py --project` needs it. Step 5 then uses that project and doesn't create another.
 
 - **No seeded data in the repo.** Build your own seeded data in `$E/harness/` and disclose it in the video caption. Never add a fixture to the user's repo.
 - **The parent commit won't build.** Describe "before" in words from the old code or spec, and say no footage was captured of it. Never mock up or rebuild the old screen.
@@ -103,7 +107,7 @@ Skip this step when the plan says no film. Otherwise invoke `quirk:making-videos
 | `halt` | `outside_calls` (a cloud call nobody named) | The run stops. Tell the user which call, because it has already happened. |
 | `retry` | any, while the stop flag is false | Fix the cause and verify again under making-videos' 3-attempt rule. Never copy a project to reset the counter. |
 
-After `ship` or `ship_disclosed`, fit the film to the page budget with `fit_video.py` (the arithmetic for `N` is in [page.md](references/page.md#the-size-budget)), then read frames again from the fitted file, because that's the one readers see.
+After `ship` or `ship_disclosed`, fit the film to the page budget with `fit_video.py` (the arithmetic for `N` is in [page.md](references/page.md#the-size-budget)), then read frames again from the fitted file when `fit_video.py` reports `reencoded: true`, because that's the file readers see. When it reports `reencoded: false` the file is the raw film, and the raw frame check already covers it.
 
 ```bash
 python3 "$SKILL_DIR/scripts/fit_video.py" --in "$E/media/film-raw.mp4" --budget-bytes N --out "$E/media/film.mp4"
@@ -137,7 +141,7 @@ are in ~/Studio/explainers/<date>-<slug>/, so it can be rebuilt.
 
 ## After hand-over: notes
 
-Tell the user that notes make a v2. A note that changes the film (say, one line of narration is wrong) makes a new version under the making-videos rule that versions are never overwritten, fits the new film, re-reads its frames, and rebuilds the page from its source. A text-only note rebuilds the page from its source without rendering.
+Tell the user that notes make a v2. A note that changes the film (say, one line of narration is wrong) makes a new version under the making-videos rule that versions are never overwritten, fits the new film, re-reads its frames when the fit re-encoded it, and rebuilds the page from its source. A text-only note rebuilds the page from its source without rendering.
 
 ## When you're tempted to skip a rule
 

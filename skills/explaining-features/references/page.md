@@ -25,7 +25,7 @@ Another named reader changes both the sections and the wording. For a customer:
 
 | For a teammate | For a customer |
 |---|---|
-| Native desktop window not driven. WebKit 27.2 stands in for the desktop engine. | Not yet tried in the desktop app. |
+| Native desktop window not driven. Only the Chromium build ran. | Not yet tried in the desktop app. |
 | SC-2 hover: Pass, real mouse events | Hovering over the button shows its full label. |
 
 Keep the ledger's own rows in `evidence.md` unchanged for any reader.
@@ -35,7 +35,7 @@ Keep the ledger's own rows in `evidence.md` unchanged for any reader.
 The page doesn't say "I", "we" or "my". It states what was measured and how, because it gets forwarded without its sender and "I" would read as the user speaking.
 
 - Instead of "I didn't want a second instance interfering", write "Ran on a private instance, so no other session interfered."
-- Instead of "I checked the hover", write "Hover checked with real mouse events in WebKit 27.2."
+- Instead of "I checked the hover", write "Hover checked with real mouse events in Chromium 131." Name only the engine that actually ran, never one that would stand in for another.
 
 ## The staging caption
 
@@ -99,6 +99,6 @@ The page is one file under 10 MiB (10,485,760 bytes), and base64 makes everythin
    ```
 
    It copies a film that already fits. Otherwise it re-encodes H.264 yuv420p with AAC at 96 kbps, and never lets video go under 300 kbps. Exit 1 means the film can't fit above that floor: compress the images harder, then drop a screenshot, then shorten the film. If a screenshot was dropped, "What's still open" says which one.
-5. **Rebuild, then read frames from the fitted file.** The fitted file is the one readers see, so run the frame check on it ([capture.md](capture.md#the-frame-check)).
+5. **Rebuild, then read frames from the fitted file when `fit_video.py` reported `reencoded: true`.** A re-encoded file is the one readers see and differs from the raw one, so run the frame check on it ([capture.md](capture.md#the-frame-check)). A copied film is the raw film, already checked.
 
 Worked example: with `B` at 1,363,149 bytes (1.3 MB), the budget is 6,645,350 bytes. For a 90 s film that is about 570 kbps in total after the script's 4% margin and about 470 kbps for video, above the 300 kbps floor.

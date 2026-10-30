@@ -2,16 +2,32 @@
 
 Everything on screen is staged, seeded and checked before the page is built. `$E` is the explainer folder, `$REPO` the user's repo and `$FILM` the MP4 under check.
 
-Contents: [Private instance](#private-instance-and-seeded-data) · [Resets](#resets-between-takes) · [Before](#the-parent-commit-for-before) · [Taking footage](#taking-footage-and-screenshots) · [Frame check](#the-frame-check) · [Label timing](#label-timing)
+Contents: [Private instance](#private-instance-and-seeded-data) · [Stopping](#stopping-what-you-started) · [Resets](#resets-between-takes) · [Before](#the-parent-commit-for-before) · [Taking footage](#taking-footage-and-screenshots) · [Frame check](#the-frame-check) · [Label timing](#label-timing)
 
 ## Private instance and seeded data
 
 Run your own copy of the app that nothing real can reach, and show only data you seeded.
 
-- **A private instance** means a port the user's own dev server isn't on, a fresh data directory or database (never the user's real one), a fresh browser profile, and no real accounts or credentials. Start it from `$REPO` as it is and edit nothing in the repo. Stop it when the run ends.
+- **A private instance** means a port the user's own dev server isn't on, a fresh data directory or database (never the user's real one), a fresh browser profile, and no real accounts or credentials. Start it from `$REPO` as it is and edit nothing in the repo. Stop it when the run ends, by the rules in [Stopping what you started](#stopping-what-you-started).
+- **Seed it under a temp folder or `$E`,** never in the user's own project folders. A fixture's repo path can appear on screen (a project path in a header or a recent-files list), and a path under `$E` carries the home directory, so the frame check looks for it.
 - **Use the repo's seed data or fixtures if it has them,** after reading them for anything real: names, emails, paths, tokens.
 - **If the repo has none, build your own** under `$E/harness/` and load it through the app's own import path or API. Invent the names (a made-up company, made-up people), fix the dates, and keep it small. Never add a fixture to the user's repo. The video caption discloses that the data is seeded ([page.md](page.md#the-staging-caption)).
 - **Seeded data only.** If a screen can't be shown without real data, don't show that screen.
+
+## Stopping what you started
+
+Stop only the processes you started, by PID, because the user's own instance of the same app may be running.
+
+- **Record the PID of everything you start,** at launch, in `$E/harness/pids`. Before stopping a process, also record its children (`pgrep -P <pid>` lists them by parent, not by name), because children can outlive their parent.
+- **Stop only those PIDs.** Never stop anything by name or pattern: no `pkill`, no `killall`, no `kill $(pgrep -f ...)`. A pattern that matches your instance's path or binary also matches the user's.
+- **After stopping, check that nothing is left** whose working directory or `HOME` is under `$E`:
+
+  ```bash
+  lsof -w +D "$E" | awk 'NR>1 {print $2, $1}' | sort -u
+  ps -axeww -o pid=,command= | grep -F "HOME=$E" | grep -v grep
+  ```
+
+  Anything listed is yours, because nothing else works under `$E`. Stop it by its PID, then run both commands again until they print nothing.
 
 ## Resets between takes
 
@@ -19,6 +35,7 @@ Reset all persisted state before every take, so "before" and "after" differ only
 
 - Seed data back to its initial state.
 - Cookies, localStorage, sessionStorage and IndexedDB, or a new browser profile. A dismissed tip, a last-opened project or a remembered sidebar width changes what the next take shows.
+- State the app persists itself, such as a panel width kept in its daemon, survives a new browser. Between takes that change it, restart the private instance on a fresh home and re-measure after.
 - Theme set explicitly (light or dark, never "system"), one viewport size, and one zoom level.
 - The clock fixed where the app shows relative dates.
 
@@ -42,7 +59,7 @@ git -C "$REPO" archive <parent-sha> | tar -x -C "$E/harness/before"
 
 ## The frame check
 
-The frame check is yours, so do it with your own eyes and say so in the hand-over note. Run it on the raw footage after capture, and again on the fitted MP4 after `fit_video.py`, because the fitted file is the one readers see.
+The frame check is yours, so do it with your own eyes and say so in the hand-over note. Run it on the raw footage after capture. Run it again on the fitted MP4 only when `fit_video.py` reports `reencoded: true`, because then the fitted file differs from the raw one and is the one readers see.
 
 1. **Sample one frame every 3 s plus every screenshot:**
 
@@ -52,7 +69,7 @@ The frame check is yours, so do it with your own eyes and say so in the hand-ove
    ```
 
    The screenshots are the files in `$E/media/` that the page uses.
-2. **Read every frame and every screenshot** with the Read tool and write one line for each saying what it shows. Look for a home directory path (`/Users/<name>`), a username, an email address, a token, a real customer or project name, a terminal prompt, a window or tab title, and a notification.
+2. **Read every frame and every screenshot** with the Read tool and write one line for each saying what it shows. Look for a home directory path (`/Users/<name>`), a username, an email address, a token, a real customer or project name, a terminal prompt, a window or tab title, a notification, and the fixture's repo path.
 3. **Search the text the frames can't show:** page source, alt text and captions, for the home directory and the username.
 
    ```bash
@@ -61,8 +78,8 @@ The frame check is yours, so do it with your own eyes and say so in the hand-ove
    ffprobe -v error -show_entries format_tags -of default=nw=1 "$FILM"
    ```
 
-   Run the same search on the built page. Judge each hit: a username that is also a common word needs a look at the line, not a reflex.
-4. **A hit or a frame with real data stops the run** (stop 3 in the skill). Name the file and the time.
+   Run the same search on the built page. Judge each hit: a username that is also a common word needs a look at the line, not a reflex. The dated record near the top of the page carries the branch name ([page.md](page.md#the-dated-record)), and a branch name can contain the username, so a match on that one line is expected. Any other match is stop 3 in the skill. For an outside reader the record drops the branch ([page.md](page.md#readers)), so every match there is a stop.
+4. **A hit (other than the dated-record line) or a frame with real data stops the run** (stop 3 in the skill). Name the file and the time.
 
 Sampling every 3 s can miss text that is on screen for under 3 s, and a small font can be read past. That is why the note says the check was the agent's.
 

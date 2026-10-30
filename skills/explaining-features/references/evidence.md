@@ -33,8 +33,10 @@ A behavior that's true but unchecked is Not proven until you check it. Then chec
 1. **Read first.** Take behaviors from the spec's scenarios, then add what an earlier app run and the tests already show. Copy results from those runs only where their proof still exists; cite it in Proof.
 2. **Measure what a recording can't show.** A film shows one run. A measurement (an element's left edge at 261.8px in both states), keyboard reach or error handling needs its own row and its own proof.
 3. **Verify first when the main behavior was never run.** Invoke `quirk:using-apps-like-a-user` with `--unattended`, one goal per behavior, with a test account or seeded data only. Every row then comes from that run: `OBSERVED` with a screenshot showing the result is Pass; `NO_EFFECT` or `blocked` is not. Copy its screenshots into `$E/media/`. A behavior it couldn't check goes in as Not proven.
-4. **A feature with no UI** gets the real command or test run, with its real output saved under `$E/media/` and cited in Proof. A diagram of how it works is fine on the page if it's labeled as a diagram, and it never stands in as proof.
-5. **Stop on a broken or unreachable main behavior** before building anything. The stop wording is in the skill's step 2.
+4. **The guard's verdict and the ledger's Result are different things.** The guard's `verdict` refuses `pass` for a state with nothing to act on (`pass_without_effect`), so a state that's simply on screen at rest stays `partial` there. The ledger row can still be Pass when the screenshot shows that state, and How checked says it was observed at rest with no action. A `NO_EFFECT` on an action whose effect is visible in the screenshot, such as a panel drag, isn't proof either way: prove the row with a measurement or a following action, and say so in How checked. A dead control is still the normal case for `NO_EFFECT`, so never report `NO_EFFECT` as a pass for the action itself.
+5. **A feature with no UI** gets the real command or test run, with its real output saved under `$E/media/` and cited in Proof. A diagram of how it works is fine on the page if it's labeled as a diagram, and it never stands in as proof.
+6. **A Unit test only row** comes from the project's own test runner, run one file at a time. If files interfere when run together, say so in How checked.
+7. **Stop on a broken or unreachable main behavior** before building anything. The stop wording is in the skill's step 2.
 
 ## Handing rows to the film
 
