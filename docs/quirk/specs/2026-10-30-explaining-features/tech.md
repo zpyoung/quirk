@@ -143,6 +143,7 @@ skills/explaining-features/
   references/{evidence.md,capture.md,page.md}
   scripts/verify_outcome.py
   scripts/fit_video.py
+  scripts/leftovers.py
   evals/trigger-evals.json       at least 12 true and 12 false
   test-pressure-{1,2,3,4}.md
 ```
@@ -184,6 +185,15 @@ fit_video.py --in MP4 --budget-bytes N --out MP4
         3 ffmpeg missing
   the floor is always tried before exit 1, because the nominal bitrate isn't a lower bound on real size
   encodes to a unique temp file next to --out and removes only that file on failure
+```
+
+`CONTRACT:`
+```
+leftovers.py --explainer DIR
+  stdout: {"yours": [{"pid", "command"}], "check_by_hand": [{"pid", "command"}]}
+  yours: the process's HOME is DIR or under it; check_by_hand: only its working directory is
+  never lists itself or its parent; never stops anything; an open file alone never lists a process
+  exit: 0 the scan ran, whatever it found; 2 usage or DIR missing; 3 ps or lsof missing or failed
 ```
 
 The example ran about 550 kbps in total for 58 s, so a 90 s film under the page limit is near 570 kbps, comfortably above the floor.
