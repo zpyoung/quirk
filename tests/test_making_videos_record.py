@@ -506,6 +506,14 @@ def test_scale_2_reports_null_webm_converts_the_list_and_removes_the_frames(proj
     assert frames_dirs(project) == []
 
 
+def test_scale_2_list_building_has_no_upper_bound_on_a_frames_hold(project, frames_env, tmp_path):
+    proc, out = record(project, write_steps(tmp_path), frames_env, "--size", "1280x720", "--scale", "2")
+    assert proc.returncode == 0, proc.stderr
+    script = generated_script(project)
+    assert "(hold > 0 ? hold : 0.2).toFixed(4)" in script
+    assert not re.search(r"hold\s*<\s*\d", script), "a long static interval would be shortened"
+
+
 def test_scale_2_asserts_the_frame_size_and_keeps_the_frames_on_a_mismatch(project, frames_env, tmp_path):
     frames_env["FAKE_SIZE"] = "1280x720"
     proc, out = record(project, write_steps(tmp_path), frames_env, "--size", "1280x720", "--scale", "2")
@@ -614,6 +622,13 @@ def _pixel(frame: bytes, width: int, x: int, y: int) -> "tuple[int, int, int]":
     return frame[offset], frame[offset + 1], frame[offset + 2]
 
 
+def _pixel_series(path: Path, x: int, y: int, fps: int) -> "list[tuple[int, int, int]]":
+    proc = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf", f"fps={fps},format=rgb24,crop=1:1:{x}:{y}",
+                           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
+    assert proc.returncode == 0, proc.stderr
+    return [tuple(proc.stdout[i:i + 3]) for i in range(0, len(proc.stdout), 3)]
+
+
 def _near(actual, expected, tolerance=24) -> bool:
     return all(abs(a - e) <= tolerance for a, e in zip(actual, expected))
 
@@ -686,3 +701,56 @@ def test_live_scale1_pointer_steps_move_press_click_and_drag_for_real(project, l
     assert _near(_pixel(last, w, 600, 440), (0xD0, 0x20, 0x20)), "the box did not follow the drag"
     assert _near(_pixel(last, w, 100, 650), (0x20, 0xA0, 0x50)), "the key press did not land"
     assert _near(_pixel(last, w, 910, 640), (0xF0, 0xF0, 0x00), 40), "the click did not land"
+
+
+POINTER_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html, body { margin: 0; height: 100%; background: #203080; }
+</style></head><body></body></html>
+"""
+
+POINTER_BACKGROUND = (0x20, 0x30, 0x80)
+
+
+@pytest.mark.parametrize("live_page", [POINTER_PAGE], indirect=True)
+def test_live_scale2_drawn_pointer_follows_real_mouse_moves(project, live_page, tmp_path):
+    node_dir = _working_node_dir()
+    assert node_dir is not None, "no working node found on PATH or under ~/.nvm"
+    env = dict(os.environ)
+    env["PATH"] = f"{node_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["QUIRK_STUDIO"] = str(tmp_path / "studio")
+    hold_ms = 2500
+    first_point, second_point = (300, 200), (900, 500)
+    steps = write_steps(tmp_path, [
+        {"action": "move", "x": first_point[0], "y": first_point[1]},
+        {"action": "wait", "ms": hold_ms},
+        {"action": "move", "x": second_point[0], "y": second_point[1]},
+        {"action": "wait", "ms": hold_ms},
+    ])
+    proc = subprocess.run(
+        [sys.executable, str(RECORD_PY), "--project", str(project), "--url", live_page,
+         "--steps", str(steps), "--size", "1280x720", "--scale", "2"],
+        capture_output=True, text=True, env=env, timeout=240,
+    )
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    out = json.loads(proc.stdout.strip())
+    mp4 = Path(out["mp4"])
+    assert _ffprobe_size(mp4) == "2560x1440"
+
+    def arrow_body_series(point):
+        # the arrow's filled body sits 4 css px right of and 10 below its tip, which is the mouse position
+        return _pixel_series(mp4, 2 * (point[0] + 4), 2 * (point[1] + 10), fps=4)
+
+    at_first, at_second = arrow_body_series(first_point), arrow_body_series(second_point)
+    white = [_near(p, (0xFF, 0xFF, 0xFF)) for p in at_first]
+    other = [_near(p, (0xFF, 0xFF, 0xFF)) for p in at_second]
+    assert len(white) == len(other) > 8
+
+    # glides take a variable time at 2x, so find the moments instead of seeking to fixed timestamps
+    on_first = [i for i in range(len(white)) if white[i] and not other[i]]
+    on_second = [i for i in range(len(white)) if other[i] and not white[i]]
+    assert on_first, "the pointer never appeared at the first point"
+    assert on_second, "the pointer never appeared at the second point"
+    assert max(on_first) < min(on_second), "the pointer did not move from the first point to the second"
+    assert _near(at_first[-1], POINTER_BACKGROUND), "the pointer was left at the first point"
+    assert _near(at_second[0], POINTER_BACKGROUND), "the pointer was at the second point from the start"

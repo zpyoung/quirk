@@ -291,7 +291,7 @@ SCREENCAST_TAIL = """
     frames.forEach((frame, i) => {
       const next = i + 1 < frames.length ? frames[i + 1].t : stoppedAt;
       const hold = next - frame.t;
-      lines.push("file '" + frame.file + "'", "duration " + (hold > 0 && hold < 120 ? hold : 0.2).toFixed(4));
+      lines.push("file '" + frame.file + "'", "duration " + (hold > 0 ? hold : 0.2).toFixed(4));
     });
     lines.push("file '" + frames[frames.length - 1].file + "'");
     writeFileSync(LIST_PATH, lines.join("\\n") + "\\n");
