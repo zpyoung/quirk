@@ -762,6 +762,18 @@ def test_data_inline_path_must_stay_inside_the_project_or_source_directory(tmp_p
         assert rc == 2 and "outside" in result["error"] and "a.png" in result["error"], ref
 
 
+def test_data_inline_symlink_inside_the_source_directory_cannot_escape_to_an_outside_file(tmp_path, env, project):
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "private.png").write_bytes(b"PRIVATE SECRET")
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    (srcdir / "link.png").symlink_to(secret / "private.png")
+    rc, result, out = media_page(tmp_path, env, project, '<img data-inline src="link.png" alt="x">', {}, srcdir=srcdir)
+    assert rc == 2 and "outside" in result["error"] and "link.png" in result["error"], result
+    assert not out.exists()
+
+
 def test_data_inline_from_the_project_directory_is_allowed(tmp_path, env, project):
     (project / "a.png").write_bytes(MEDIA_BYTES["a.png"])
     srcdir = tmp_path / "src"
