@@ -212,7 +212,7 @@ Pressure scenarios follow the layout in `skills/using-apps-like-a-user/test-pres
 
 - **Always:** keep default behavior of each existing skill byte-for-byte for callers not using the new option. Print one JSON object on stdout from new scripts, with diagnostics on stderr. Never prompt interactively from a script.
 - **Ask:** anything that contradicts [Decisions Locked](logic.md#decisions-locked).
-- **Never:** build a sibling skill's path in `SKILL.md` prose; write outside `~/Studio` and `.quirk/html` during a run; send anything to a cloud service a brief didn't name.
+- **Never:** build a sibling skill's path in `SKILL.md` prose; write outside `~/Studio` and the repo's self-ignoring `.quirk/` during a run; stop a process by name or pattern, because that can hit the user's own instance of the same app; send anything to a cloud service a brief didn't name.
 
 ## Cross-cutting
 

@@ -341,3 +341,22 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
 - **Severity**: low
 - **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+
+## BUG-42: using-apps act reports NO_EFFECT on a drag that visibly resizes a panel
+- **Observed**: 2026-10-30
+- **File**: skills/using-apps-like-a-user/scripts/_effects.py:23
+- **Description**: The 8x8 screen hash can't see a panel resize, so a real drag came back NO_EFFECT during an explaining-features run, and the agent had to rest the goal's pass on a later action. hover got a pixel comparison; drag still uses the hash.
+- **Introduced by**: unknown
+- **Severity**: medium
+- **Proposed fix**: Decide whether drag should use the same pixel comparison as hover, then reproduce with a live test.
+- **Blocker for**: Verifying resize behavior through the guard
+
+## BUG-43: making-videos' one-frame-early tween advice can fail sync on its first render
+- **Observed**: 2026-10-30
+- **File**: skills/making-videos/references/audio.md
+- **Description**: Following the advice to start tweens one frame before the word, a first render failed the sync check with beats 55 to 62 ms early. Observed once. In the same run, hf.py snapshot reported an end-of-timeline frame at 40.74 s for a 42 s film; unclear whether that's related.
+- **Introduced by**: unknown
+- **Severity**: low
+- **Proposed fix**: Measure the offset on a few renders and correct the guidance if it holds.
+- **Blocker for**: First-render sync
+
