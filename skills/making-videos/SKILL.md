@@ -35,7 +35,7 @@ Example: "5 min with an AI presenter, upload to YouTube" becomes "I can make a 3
 
 ## Pipeline
 
-Follow the steps in order. Steps 4 and 7 are stops: ask, then wait.
+Follow the steps in order. Steps 4 and 7 are stops: ask, then wait. A brief with `"stops": "none"` turns both stops off, as described under [No stops](#no-stops).
 
 1. **Doctor.** Run `python3 "$SKILL_DIR/scripts/doctor.py" check --need narration,3d,record`, listing only what the brief needs. Add `captions` whenever a 9:16 or 1:1 cut is requested, because burned captions need ffmpeg-full. Report what is missing. For installable pieces (`install --what tts` or `--what playwright`), say the size and ask; run with `--yes` only on a yes. If the user declines the TTS install, build the video silent and say so in the storyboard. Blender is not installed for the user: print its install command.
 2. **Gather.** Read the repo, capture any URL the user gave, and record a running web app if the video shows one. Keep `$P/sources.md`. Native macOS app recording is not supported: say so and offer a URL capture or the web build. See [gather](references/gather.md).
@@ -45,6 +45,15 @@ Follow the steps in order. Steps 4 and 7 are stops: ask, then wait.
 6. **Render and verify.** Run `studio.py version new --project "$P"` before the first render, so `$P/v1` exists. Run it again before each re-render of a version the user has already seen (step 8 is that run), and never for a version they have not seen. Render the MP4 with `hf.py`, then run `verify.py --project "$P" --version v1`. Fix every failed check and render again before the user sees anything. Look at the decoded frames yourself. See [review](references/review.md).
 7. **Review page (stop 2).** After your frame review, write `<vN>/review-notes.md` (format in [review.md](references/review.md#review-page-and-stop-2)). Then run `review_page.py --project "$P"`, tell the user the path to `review.html`, the verify result in a sentence, and what you saw in the frames. Ask for notes and wait.
 8. **Notes loop.** Run `studio.py version new --project "$P"`, apply the notes to the scenes, and repeat steps 5 to 7 for the new version, whose folder this command just created. Rebuild the page so old and new sit side by side. If a note is unclear, ask which version it applies to.
+
+## No stops
+
+With `stops: none` in `brief.json` (`"stops": "none"`), steps 4 and 7 still write and show everything they normally show, and the run does not wait: it goes from the storyboard into the build, and from the review page to its final message. The setting is `"both"` unless the brief says otherwise, and `studio.py project new` rejects any other value. Read it from `$P/brief.json`.
+
+- **Step 4.** Write `storyboard.md` and run `review_page.py --project "$P"` as usual, then start the build without waiting for approval.
+- **Brand.** Do not run `brand save --confirm`. Confirmation records that a person approved the brand, and nobody did. A draft stays unconfirmed, and `storyboard.md` says so in a line, so the next video starts from the draft again. A brand that was already confirmed stays confirmed.
+- **Step 7.** Write `review-notes.md`, build `review.html` and report its path, the verify result and what you saw in the frames, then end the run without asking for notes. Notes still produce a `v2` if the user sends them later.
+- **Unchanged.** `review_page.py` never needed an approval, so no script changes. A third failed `verify` still stops the loop, and a version the user may have seen is never overwritten.
 
 ## When something fails
 

@@ -18,8 +18,8 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9_./-]+\.py)")
 
 REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
-    "SKILL.md": ("hf.py", "cloud.py", "3 minutes", "avatar", "macOS", "3 failed", "stop", "SKILL_DIR"),
-    "references/storyboard.md": ("about 20 s", "9:16", "Blender", "silent", "scene kit"),
+    "SKILL.md": ("hf.py", "cloud.py", "3 minutes", "avatar", "macOS", "3 failed", "stop", "SKILL_DIR", "stops: none"),
+    "references/storyboard.md": ("about 20 s", "9:16", "Blender", "silent", "scene kit", "stops: none"),
     "references/motion.md": ("immediateRender: false", "fromTo", "repeat: -1", "gsap.set", "4.5:1"),
     "references/long-form.md": ("scene kit", "assembled MP4"),
     "references/hyperframes.md": (
@@ -30,11 +30,11 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "Injected deterministic",
     ),
     "references/3d.md": ("blender_render.py", "--python-exit-code", "parse_known_args", "Standard", "2D"),
-    "references/review.md": ("verify.py", "review_page.py", "3 failed", "v2", "contact sheet", "review-notes.md"),
+    "references/review.md": ("verify.py", "review_page.py", "3 failed", "v2", "contact sheet", "review-notes.md", "stops: none"),
     "references/audio.md": ("voice.py", "LUFS", "dBTP", "20 dB", ".srt", "--burn", "cps_violations"),
     "references/cloud.md": ("cloud.py", "cloud_allow", "never permission", "calls.jsonl"),
     "references/gather.md": ("capture", "record.py", "native macOS"),
-    "references/brand.md": ("brand save", "--confirm", "pronunciations", ":root"),
+    "references/brand.md": ("brand save", "--confirm", "pronunciations", ":root", "stops: none"),
 }
 
 
