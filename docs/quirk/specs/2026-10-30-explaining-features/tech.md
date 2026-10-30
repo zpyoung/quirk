@@ -168,7 +168,9 @@ verify_outcome.py --verify FILE [--mp4 NAME]
   exit: 0 outcome produced; 2 unreadable input, a run missing, or several MP4s and no --mp4
   The first rule that matches decides:
     1. ship:           the run passed
-    2. halt:           outside_calls failed, on any attempt, because the call has already happened
+    2. halt:           outside_calls failed in the run's current checks, even before the 3-attempt stop,
+                       because the call has already happened. verify rereads the whole append-only
+                       calls.jsonl on every attempt, so a later attempt can't clear an earlier failure.
     3. retry:          the run failed and its stop flag is false
     4. omit:           any failed check other than sync and loudness, an unknown check name included,
                        or no failed check named at all
@@ -178,8 +180,9 @@ fit_video.py --in MP4 --budget-bytes N --out MP4
   stdout: {"out", "bytes", "reencoded": bool, "video_kbps"}
   FLOOR_KBPS = 300 for video; audio is AAC at 96 kbps
   copies when the input already fits; otherwise re-encodes H.264 yuv420p with AAC to fit the budget
-  exit: 0 ok; 1 the budget can't hold the floor, or an encode at the floor still overshoots (names the
-        budget and the floor); 2 usage; 3 ffmpeg missing
+  exit: 0 ok; 1 an encode at the floor still overshoots (names the budget and the floor); 2 usage;
+        3 ffmpeg missing
+  the floor is always tried before exit 1, because the nominal bitrate isn't a lower bound on real size
   encodes to a unique temp file next to --out and removes only that file on failure
 ```
 
