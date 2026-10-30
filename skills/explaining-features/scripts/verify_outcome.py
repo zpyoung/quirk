@@ -9,7 +9,7 @@ Prints one JSON object, ``{"outcome", "failed", "detail"}``, where ``outcome`` i
 - ``ship_disclosed``: only ``sync`` or ``loudness`` failed; the film goes in and the page lists the failure.
 - ``omit``: a check a viewer would notice failed, an unknown check failed, or the run failed with no failed
   check named; the film stays out and the page says why.
-- ``halt``: ``outside_calls`` failed, on any attempt. The call has already happened, so the run stops.
+- ``halt``: ``outside_calls`` failed in the run's current checks. The call has already happened, so the run stops.
 - ``retry``: the run failed and its stop flag is false; fix the cause and verify again.
 
 The first matching rule decides, in the order ship, halt, retry, omit, ship_disclosed. ``halt`` outranks
@@ -87,15 +87,6 @@ def _failed_names(checks: Any) -> list[str]:
     return names
 
 
-def _halted_on_any_attempt(run: dict[str, Any]) -> bool:
-    if HALT_CHECK in _failed_names(run.get("checks")):
-        return True
-    attempts = run.get("attempts")
-    if not isinstance(attempts, list):
-        return False
-    return any(isinstance(a, dict) and HALT_CHECK in _failed_names(a.get("checks")) for a in attempts)
-
-
 def decide(name: str, run: dict[str, Any]) -> dict[str, Any]:
     """Apply the five rules to one run and return the JSON payload."""
     passed = run.get("passed")
@@ -104,9 +95,7 @@ def decide(name: str, run: dict[str, Any]) -> dict[str, Any]:
     failed = _failed_names(run.get("checks"))
     if passed:
         return {"outcome": "ship", "failed": [], "detail": f"{name} passed verify; the film goes in."}
-    if _halted_on_any_attempt(run):
-        if HALT_CHECK not in failed:
-            failed.append(HALT_CHECK)
+    if HALT_CHECK in failed:
         return {
             "outcome": "halt",
             "failed": failed,

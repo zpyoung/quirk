@@ -152,7 +152,7 @@ Tell the user that notes make a v2. A note that changes the film (say, one line 
 | "It's obviously true, so the ledger row can say Pass." | Pass needs a real run you can point to. Check it, or mark it Not proven. |
 | "I'll offer an explainer now that the branch is done." | Don't. It runs only when asked. |
 
-Pressure scenarios for the rules a script can't enforce: [test-pressure-1.md](test-pressure-1.md), [test-pressure-2.md](test-pressure-2.md), [test-pressure-3.md](test-pressure-3.md).
+Pressure scenarios for the rules a script can't enforce: [test-pressure-1.md](test-pressure-1.md), [test-pressure-2.md](test-pressure-2.md), [test-pressure-3.md](test-pressure-3.md), [test-pressure-4.md](test-pressure-4.md).
 
 ## References
 
