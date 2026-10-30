@@ -359,6 +359,12 @@ class WebDriver:
             if not action.ref or action.value is None:
                 raise DriverError("target_required", "select needs --ref and --value")
             return [["select", action.ref, action.value]]
+        if kind == "hover":
+            if action.ref:
+                return [["hover", action.ref]]
+            if action.x is None or action.y is None:
+                raise DriverError("target_required", "hover needs --ref or --x/--y")
+            return [["mousemove", _num(action.x), _num(action.y)]]
         if kind == "drag":
             return self._drag_steps(action)
         if kind == "scroll":

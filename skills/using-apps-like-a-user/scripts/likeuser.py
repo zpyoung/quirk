@@ -83,9 +83,9 @@ NATIVE_PREFIX = "n:"
 
 ACTION_KINDS = (
     "click", "double-click", "right-click", "fill", "type", "press", "hotkey", "scroll",
-    "drag", "select", "dismiss",
+    "drag", "select", "dismiss", "hover",
 )
-POINT_KINDS = ("click", "double-click", "right-click")
+POINT_KINDS = ("click", "double-click", "right-click", "hover")
 FOCUSED_VALUE_KINDS = ("type", "press", "hotkey")
 EXPECTS = ("url", "title", "tree", "focus", "value", "screen", "any")
 GATES = ("none", "requested", "approved", "created")
@@ -1425,8 +1425,10 @@ def _gate_subjects(req: ActRequest, names: Dict[str, str]) -> List[str]:
 
     A `--ref` target is named by its accessible name, falling back to `--target-name`. A
     `press` or `hotkey` names its effect only through `--target-name`, so that is always a
-    subject even when a `--ref` is also given.
+    subject even when a `--ref` is also given. A `hover` commits nothing, so it has no subjects.
     """
+    if req.kind == "hover":
+        return []
     ref_name = names.get(req.ref) if req.ref else None
     if req.kind in ("press", "hotkey"):
         return [s for s in (ref_name, req.target_name) if s]
@@ -1637,7 +1639,11 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     block["console_errors_new"] = console_new
     block["network_failures_new"] = requests_new
 
-    status, signals, other = _effects.classify(before, after, req.expect, settled)
+    fine = None
+    if req.kind == "hover":
+        fine = _screen_changed_finely(
+            data["observations"][str(sidecar["id"])]["screenshot_path"], snap.screenshot)
+    status, signals, other = _effects.classify(before, after, req.expect, settled, fine)
     if "never_observed" in ctx.faults and status == "OBSERVED":
         status = "NO_EFFECT"
     if "always_observed" in ctx.faults and result.delivered:
@@ -1652,6 +1658,22 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     return _act_result(
         run, goal_id, status, signals=signals, other_changes=other,
         driver_verified=result.driver_verified, findings_added=added, observation=block, **extra)
+
+
+def _screen_changed_finely(before_shot: Optional[str], after_shot: Optional[Path]) -> bool:
+    """True when two screenshots differ by more than FINE_SCREEN_THRESHOLD of their pixels.
+
+    The 8x8 hash cannot see a hover, so a hover's `screen` signal comes from here. A missing,
+    withheld, or undecodable screenshot, or a pair of different sizes, counts as no change, so a
+    hover can come back `NO_EFFECT` but never a false `OBSERVED`.
+    """
+    if before_shot is None or after_shot is None:
+        return False
+    try:
+        changed = _effects.pixels_changed(Path(before_shot), Path(after_shot))
+    except (ValueError, OSError):
+        return False
+    return changed > _effects.FINE_SCREEN_THRESHOLD
 
 
 def _charge(run: _run.Run, goal_id: Optional[str]) -> None:

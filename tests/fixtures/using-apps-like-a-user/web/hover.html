@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hover Fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #ffffff; }
+  h1 { position: absolute; left: 40px; top: 20px; margin: 0; font-size: 20px; }
+  button { position: absolute; left: 40px; border: 0; padding: 0; background: #1c4fd7; cursor: default; }
+  #swatch { top: 100px; width: 26px; height: 26px; }
+  #swatch:hover { background: #e8590c; width: 40px; }
+  #plain { top: 160px; width: 26px; height: 26px; }
+  #tick { top: 220px; width: 2px; height: 16px; background: #000000; }
+  #tick:hover { background: #d6002a; }
+</style>
+</head>
+<body>
+<h1>Hover Fixture</h1>
+<button id="swatch" type="button" aria-label="Hover swatch"></button>
+<button id="plain" type="button" aria-label="Plain swatch"></button>
+<button id="tick" type="button" aria-label="Caret-sized tick"></button>
+</body>
+</html>

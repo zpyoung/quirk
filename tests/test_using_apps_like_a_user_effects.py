@@ -9,8 +9,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "skills" / "using-apps-like-a-user" / "scripts"))
+sys.path.insert(0, str(ROOT / "tests" / "fixtures" / "using-apps-like-a-user" / "fakes"))
 
 import _effects as fx  # noqa: E402
+from harness import solid_png  # noqa: E402
 from _effects import Signals  # noqa: E402
 
 PNG_DIR = ROOT / "tests" / "fixtures" / "using-apps-like-a-user" / "png"
@@ -362,6 +364,94 @@ def test_classify_screen_expect_needs_both_hashes():
     assert fx.classify(before, after, "screen", settled=True)[0] == "NO_EFFECT"
     after = sig(screen_hash=(1 << 64) - 1)
     assert fx.classify(before, after, "screen", settled=True) == ("OBSERVED", ["screen"], [])
+
+
+def _shot(tmp_path, name, *rects, size=(1280, 720)):
+    path = tmp_path / name
+    path.write_bytes(solid_png(size[0], size[1], (255, 255, 255), rects))
+    return path
+
+
+def test_pixels_changed_is_zero_for_identical_images(tmp_path):
+    a = _shot(tmp_path, "a.png", (40, 100, 26, 26, (0, 0, 0)))
+    assert fx.pixels_changed(a, a) == 0.0
+
+
+def test_pixels_changed_is_the_fraction_of_pixels_that_moved(tmp_path):
+    before = _shot(tmp_path, "before.png")
+    after = _shot(tmp_path, "after.png", (40, 100, 26, 26, (0, 0, 0)))
+    assert fx.pixels_changed(before, after) == pytest.approx(26 * 26 / (1280 * 720))
+
+
+def test_fine_threshold_is_92_pixels_at_1280_by_720():
+    assert fx.FINE_SCREEN_THRESHOLD * 1280 * 720 == pytest.approx(92.16)
+    assert fx.FINE_LUMA_DELTA == 16
+
+
+def test_a_26px_square_changing_color_clears_the_fine_threshold(tmp_path):
+    before = _shot(tmp_path, "before.png", (40, 100, 26, 26, (28, 79, 215)))
+    after = _shot(tmp_path, "after.png", (40, 100, 26, 26, (232, 89, 12)))
+    assert fx.pixels_changed(before, after) > fx.FINE_SCREEN_THRESHOLD
+
+
+def test_a_2_by_16_caret_stays_under_the_fine_threshold(tmp_path):
+    before = _shot(tmp_path, "before.png")
+    after = _shot(tmp_path, "after.png", (40, 100, 2, 16, (0, 0, 0)))
+    assert 0 < fx.pixels_changed(before, after) < fx.FINE_SCREEN_THRESHOLD
+
+
+def test_a_luma_shift_is_a_change_only_beyond_the_delta(tmp_path):
+    def half(level):
+        return (0, 0, 640, 720, (level,) * 3)
+
+    base = _shot(tmp_path, "base.png", half(100))
+    at_delta = _shot(tmp_path, "at.png", half(100 + fx.FINE_LUMA_DELTA))
+    past_delta = _shot(tmp_path, "past.png", half(101 + fx.FINE_LUMA_DELTA))
+    assert fx.pixels_changed(base, at_delta) == 0.0
+    assert fx.pixels_changed(base, past_delta) == pytest.approx(0.5)
+
+
+def test_pixels_changed_rejects_mismatched_dimensions(tmp_path):
+    a = _shot(tmp_path, "a.png", size=(8, 8))
+    b = _shot(tmp_path, "b.png", size=(8, 9))
+    with pytest.raises(ValueError):
+        fx.pixels_changed(a, b)
+
+
+def test_pixels_changed_rejects_undecodable_input(tmp_path):
+    good = _shot(tmp_path, "good.png", size=(8, 8))
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not a png")
+    with pytest.raises(ValueError):
+        fx.pixels_changed(good, bad)
+    with pytest.raises(ValueError):
+        fx.pixels_changed(bad, good)
+
+
+def test_fine_changed_true_replaces_a_quiet_hash():
+    quiet = sig(screen_hash=0)
+    assert fx.classify(quiet, quiet, "screen", settled=True)[0] == "NO_EFFECT"
+    assert fx.classify(quiet, quiet, "screen", settled=True, fine_changed=True) == (
+        "OBSERVED", ["screen"], [])
+
+
+def test_fine_changed_false_replaces_a_moved_hash():
+    before, after = sig(screen_hash=0), sig(screen_hash=(1 << 64) - 1)
+    assert fx.classify(before, after, "screen", settled=True)[0] == "OBSERVED"
+    assert fx.classify(before, after, "screen", settled=True, fine_changed=False) == (
+        "NO_EFFECT", [], [])
+
+
+def test_fine_changed_keeps_the_signal_order_and_other_changes():
+    before, after = sig(tree="a", focus="f"), sig(tree="b", focus="f")
+    status, signals, other = fx.classify(before, after, "screen", settled=True, fine_changed=True)
+    assert (status, signals, other) == ("OBSERVED", ["tree", "screen"], ["tree"])
+
+
+def test_fine_changed_none_leaves_the_hash_path_alone():
+    before, after = sig(screen_hash=0), sig(screen_hash=(1 << 64) - 1)
+    assert fx.classify(before, after, "screen", settled=True, fine_changed=None) == (
+        "OBSERVED", ["screen"], [])
 
 
 def test_classify_rejects_an_unknown_expect():

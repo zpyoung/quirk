@@ -1101,6 +1101,112 @@ class TestCoordinates:
         assert drag["argv"][drag["argv"].index("--to-y") + 1] == "50"
 
 
+class TestHover:
+    """`hover` goes through `act`, is never gated, and `screen` is decided by a pixel comparison."""
+
+    DARK_LEFT = (0, 0, 640, 720, (30, 30, 30))
+    SWATCH = (40, 100, 26, 26)
+
+    @staticmethod
+    def _hover_pages(tmp_path, before, after):
+        pngs = {}
+        for name, png in (("before", before), ("after", after)):
+            pngs[name] = tmp_path / f"{name}.png"
+            pngs[name].write_bytes(png)
+        return {"home": web_page(golden_yaml(), png=str(pngs["before"])),
+                "hovered": web_page(golden_yaml(), png=str(pngs["after"]))}
+
+    def _run(self, sb, tmp_path, after_rects=(), before_rects=(), after_size=(1280, 720), **kw):
+        pages = self._hover_pages(
+            tmp_path, harness.solid_png(1280, 720, (255, 255, 255), (self.DARK_LEFT, *before_rects)),
+            harness.solid_png(*after_size, (255, 255, 255), (self.DARK_LEFT, *after_rects)))
+        rules = [{"on": ["hover", "e4"], "page": "hovered"},
+                 {"on": ["mousemove"], "page": "hovered"}, click_rule("e4", "hovered")]
+        return web_run(sb, rules=rules, pages=pages, **kw)
+
+    def _repaint(self, color):
+        return ((*self.SWATCH, color),)
+
+    def test_a_hover_that_repaints_a_control_is_observed_on_screen(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, self._repaint((232, 89, 12)),
+                                self._repaint((28, 79, 215)))
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e4",
+                     "--expect", "screen")
+        assert result.status == "OBSERVED" and result["signals"] == ["screen"], result.out
+        assert sb.pw_argvs("hover") == [["hover", "e4"]]
+        assert sb.pw_argvs("click") == []
+
+    def test_the_same_repaint_is_invisible_to_a_click_because_it_keeps_the_hash(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, self._repaint((232, 89, 12)),
+                                self._repaint((28, 79, 215)))
+        result = click(sb, run_id, obs["observation_id"], "e4", "--expect", "screen")
+        assert result.status == "NO_EFFECT" and result["signals"] == []
+
+    def test_a_hover_that_changes_nothing_is_no_effect(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path)
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e4",
+                     "--expect", "screen")
+        assert result.status == "NO_EFFECT" and result["signals"] == [], result.out
+
+    def test_a_caret_sized_change_is_not_a_screen_change(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, ((40, 100, 2, 16, (0, 0, 0)),))
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e4",
+                     "--expect", "screen")
+        assert result.status == "NO_EFFECT"
+
+    def test_a_hover_reports_its_screen_change_without_an_expect(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, self._repaint((232, 89, 12)))
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e4")
+        assert result.status == "OBSERVED" and result["signals"] == ["screen"]
+
+    def test_a_missing_before_screenshot_can_never_make_a_hover_observed(self, sb, tmp_path):
+        run_id, _ = self._run(sb, tmp_path, self._repaint((232, 89, 12)), observe=False)
+        seen = sb.run("observe", "--run", run_id, "--goal", "g1", "--no-screenshot")
+        result = act(sb, run_id, seen["observation"]["observation_id"], "--action", "hover",
+                     "--ref", "e4", "--expect", "screen")
+        assert result.status == "NO_EFFECT", result.out
+        assert result["observation"]["screenshot_path"]
+
+    def test_screenshots_of_different_sizes_do_not_count_as_a_change(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, self._repaint((232, 89, 12)), after_size=(1280, 721))
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e4",
+                     "--expect", "screen")
+        assert result.code == 0 and result.status == "NO_EFFECT", result.out
+
+    def test_a_coordinate_hover_moves_the_pointer_and_names_its_target(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path, self._repaint((232, 89, 12)))
+        bare = act(sb, run_id, obs["observation_id"], "--action", "hover", "--x", "50", "--y", "110")
+        assert bare.code == 2 and bare["error"] == "target_name_required"
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--x", "50",
+                     "--y", "110", "--target-name", "Swatch", "--expect", "screen")
+        assert result.status == "OBSERVED", result.out
+        assert sb.pw_argvs("mousemove") == [["mousemove", "50", "110"]]
+
+    def test_a_hover_needs_a_target(self, sb, tmp_path):
+        run_id, obs = self._run(sb, tmp_path)
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover")
+        assert result.code == 2 and result["error"] == "target_required"
+        assert sb.pw_argvs("hover") == []
+
+    def test_a_hover_over_a_gated_name_is_not_gated_on_third_party_apps(self, sb, tmp_path):
+        pages = self._hover_pages(
+            tmp_path, harness.solid_png(1280, 720), harness.solid_png(1280, 720))
+        run_id, obs = web_run(sb, owner="third-party", pages=pages)
+        by_ref = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "e17")
+        assert by_ref.status == "NO_EFFECT", by_ref.out
+        by_point = act(sb, run_id, by_ref["observation"]["observation_id"], "--action", "hover",
+                       "--x", "10", "--y", "20", "--target-name", "Delete project")
+        assert by_point.status == "NO_EFFECT", by_point.out
+        assert sb.run_json(run_id)["gates"] == []
+        assert len(sb.pw_argvs("hover")) == 1 and len(sb.pw_argvs("mousemove")) == 1
+
+    def test_a_hover_on_a_native_app_is_an_error_not_a_pass(self, sb):
+        run_id, obs = native_run(sb)
+        result = act(sb, run_id, obs["observation_id"], "--action", "hover", "--ref", "2",
+                     "--foreground")
+        assert result.status == "ERROR" and result["driver_error"] == "unsupported_action", result.out
+
+
 class TestElectron:
     def test_begin_launches_with_a_debug_port_attaches_and_binds_the_native_driver(self, sb):
         run_id, obs = electron_run(sb)

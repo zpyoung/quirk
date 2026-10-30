@@ -10,8 +10,10 @@ import json
 import os
 import re
 import signal
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -63,6 +65,24 @@ def home_pages() -> Dict[str, dict]:
         "home": web_page(golden_yaml("snapshot")),
         "counted": web_page(golden_yaml("snapshot_after_click")),
     }
+
+
+def solid_png(width: int, height: int, color=(255, 255, 255), rects=()) -> bytes:
+    """An RGB PNG of one `color`, with `rects` of (x, y, w, h, color) painted over it in order."""
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        crc = zlib.crc32(tag + body) & 0xFFFFFFFF
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", crc)
+
+    rows = []
+    for y in range(height):
+        row = bytearray(bytes(color) * width)
+        for rx, ry, rw, rh, rcolor in rects:
+            if ry <= y < ry + rh:
+                left, right = max(rx, 0), min(rx + rw, width)
+                row[left * 3:right * 3] = bytes(rcolor) * (right - left)
+        rows.append(b"\x00" + bytes(row))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
 
 
 def wrapper(path: Path, python_script: Path, env: Optional[Dict[str, str]] = None) -> Path:
