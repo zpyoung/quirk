@@ -288,6 +288,7 @@ Run these on the final file, in this order. Any edit after verify means run veri
 - [ ] `viewports`: screenshots at 375x800 and 1280x800, in light and dark; at 375px the page does not scroll horizontally
 - [ ] `themes`: sampled text reaches 4.5:1 (3:1 at 24px and up) in both themes
 - [ ] `network`: zero requests in offline mode
+- [ ] `media`: present only when the page has a `<video>` or `<img>`. Every video loads its metadata within 15 seconds and has a picture, and every image has pixels. It runs in the first run only. A browser that cannot play H.264 passes the check but lists the MP4 video as not checked in `details`, and the delivery note must say so.
 
 `scripts/quirk_html.py note FILE` builds the delivery note and reports `verify_stale: true` when the file changed after verify. If it is true, run verify again.
 

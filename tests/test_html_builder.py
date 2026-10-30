@@ -633,6 +633,190 @@ def test_data_inside_the_project_directory_is_allowed_from_another_source_direct
     assert rc == 0, result
 
 
+MEDIA_BYTES = {
+    "a.png": b"\x89PNG\r\n\x1a\nfake",
+    "b.jpg": b"\xff\xd8\xffjpg",
+    "c.jpeg": b"\xff\xd8\xffjpeg",
+    "d.webp": b"RIFFxxxxWEBP",
+    "e.gif": b"GIF89a",
+    "f.mp4": b"\x00\x00\x00\x18ftypmp42",
+}
+MEDIA_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4"}
+
+
+def b64(raw: bytes) -> str:
+    import base64
+
+    return base64.b64encode(raw).decode("ascii")
+
+
+def media_page(tmp_path, env, project, main: str, files: dict[str, bytes | str], srcdir=None):
+    srcdir = srcdir or tmp_path
+    for name, content in files.items():
+        target = srcdir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+    src = write_src(srcdir / "m.src.html", {"template": "report", "title": "Media"}, {"main": main})
+    out = tmp_path / "m.html"
+    rc, result = build(src, out, env, project)
+    return rc, result, out
+
+
+@pytest.mark.parametrize("name", list(MEDIA_BYTES))
+def test_data_inline_images_and_video_become_data_uris_and_lose_the_attribute(tmp_path, env, project, name):
+    tag = "video" if name.endswith(".mp4") else "img"
+    markup = f'<video data-inline src="{name}"></video>' if tag == "video" else f'<img data-inline src="{name}" alt="x">'
+    rc, result, out = media_page(tmp_path, env, project, markup, {name: MEDIA_BYTES[name]})
+    assert rc == 0, result
+    html = out.read_text(encoding="utf-8")
+    mime = MEDIA_MIME[Path(name).suffix]
+    assert f'src="data:{mime};base64,{b64(MEDIA_BYTES[name])}"' in html
+    assert "data-inline" not in html and name not in html
+
+
+def test_data_inline_poster_and_source_elements_are_inlined(tmp_path, env, project):
+    main = '<video data-inline poster="a.png"><source data-inline src="f.mp4" type="video/mp4"></video>'
+    rc, result, out = media_page(tmp_path, env, project, main, {"a.png": MEDIA_BYTES["a.png"], "f.mp4": MEDIA_BYTES["f.mp4"]})
+    assert rc == 0, result
+    html = out.read_text(encoding="utf-8")
+    assert f'poster="data:image/png;base64,{b64(MEDIA_BYTES["a.png"])}"' in html
+    assert f'src="data:video/mp4;base64,{b64(MEDIA_BYTES["f.mp4"])}" type="video/mp4"' in html
+
+
+def test_data_inline_srt_converts_to_webvtt_and_the_first_track_becomes_default(tmp_path, env, project):
+    srt = "1\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\nBye\r\n"
+    main = (
+        '<video data-inline src="f.mp4">'
+        '<track data-inline kind="captions" srclang="en" src="en.srt">'
+        '<track data-inline kind="captions" srclang="fr" src="fr.vtt">'
+        "</video>"
+    )
+    vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBonjour\n"
+    rc, result, out = media_page(tmp_path, env, project, main, {"f.mp4": MEDIA_BYTES["f.mp4"], "en.srt": srt, "fr.vtt": vtt})
+    assert rc == 0, result
+    html = out.read_text(encoding="utf-8")
+    import base64
+    import re as _re
+
+    tracks = _re.findall(r"<track[^>]*>", html)
+    assert len(tracks) == 2
+    assert " default" in tracks[0] and "default" not in tracks[1]
+    first = base64.b64decode(_re.search(r'src="data:text/vtt;base64,([^"]+)"', tracks[0]).group(1)).decode("utf-8")
+    assert first.startswith("WEBVTT\n\n")
+    assert "00:00:01.000 --> 00:00:02.500" in first and "00:00:03.000 --> 00:00:04.000" in first
+    assert "," not in first and "\r" not in first
+    assert base64.b64decode(_re.search(r'src="data:text/vtt;base64,([^"]+)"', tracks[1]).group(1)).decode("utf-8") == vtt
+
+
+def test_data_inline_leaves_an_existing_default_track_alone(tmp_path, env, project):
+    main = (
+        '<video data-inline src="f.mp4">'
+        '<track data-inline kind="captions" srclang="en" src="en.vtt">'
+        '<track data-inline default kind="captions" srclang="fr" src="fr.vtt">'
+        "</video>"
+    )
+    vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHi\n"
+    rc, result, out = media_page(tmp_path, env, project, main, {"f.mp4": MEDIA_BYTES["f.mp4"], "en.vtt": vtt, "fr.vtt": vtt})
+    assert rc == 0, result
+    import re as _re
+
+    tracks = _re.findall(r"<track[^>]*>", out.read_text(encoding="utf-8"))
+    assert "default" not in tracks[0] and "default" in tracks[1]
+
+
+def test_markup_without_data_inline_is_left_exactly_as_written(tmp_path, env, project):
+    main = '<img src="a.png" alt="x"><video src="f.mp4"><track src="en.vtt"></video>'
+    rc, result, out = media_page(tmp_path, env, project, main, {})
+    assert rc == 0, result
+    assert main in out.read_text(encoding="utf-8")
+
+
+def test_data_inline_inside_an_html_comment_is_ignored(tmp_path, env, project):
+    rc, result, out = media_page(tmp_path, env, project, '<!-- <img data-inline src="gone.png"> --><p>x</p>', {})
+    assert rc == 0, result
+
+
+@pytest.mark.parametrize(
+    ("main", "files", "needle"),
+    [
+        ('<img data-inline src="missing.png" alt="x">', {}, "missing.png"),
+        ('<img data-inline src="logo.svg" alt="x">', {"logo.svg": "<svg/>"}, "logo.svg"),
+        ('<video data-inline src="clip.mov"></video>', {"clip.mov": b"x"}, "clip.mov"),
+        ('<img data-inline alt="x">', {}, "img"),
+    ],
+)
+def test_data_inline_problems_are_exit_2_naming_the_path(tmp_path, env, project, main, files, needle):
+    rc, result, out = media_page(tmp_path, env, project, main, files)
+    assert rc == 2 and needle in result["error"], result
+    assert not out.exists()
+
+
+def test_data_inline_path_must_stay_inside_the_project_or_source_directory(tmp_path, env, project):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "a.png").write_bytes(MEDIA_BYTES["a.png"])
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    for ref in (str(outside / "a.png"), "../outside/a.png"):
+        rc, result, _ = media_page(tmp_path, env, project, f'<img data-inline src="{ref}" alt="x">', {}, srcdir=srcdir)
+        assert rc == 2 and "outside" in result["error"] and "a.png" in result["error"], ref
+
+
+def test_data_inline_from_the_project_directory_is_allowed(tmp_path, env, project):
+    (project / "a.png").write_bytes(MEDIA_BYTES["a.png"])
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    rc, result, out = media_page(tmp_path, env, project, f'<img data-inline src="{project / "a.png"}" alt="x">', {}, srcdir=srcdir)
+    assert rc == 0, result
+
+
+def test_inlined_media_over_10_mib_fails_the_size_check_and_never_becomes_a_sidecar(tmp_path, env, project):
+    big = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (10 * 1024 * 1024)
+    rc, result, out = media_page(tmp_path, env, project, '<video data-inline src="f.mp4"></video>', {"f.mp4": big})
+    assert rc == 1, result
+    assert result["sidecar"] is None and not list(tmp_path.glob("m.data.*"))
+    assert [f["check"] for f in result["checks"]["failures"]] == ["size"]
+
+
+def test_inlined_media_passes_external_refs_and_the_note_explains_the_2_mb_warning(tmp_path, env, project):
+    clip = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (2 * 1024 * 1024)
+    rc, result, out = media_page(tmp_path, env, project, '<video data-inline src="f.mp4"></video>', {"f.mp4": clip})
+    assert rc == 0 and result["checks"]["passed"] is True, result
+    rc, note = run_cli("note", out, env=env)
+    assert "Size: over 2 MB" in note["markdown"] and "embedded media" in note["markdown"].lower()
+
+
+def test_a_page_without_embedded_media_keeps_the_plain_size_note(tmp_path, env, project):
+    big = tmp_path / "big.json"
+    big.write_text(json.dumps({"blob": ["x" * 1000] * 11_000}), encoding="utf-8")
+    src = write_src(tmp_path / "b.src.html", {"template": "report", "title": "Big", "data": "big.json"}, {"main": "<p>x</p>"})
+    out = tmp_path / "b.html"
+    rc, _ = build(src, out, env, project)
+    rc, note = run_cli("note", out, env=env)
+    assert "embedded media" not in note["markdown"].lower()
+
+
+def test_a_q_grid_figure_without_data_span_warns_in_the_build_result(tmp_path, env, project):
+    main = '<q-grid>\n<figure><img src="a.png" alt="x"></figure>\n</q-grid>'
+    rc, result, _ = media_page(tmp_path, env, project, main, {})
+    assert rc == 0, result
+    assert any("data-span" in w["detail"] for w in result["checks"]["warnings"]), result["checks"]
+
+
+def test_the_note_prints_media_details_from_a_passing_verify_report(tmp_path, env, project):
+    out = built_example(tmp_path, env, project)
+    out_dir = verify_runner.default_out_dir(out)
+    out_dir.mkdir()
+    report = {
+        "status": "passed", "file_sha256": sha(out.read_text(encoding="utf-8")), "browser": "chrome",
+        "checks": {"media": {"passed": True, "details": ["video 1 was not checked: this browser cannot play H.264"]}},
+        "screenshots": [], "requests": [],
+    }
+    (out_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    rc, result = run_cli("note", out, env=env)
+    assert "media: video 1 was not checked" in result["markdown"]
+
+
 def test_data_with_a_skeleton_lacking_the_data_placeholder_is_exit_2_naming_the_template(tmp_path, env, project):
     custom_template(project, skeleton=SKELETON.replace("{{data}}", ""))
     seal(project / ".quirk" / "html-templates" / "fx")

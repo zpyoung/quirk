@@ -1005,6 +1005,29 @@ def warn_messages(text: str) -> list[str]:
     return [w["detail"].split(": ", 1)[1] for w in kitcheck.check_html_warnings(text, CATALOG, label="page.html")]
 
 
+def test_q_grid_figure_without_data_span_warns_and_names_the_fix() -> None:
+    text = '<q-grid>\n<figure><img src="a.png" alt="a"></figure>\n</q-grid>'
+    [warning] = kitcheck.check_html_warnings(text, CATALOG, label="page.html")
+    assert warning["check"] == "kit" and warning["detail"].startswith("page.html line 2:")
+    assert 'data-span="full"' in warning["detail"] and "figure" in warning["detail"]
+
+
+def test_q_grid_figure_with_data_span_does_not_warn() -> None:
+    text = '<q-grid><figure data-span="full"><img src="a.png" alt="a"></figure></q-grid>'
+    assert warn_messages(text) == []
+
+
+def test_figure_outside_a_q_grid_or_nested_in_one_does_not_warn() -> None:
+    assert warn_messages('<figure><img src="a.png" alt="a"></figure>') == []
+    assert warn_messages('<q-grid><q-panel title="T"><figure><img src="a.png" alt="a"></figure></q-panel></q-grid>') == []
+
+
+def test_q_grid_figure_warning_sits_beside_the_flow_warnings() -> None:
+    payload = {"nodes": [{"id": f"n{i}", "label": "x"} for i in range(1)], "edges": []}
+    text = f'<q-grid><figure><img src="a.png" alt="a"></figure></q-grid>\n{flow_markup(payload)}'
+    assert sum("data-span" in m for m in warn_messages(text)) == 1
+
+
 def test_flow_valid_graph_passes_with_no_warnings() -> None:
     payload = {
         "kinds": {"ui": 1, "worker": 2},
