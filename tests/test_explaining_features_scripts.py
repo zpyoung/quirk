@@ -358,16 +358,26 @@ class TestFitVideoReencode:
 
     def test_below_the_floor_exits_1_and_names_budget_and_floor(self, tmp_path: Path) -> None:
         src = make_clip(tmp_path / "in.mp4")
-        out = tmp_path / "out.mp4"
+        out_dir = tmp_path / "media"
+        out = out_dir / "out.mp4"
         proc = fit("--in", str(src), "--budget-bytes", "20000", "--out", str(out))
         assert proc.returncode == 1
         assert proc.stdout == ""
         assert "20000" in proc.stderr
         assert "300" in proc.stderr
-        assert not out.exists()
+        assert list(out_dir.iterdir()) == []
 
-    def test_a_budget_the_estimate_rejects_but_the_floor_encode_fits_succeeds_at_the_floor(self, tmp_path: Path) -> None:
-        src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)
+    def test_a_budget_below_the_nominal_floor_size_succeeds_when_the_floor_encode_fits(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=6,fps=1,fps=24",
+                "-c:v", "libx264", "-b:v", "3000k", "-pix_fmt", "yuv420p", "-f", "mp4", str(src),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
         floor_clip = tmp_path / "floor.mp4"
         subprocess.run(
             [
@@ -379,24 +389,16 @@ class TestFitVideoReencode:
             capture_output=True,
             timeout=120,
         )
-        budget = int(floor_clip.stat().st_size * 1.015)
+        budget = int(floor_clip.stat().st_size * 1.02)
         duration = float(probe(src)["format"]["duration"])
-        assert budget * 8 * 0.96 / duration / 1000 < 300 <= budget * 8 / duration / 1000
+        assert budget * 8 / duration / 1000 < 300
+        assert budget < src.stat().st_size
         out = tmp_path / "out.mp4"
         proc = fit("--in", str(src), "--budget-bytes", str(budget), "--out", str(out))
         assert proc.returncode == 0, proc.stderr
         result = json.loads(proc.stdout)
         assert result["video_kbps"] == 300
         assert result["bytes"] == out.stat().st_size <= budget
-
-    def test_a_budget_that_cannot_hold_the_floor_before_any_margin_exits_1(self, tmp_path: Path) -> None:
-        src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)
-        duration = float(probe(src)["format"]["duration"])
-        budget = int(300 * 1000 / 8 * duration * 0.99)
-        proc = fit("--in", str(src), "--budget-bytes", str(budget), "--out", str(tmp_path / "out.mp4"))
-        assert proc.returncode == 1
-        assert str(budget) in proc.stderr
-        assert "300" in proc.stderr
 
     def test_a_floor_encode_that_still_overshoots_exits_1_and_leaves_nothing(self, tmp_path: Path) -> None:
         src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)

@@ -8,15 +8,17 @@ copied and ``video_kbps`` is null; otherwise the film is re-encoded as H.264 yuv
 (audio is dropped only when the input has none) at the highest video bitrate that fits.
 
 Video never goes below FLOOR_KBPS: under it text in the film stops being readable. The floor limits the bitrate
-tried, not the safety-adjusted estimate, so a budget that holds the floor is tried at the floor and accepted if
-that encode fits. Otherwise the script fails and names the budget and the floor, and the caller frees bytes
-elsewhere (smaller screenshots, a shorter film).
+tried, not the size predicted from it, because a nominal bitrate is not a lower bound on the encoded size. Any
+budget is therefore tried at the floor at the latest and accepted if that encode fits. Otherwise the script
+fails and names the budget and the floor, and the caller frees bytes elsewhere (smaller screenshots, a shorter
+film).
 
 The encode goes to a unique temporary file next to ``--out`` and is renamed over it on success, so ``--in`` is
 never touched whatever it is named.
 
-Exit 0 ok; 1 cannot fit above FLOOR_KBPS or the encode failed; 2 usage or an unreadable input; 3 ffmpeg or
-ffprobe missing (needed only when a re-encode is). Diagnostics go to stderr; the script never prompts.
+Exit 0 ok; 1 an encode at FLOOR_KBPS still overshoots the budget, or the encode failed; 2 usage or an unreadable
+input; 3 ffmpeg or ffprobe missing (needed only when a re-encode is). Diagnostics go to stderr; the script never
+prompts.
 """
 
 from __future__ import annotations
@@ -77,8 +79,8 @@ def _probe(path: Path) -> tuple[float, bool]:
     return duration, "audio" in streams
 
 
-def _video_kbps(budget: int, duration: float, has_audio: bool, safety: float = SAFETY) -> int:
-    total_kbps = budget * 8 * safety / duration / 1000
+def _video_kbps(budget: int, duration: float, has_audio: bool) -> int:
+    total_kbps = budget * 8 * SAFETY / duration / 1000
     return int(total_kbps - (AUDIO_KBPS if has_audio else 0))
 
 
@@ -94,14 +96,6 @@ def _encode(src: Path, part: Path, kbps: int, has_audio: bool) -> None:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         _die(f"ffmpeg failed: {proc.stderr.strip()[-400:]}", EXIT_CANNOT_FIT)
-
-
-def _cannot_fit(budget: int, kbps: int) -> NoReturn:
-    _die(
-        f"cannot fit the film in {budget} bytes: that leaves {max(kbps, 0)} kbps for video, "
-        f"below the {FLOOR_KBPS} kbps floor",
-        EXIT_CANNOT_FIT,
-    )
 
 
 def _floor_too_big(budget: int, size: int) -> NoReturn:
@@ -130,9 +124,6 @@ def fit(src: Path, budget: int, out: Path) -> dict[str, object]:
 
     _require_ffmpeg()
     duration, has_audio = _probe(src)
-    unpadded_kbps = _video_kbps(budget, duration, has_audio, safety=1.0)
-    if unpadded_kbps < FLOOR_KBPS:
-        _cannot_fit(budget, unpadded_kbps)
     kbps = _video_kbps(budget, duration, has_audio)
     part = _temp_beside(out)
     try:
