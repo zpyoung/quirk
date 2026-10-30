@@ -1,6 +1,6 @@
 # Logic spec: `explaining-features`, an evidence-first feature explainer skill
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: touches >3 source files across four skills)
 
 On 2026-10-30 a session finished the Add project header button in the quirky repo, then made a
 walkthrough at the user's request: a 58 s narrated video inside one offline HTML report, with
@@ -18,10 +18,10 @@ video, drive apps or build pages itself.
 
 | Thing | Where | What it holds |
 |---|---|---|
-| Evidence ledger | `~/Studio/videos/<date>-<slug>/` | One row per behavior: the claim, the result, how it was checked, where the proof is |
-| Film | the same project folder, through `making-videos` | One narrated MP4, when the behavior moves |
+| Evidence ledger | `~/Studio/explainers/<date>-<slug>/` | One row per behavior: the claim, the result, how it was checked, where the proof is |
+| Film | `~/Studio/videos/<date>-<slug>/`, through `making-videos` | One narrated MP4, when the behavior moves |
 | Page | `<project>/.quirk/html/`, through `writing-html-artifacts` | One self-contained HTML file with everything inline |
-| Page source and scripts | the same project folder | What rebuilds the page if the worktree goes, and how the footage was made |
+| Page source and scripts | the same explainer folder as the ledger | What rebuilds the page if the worktree goes, and how the footage was made |
 
 The ledger is the new idea, and everything else comes from it. The film shows only behavior with a
 result in the ledger. The page's results table is the ledger. "What's still open" is the unproven rows
@@ -439,4 +439,6 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 
 ## Status & amendments
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-30: The ledger, page source and scripts live in `~/Studio/explainers/<date>-<slug>/`, not the video project folder. `studio.py project new` refuses a folder that already exists, and a run with no film has no video project. The film project stays in `~/Studio/videos/`. This settles the folder-layout item deferred to the tech spec.
