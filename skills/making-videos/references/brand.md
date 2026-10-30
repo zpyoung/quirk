@@ -1,6 +1,6 @@
 # Brand: studio layout, extraction, reuse
 
-Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
+With `stops: none` in the brief, never confirm a brand: see the last step under First video. Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
 storyboard at stop 1, and confirm it only when the user approves that storyboard. Commands are
 `python3 "$SKILL_DIR/scripts/studio.py" ...`.
 
@@ -94,7 +94,8 @@ is no draft file to save, and studio folders are shared across runs, so another 
 7. Show the draft beside the storyboard at stop 1: swatches with names and hex values (labelled "proposed" where you chose them), font families and
    whether files were found, the logo or its absence, and the voice. Apply the user's edits to the
    draft and save it again (still unconfirmed).
-8. When the user approves the storyboard, save with confirmation:
+8. With `stops: none` in the brief, skip this step: nobody approved the storyboard, so the brand stays
+   unconfirmed, and the storyboard says so. Otherwise, when the user approves the storyboard, save with confirmation:
    `studio.py brand save --product P --file "$PROJECT/brand.draft.json" --confirm`. If the storyboard is not
    approved, the brand stays unconfirmed and the next video starts from the draft again.
 

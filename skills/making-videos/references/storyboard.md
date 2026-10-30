@@ -1,6 +1,6 @@
 # Storyboard: script, scene list, style frames, scene kit
 
-The storyboard is stop 1. Write it, show it to the user with the draft brand if the brand is new, and
+The storyboard is stop 1, unless the brief sets `stops: none` (see [SKILL.md](../SKILL.md#no-stops)): then write and show it exactly the same way but do not wait, and add a line to it saying the brand was not confirmed because nobody approved it. Otherwise, write it, show it to the user with the draft brand if the brand is new, and
 build nothing until the user approves it. To show it, run `review_page.py --project "$P"`: with no version
 folder yet, the page shows `storyboard.md` and the stills in `frames-storyboard/`. Give the user the
 `review.html` path. Do not render an animatic as `v1` to fill the page: `v1` is the first build the user

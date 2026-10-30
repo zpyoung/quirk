@@ -1,6 +1,6 @@
 # Verify, review page and notes loop
 
-Verify every render before the user sees it, look at the decoded frames yourself, then stop at the review page. Never tell the user a render is good because the preview or a snapshot looked right.
+Verify every render before the user sees it, look at the decoded frames yourself, then stop at the review page. With `stops: none` in the brief, write and report the page the same way but do not wait for notes ([SKILL.md](../SKILL.md#no-stops)). Never tell the user a render is good because the preview or a snapshot looked right.
 
 Contents:
 - [The loop](#the-loop)
@@ -147,7 +147,7 @@ Stop 2 is the point where you wait for the user. Tell them:
 - what you saw in the frames, in one or two lines;
 - a request for notes.
 
-Then wait. Do not render again until notes arrive.
+Then wait. Do not render again until notes arrive. With `stops: none`, give the same report and end the run instead of waiting; the 3-attempt rule above still applies.
 
 ## Notes become a new version
 

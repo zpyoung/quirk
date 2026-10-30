@@ -153,6 +153,27 @@ def test_unknown_cloud_provider_fails_naming_it(env, tmp_path):
     assert "bogus" in out["error"]
 
 
+def test_stops_defaults_to_both(env, tmp_path):
+    code, out = new_project(env, tmp_path)
+    assert code == 0
+    assert json.loads(Path(out["brief"]).read_text())["stops"] == "both"
+
+
+@pytest.mark.parametrize("stops", ["both", "none"])
+def test_stops_value_is_stored(env, tmp_path, stops):
+    code, out = new_project(env, tmp_path, brief={"stops": stops})
+    assert code == 0
+    assert json.loads(Path(out["brief"]).read_text())["stops"] == stops
+
+
+@pytest.mark.parametrize("stops", ["one", "None", "", None, True, 0, ["none"]])
+def test_stops_other_value_fails_project_new(env, tmp_path, stops):
+    code, out = new_project(env, tmp_path, brief={"stops": stops})
+    assert code == 1
+    assert "stops" in out["error"]
+    assert not (tmp_path / "studio" / "videos").exists() or not any((tmp_path / "studio" / "videos").iterdir())
+
+
 def test_invalid_brief_json_fails(env, tmp_path):
     code, out = new_project(env, tmp_path, brief="{not json")
     assert code == 1
