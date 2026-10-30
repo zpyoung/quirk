@@ -31,6 +31,7 @@ CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
 FLOW_TAG = re.compile(r"<q-flow[\s/>]", re.IGNORECASE)
 SCHEMA_TAG = re.compile(r"<q-schema[\s/>]", re.IGNORECASE)
 SEQUENCE_TAG = re.compile(r"<q-sequence[\s/>]", re.IGNORECASE)
+GRID_TAG = re.compile(r"<q-grid[\s/>]", re.IGNORECASE)
 
 KNOWN_RULES = frozenset(
     {
@@ -2486,8 +2487,8 @@ def _rule_sequence_data(node: _Node, report: Report, index: _Index) -> None:
 
 
 def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict]:
-    """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs, long edge labels or long ``q-sequence`` message labels)."""
-    if not (FLOW_TAG.search(text) or SCHEMA_TAG.search(text) or SEQUENCE_TAG.search(text)):
+    """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs, long edge labels, long ``q-sequence`` message labels or a ``figure`` in a ``q-grid`` with no ``data-span``)."""
+    if not (FLOW_TAG.search(text) or SCHEMA_TAG.search(text) or SEQUENCE_TAG.search(text) or GRID_TAG.search(text)):
         return []
     builder = _TreeBuilder()
     try:
@@ -2508,6 +2509,12 @@ def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict
             _validate_schema_node(node, lambda _line, _msg: None, report_warn)
         elif node.tag == "q-sequence" and "q-sequence" in catalog.elements:
             _validate_sequence_node(node, lambda _line, _msg: None, report_warn)
+        elif node.tag == "figure" and node.parent is not None and node.parent.tag == "q-grid" and "data-span" not in node.attrs:
+            report_warn(
+                node.line,
+                'a figure directly inside q-grid takes one column, a quarter of the row; add data-span="full" '
+                "(or data-span 2 to 6) to the figure to widen it",
+            )
     found.sort()
     return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
 

@@ -511,3 +511,116 @@ def test_the_delivery_note_labels_a_no_js_report(tmp_path: Path) -> None:
     assert _verify_line_for(tmp_path, missing) == ["Verify (no JS): not browser-verified (no-browser)."]
     crashed = {"status": "failed", "reason": "verify-crashed", "no_js": True}
     assert _verify_line_for(tmp_path, crashed) == ["Verify (no JS): failed (verify-crashed)."]
+
+
+def test_the_delivery_note_prints_media_details_even_when_the_check_passed(tmp_path: Path) -> None:
+    report = {
+        "status": "passed",
+        "browser": "chromium",
+        "checks": {
+            "console": {"passed": True, "details": ["ignored: only failed checks list details"]},
+            "media": {"passed": True, "details": ["video 1 was not checked: this browser cannot play H.264"]},
+        },
+        "screenshots": [],
+    }
+    assert _verify_line_for(tmp_path, report) == [
+        "Verify: passed in chromium.",
+        "  - media: video 1 was not checked: this browser cannot play H.264",
+    ]
+
+
+_PIXEL_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082"
+)
+
+
+def _ffmpeg_clip(tmp_path: Path) -> Path:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=0.5:r=10",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(clip),
+        ],
+        check=True,
+    )
+    return clip
+
+
+def _build_media_page(tmp_path: Path, main: str) -> Path:
+    from htmlkit import assemble
+
+    header = json.dumps({"template": "report", "title": "Media"})
+    src = tmp_path / "m.src.html"
+    src.write_text(f"<!-- quirk-src {header} -->\n<!-- slot: summary -->\n<p>Summary.</p>\n<!-- slot: main -->\n{main}\n", encoding="utf-8")
+    out = tmp_path / "m.html"
+    assemble.build_tier1(src, out=out, upgrade=False, project_dir=tmp_path, user_dir=tmp_path / "user")
+    return out
+
+
+def _plays_h264(result: dict) -> bool:
+    return not any("cannot play H.264" in d for d in result["checks"]["media"]["details"])
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_an_inlined_video_with_captions_and_a_poster_passes_the_media_check(tmp_path: Path) -> None:
+    _ffmpeg_clip(tmp_path)
+    (tmp_path / "poster.png").write_bytes(_PIXEL_PNG)
+    (tmp_path / "en.srt").write_text("1\n00:00:00,000 --> 00:00:00,400\nHello\n", encoding="utf-8")
+    page = _build_media_page(
+        tmp_path,
+        '<video data-inline src="clip.mp4" poster="poster.png" controls>'
+        '<track data-inline kind="captions" srclang="en" label="English" src="en.srt"></video>'
+        '<img data-inline src="poster.png" alt="pixel">',
+    )
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    media = result["checks"]["media"]
+    assert media["passed"] is True, result
+    if _plays_h264(result):
+        assert media["details"] == []
+        assert result["checks"]["console"]["passed"] is True, result["checks"]["console"]
+    else:
+        assert any("video 1 was not checked" in d for d in media["details"])
+    assert json.loads((tmp_path / "out" / "report.json").read_text())["checks"]["media"] == media
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_video_whose_bytes_are_corrupt_fails_the_media_check(tmp_path: Path) -> None:
+    clip = _ffmpeg_clip(tmp_path)
+    good = clip.read_bytes()
+    clip.write_bytes(good[:32] + bytes(len(good) - 32))
+    page = _build_media_page(tmp_path, '<video data-inline src="clip.mp4"></video>')
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    media = result["checks"]["media"]
+    if _plays_h264(result):
+        assert media["passed"] is False and result["status"] == "failed", result
+        assert any("video 1" in d for d in media["details"])
+    else:
+        assert media["passed"] is True and any("not checked" in d for d in media["details"])
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_an_image_that_does_not_decode_fails_the_media_check(tmp_path: Path) -> None:
+    (tmp_path / "bad.png").write_bytes(b"this is not a png")
+    page = _build_media_page(tmp_path, '<img data-inline src="bad.png" alt="broken">')
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    media = result["checks"]["media"]
+    assert media["passed"] is False and result["status"] == "failed"
+    assert any("image 1" in d for d in media["details"])
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_page_with_no_video_or_image_has_no_media_key(tmp_path: Path) -> None:
+    page = _build_media_page(tmp_path, "<p>No media here.</p>")
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    assert "media" not in result["checks"]
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_the_media_check_runs_in_the_first_run_only(tmp_path: Path) -> None:
+    (tmp_path / "poster.png").write_bytes(_PIXEL_PNG)
+    page = _build_media_page(tmp_path, '<img data-inline src="poster.png" alt="pixel">')
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    assert result["checks"]["media"] == {"passed": True, "details": []}
