@@ -1865,6 +1865,15 @@ def test_cua_a_refusal_behind_a_zero_exit_is_still_a_failure(fake_cua):
     assert raised.value.code == "capture_not_found"
 
 
+def test_hover_is_refused_by_both_native_drivers_before_any_call(fake_orca, fake_cua):
+    for driver, calls in ((_bound(), fake_orca.calls), (_bound_cua(), fake_cua.calls)):
+        for action in (Action(kind="hover", ref="1"), Action(kind="hover", x=1.0, y=2.0)):
+            with pytest.raises(DriverError) as raised:
+                driver.act(action, foreground=True)
+            assert raised.value.code == "unsupported_action"
+        assert calls() == []
+
+
 def test_cua_malformed_actions_are_refused_before_any_call(fake_cua):
     driver = _bound_cua()
     for action, code in [
