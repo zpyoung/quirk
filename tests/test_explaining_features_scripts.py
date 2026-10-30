@@ -37,7 +37,7 @@ def run_doc(
     names = list(dict.fromkeys([*extra_checks, *failed]))
     checks = [check(n, "fail" if n in failed else "skip" if n in skipped else "pass") for n in names]
     return {
-        "attempts": [],
+        "attempts": [{"n": 1, "ts": "2026-01-01T00:00:00+00:00", "passed": not failed}],
         "attempt": 1,
         "failed_attempts": 1 if failed else 0,
         "passed": (not failed) if passed is None else passed,
@@ -125,16 +125,16 @@ class TestVerifyOutcomeRules:
         _, out, _ = outcome(tmp_path, verify_doc(**{MP4: run_doc(("outside_calls",), stop=False)}))
         assert out["outcome"] == "halt"
 
-    def test_halt_when_an_earlier_attempt_failed_outside_calls(self, tmp_path: Path) -> None:
-        run = run_doc(("sync",), stop=True)
+    def test_halt_reads_the_current_checks_of_a_run_in_the_making_videos_shape(self, tmp_path: Path) -> None:
+        run = run_doc(("outside_calls", "sync"), stop=False)
         run["attempts"] = [
-            {"n": 1, "passed": False, "checks": [check("outside_calls", "fail")]},
-            {"n": 2, "passed": False},
-            {"n": 3, "passed": False},
+            {"n": 1, "ts": "2026-01-01T00:00:00+00:00", "passed": False},
+            {"n": 2, "ts": "2026-01-01T00:05:00+00:00", "passed": False},
         ]
+        run["attempt"], run["failed_attempts"] = 2, 2
         _, out, _ = outcome(tmp_path, verify_doc(**{MP4: run}))
         assert out["outcome"] == "halt"
-        assert "outside_calls" in out["failed"]
+        assert sorted(out["failed"]) == ["outside_calls", "sync"]
 
     @pytest.mark.parametrize("failing", [("sync",), ("contrast",), ("fonts", "sync")])
     def test_retry_while_the_stop_flag_is_false(self, tmp_path: Path, failing: tuple[str, ...]) -> None:
@@ -150,7 +150,10 @@ class TestVerifyOutcomeRules:
 
     def test_the_run_that_passed_wins_over_earlier_failures(self, tmp_path: Path) -> None:
         run = run_doc()
-        run["attempts"] = [{"n": 1, "passed": False, "checks": [check("contrast", "fail")]}, {"n": 2, "passed": True}]
+        run["attempts"] = [
+            {"n": 1, "ts": "2026-01-01T00:00:00+00:00", "passed": False},
+            {"n": 2, "ts": "2026-01-01T00:05:00+00:00", "passed": True},
+        ]
         _, out, _ = outcome(tmp_path, verify_doc(**{MP4: run}))
         assert out["outcome"] == "ship"
 
@@ -238,7 +241,7 @@ def make_clip(path: Path, *, seconds: int = 6, audio: bool = True) -> Path:
     cmd += ["-c:v", "libx264", "-b:v", "3000k", "-pix_fmt", "yuv420p"]
     if audio:
         cmd += ["-c:a", "aac", "-b:a", "128k"]
-    cmd += [str(path)]
+    cmd += ["-f", "mp4", str(path)]
     subprocess.run(cmd, check=True, capture_output=True, timeout=120)
     return path
 
@@ -362,6 +365,87 @@ class TestFitVideoReencode:
         assert "20000" in proc.stderr
         assert "300" in proc.stderr
         assert not out.exists()
+
+    def test_a_budget_the_estimate_rejects_but_the_floor_encode_fits_succeeds_at_the_floor(self, tmp_path: Path) -> None:
+        src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)
+        floor_clip = tmp_path / "floor.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-i", str(src), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-preset", "medium", "-b:v", "300k", "-maxrate", "300k", "-bufsize", "600k",
+                "-movflags", "+faststart", "-an", "-f", "mp4", str(floor_clip),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        budget = int(floor_clip.stat().st_size * 1.015)
+        duration = float(probe(src)["format"]["duration"])
+        assert budget * 8 * 0.96 / duration / 1000 < 300 <= budget * 8 / duration / 1000
+        out = tmp_path / "out.mp4"
+        proc = fit("--in", str(src), "--budget-bytes", str(budget), "--out", str(out))
+        assert proc.returncode == 0, proc.stderr
+        result = json.loads(proc.stdout)
+        assert result["video_kbps"] == 300
+        assert result["bytes"] == out.stat().st_size <= budget
+
+    def test_a_budget_that_cannot_hold_the_floor_before_any_margin_exits_1(self, tmp_path: Path) -> None:
+        src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)
+        duration = float(probe(src)["format"]["duration"])
+        budget = int(300 * 1000 / 8 * duration * 0.99)
+        proc = fit("--in", str(src), "--budget-bytes", str(budget), "--out", str(tmp_path / "out.mp4"))
+        assert proc.returncode == 1
+        assert str(budget) in proc.stderr
+        assert "300" in proc.stderr
+
+    def test_a_floor_encode_that_still_overshoots_exits_1_and_leaves_nothing(self, tmp_path: Path) -> None:
+        src = make_clip(tmp_path / "in.mp4", seconds=30, audio=False)
+        duration = float(probe(src)["format"]["duration"])
+        budget = int(300 * 1000 / 8 * duration * 1.0005)
+        out_dir = tmp_path / "media"
+        proc = fit("--in", str(src), "--budget-bytes", str(budget), "--out", str(out_dir / "o.mp4"))
+        assert proc.returncode == 1
+        assert proc.stdout == ""
+        assert str(budget) in proc.stderr
+        assert "300" in proc.stderr
+        assert list(out_dir.iterdir()) == []
+
+    def test_an_input_named_like_the_old_partial_file_survives_a_floor_rejection(self, tmp_path: Path) -> None:
+        out = tmp_path / "film.mp4"
+        src = make_clip(tmp_path / "film.mp4.part")
+        before = src.read_bytes()
+        proc = fit("--in", str(src), "--budget-bytes", "20000", "--out", str(out))
+        assert proc.returncode == 1
+        assert src.read_bytes() == before
+        assert not out.exists()
+
+    def test_an_input_named_like_the_old_partial_file_survives_a_failed_encode(self, tmp_path: Path) -> None:
+        shim = tmp_path / "bin"
+        shim.mkdir()
+        (shim / "ffmpeg").write_text("#!/bin/sh\necho boom >&2\nexit 1\n")
+        (shim / "ffmpeg").chmod(0o755)
+        (shim / "ffprobe").symlink_to(shutil.which("ffprobe"))
+        out = tmp_path / "film.mp4"
+        src = make_clip(tmp_path / "film.mp4.part")
+        before = src.read_bytes()
+        proc = fit(
+            "--in", str(src), "--budget-bytes", str(int(src.stat().st_size * 0.5)), "--out", str(out),
+            env={"PATH": str(shim)},
+        )
+        assert proc.returncode == 1
+        assert "boom" in proc.stderr
+        assert src.read_bytes() == before
+        assert not out.exists()
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "film.mp4.part"]
+
+    def test_an_input_named_like_the_old_partial_file_survives_a_successful_fit(self, tmp_path: Path) -> None:
+        out = tmp_path / "film.mp4"
+        src = make_clip(tmp_path / "film.mp4.part")
+        before = src.read_bytes()
+        proc = fit("--in", str(src), "--budget-bytes", str(int(src.stat().st_size * 0.5)), "--out", str(out))
+        assert proc.returncode == 0, proc.stderr
+        assert src.read_bytes() == before
+        assert out.stat().st_size <= int(len(before) * 0.5)
 
     def test_not_a_video_exits_2(self, tmp_path: Path) -> None:
         src = tmp_path / "in.mp4"

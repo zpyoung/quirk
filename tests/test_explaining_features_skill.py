@@ -196,7 +196,7 @@ def test_skill_points_at_every_reference() -> None:
 
 def test_skill_points_at_every_pressure_scenario() -> None:
     body = SKILL_PATH.read_text()
-    for n in (1, 2, 3):
+    for n in (1, 2, 3, 4):
         assert f"test-pressure-{n}.md" in body
 
 
@@ -207,7 +207,7 @@ def test_required_strings_are_present(rel: str) -> None:
         assert needle.lower() in text, f"{rel} is missing {needle!r}"
 
 
-@pytest.mark.parametrize("n", [1, 2, 3])
+@pytest.mark.parametrize("n", [1, 2, 3, 4])
 def test_pressure_scenario_follows_the_house_layout(n: int) -> None:
     text = (SKILL_DIR / f"test-pressure-{n}.md").read_text()
     assert text.startswith(f"# Pressure Test {n}:")
@@ -219,6 +219,13 @@ def test_pressure_scenario_follows_the_house_layout(n: int) -> None:
     for option in ("**A)", "**B)", "**C)"):
         assert option in text
     assert re.search(r"## Correct choice\n\n\*\*[ABC]\.\*\*", text)
+
+
+def test_pressure_scenario_4_covers_the_sourced_reasoning_rule_and_the_blocked_stop() -> None:
+    text = (SKILL_DIR / "test-pressure-4.md").read_text().lower()
+    for needle in ("blocked", "login", "stop 2", "from reading the code", "design reason", "names the code or spec"):
+        assert needle in text, needle
+    assert re.search(r"## correct choice\n\n\*\*c\.\*\*", text)
 
 
 def test_trigger_evals_are_balanced() -> None:

@@ -7,8 +7,13 @@ Prints one JSON object, ``{"out", "bytes", "reencoded", "video_kbps"}``. When th
 copied and ``video_kbps`` is null; otherwise the film is re-encoded as H.264 yuv420p with AAC at 96 kbps
 (audio is dropped only when the input has none) at the highest video bitrate that fits.
 
-Video never goes below FLOOR_KBPS: under it text in the film stops being readable, so the script fails and
-names the budget and the floor, and the caller frees bytes elsewhere (smaller screenshots, a shorter film).
+Video never goes below FLOOR_KBPS: under it text in the film stops being readable. The floor limits the bitrate
+tried, not the safety-adjusted estimate, so a budget that holds the floor is tried at the floor and accepted if
+that encode fits. Otherwise the script fails and names the budget and the floor, and the caller frees bytes
+elsewhere (smaller screenshots, a shorter film).
+
+The encode goes to a unique temporary file next to ``--out`` and is renamed over it on success, so ``--in`` is
+never touched whatever it is named.
 
 Exit 0 ok; 1 cannot fit above FLOOR_KBPS or the encode failed; 2 usage or an unreadable input; 3 ffmpeg or
 ffprobe missing (needed only when a re-encode is). Diagnostics go to stderr; the script never prompts.
@@ -18,9 +23,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -70,8 +77,8 @@ def _probe(path: Path) -> tuple[float, bool]:
     return duration, "audio" in streams
 
 
-def _video_kbps(budget: int, duration: float, has_audio: bool) -> int:
-    total_kbps = budget * 8 * SAFETY / duration / 1000
+def _video_kbps(budget: int, duration: float, has_audio: bool, safety: float = SAFETY) -> int:
+    total_kbps = budget * 8 * safety / duration / 1000
     return int(total_kbps - (AUDIO_KBPS if has_audio else 0))
 
 
@@ -86,7 +93,6 @@ def _encode(src: Path, part: Path, kbps: int, has_audio: bool) -> None:
     cmd += ["-f", "mp4", str(part)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        part.unlink(missing_ok=True)
         _die(f"ffmpeg failed: {proc.stderr.strip()[-400:]}", EXIT_CANNOT_FIT)
 
 
@@ -98,6 +104,23 @@ def _cannot_fit(budget: int, kbps: int) -> NoReturn:
     )
 
 
+def _floor_too_big(budget: int, size: int) -> NoReturn:
+    _die(
+        f"cannot fit the film in {budget} bytes: an encode at the {FLOOR_KBPS} kbps floor came to {size} bytes",
+        EXIT_CANNOT_FIT,
+    )
+
+
+def _temp_beside(out: Path) -> Path:
+    """A new empty file in ``out``'s folder that nothing else is named, with the mode a plain copy would get."""
+    fd, name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.stem}-", suffix=".mp4")
+    os.close(fd)
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod(name, 0o666 & ~umask)
+    return Path(name)
+
+
 def fit(src: Path, budget: int, out: Path) -> dict[str, object]:
     """Copy or re-encode ``src`` to ``out`` so it is at most ``budget`` bytes; the result is the JSON payload."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -107,21 +130,28 @@ def fit(src: Path, budget: int, out: Path) -> dict[str, object]:
 
     _require_ffmpeg()
     duration, has_audio = _probe(src)
+    unpadded_kbps = _video_kbps(budget, duration, has_audio, safety=1.0)
+    if unpadded_kbps < FLOOR_KBPS:
+        _cannot_fit(budget, unpadded_kbps)
     kbps = _video_kbps(budget, duration, has_audio)
-    part = out.with_name(out.name + ".part")
-    for _ in range(MAX_ENCODES):
-        if kbps < FLOOR_KBPS:
-            part.unlink(missing_ok=True)
-            _cannot_fit(budget, kbps)
-        _encode(src, part, kbps, has_audio)
-        size = part.stat().st_size
-        if size <= budget:
-            part.replace(out)
-            return {"out": str(out), "bytes": size, "reencoded": True, "video_kbps": kbps}
-        # rate control overshot: scale the target by how far off it landed, with a little extra room
-        kbps = int(kbps * budget / size * 0.97)
-    part.unlink(missing_ok=True)
-    _cannot_fit(budget, kbps)
+    part = _temp_beside(out)
+    try:
+        encodes = 0
+        while True:
+            # the floor is always tried before giving up, so a budget that can hold it is never rejected untried
+            kbps = FLOOR_KBPS if encodes >= MAX_ENCODES else max(kbps, FLOOR_KBPS)
+            _encode(src, part, kbps, has_audio)
+            encodes += 1
+            size = part.stat().st_size
+            if size <= budget:
+                part.replace(out)
+                return {"out": str(out), "bytes": size, "reencoded": True, "video_kbps": kbps}
+            if kbps == FLOOR_KBPS:
+                _floor_too_big(budget, size)
+            # rate control overshot: scale the target by how far off it landed, with a little extra room
+            kbps = int(kbps * budget / size * 0.97)
+    finally:
+        part.unlink(missing_ok=True)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
