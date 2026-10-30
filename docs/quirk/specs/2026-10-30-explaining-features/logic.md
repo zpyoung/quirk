@@ -1,6 +1,6 @@
 # Logic spec: `explaining-features`, an evidence-first feature explainer skill
 
-**Status**: Draft, awaiting user review
+**Status**: Approved
 
 On 2026-10-30 a session finished the Add project header button in the quirky repo, then made a
 walkthrough at the user's request: a 58 s narrated video inside one offline HTML report, with
