@@ -113,27 +113,42 @@ Write a steps file, a JSON list run in order after the browser opens `--url`:
 | `fill` | `selector`, `value` |
 | `wait` | `ms`, or `selector` or `text` to wait for |
 | `scroll` | `selector` to scroll into view, else `y` pixels (default 600) |
+| `hover` | `selector` or `text` |
+| `move` | `x`, `y` in viewport pixels |
+| `press` | `key`, a Playwright key name such as `Tab`, `Enter` or `Shift+Tab` |
+| `drag` | `from` and `to`, each `{"selector": ...}`, `{"text": ...}` or `{"x": ..., "y": ...}` |
 
 Every step except `wait` is followed by a short pause so the change shows; `ms` on a step sets its length.
+Use `ms` on a `hover` to hold the pointer while the hover state is on screen.
 
 ```bash
 python3 "$SKILL_DIR/scripts/record.py" --project "$PROJECT" --url "http://localhost:3000" \
-  --steps "$PROJECT/assets/steps.json" --size 1920x1080 --fps 30
+  --steps "$PROJECT/assets/steps.json" --size 1920x1080 --fps 30 --scale 1
 ```
 
 - Output: `{"webm", "mp4", "duration_s"}` under `assets/recordings/`, beside the generated Node script.
-  The MP4 is H.264 yuv420p at CRF 18 with no audio; use it as a muted `<video>` in a scene.
+  The MP4 is H.264 yuv420p at CRF 18 with no audio; use it as a muted `<video>` in a scene. `webm` is
+  `null` when `--scale` is above 1.
 - `--size` sets the viewport and the video size together; the default is 1920x1080 at 30 fps. Record at
   the size you will show. Upscaling a small recording does not sharpen it. For a 9:16 cut, record again at
   1080x1920 so the app shows its mobile layout, or place the 16:9 clip inside a vertical layout.
-- The recording shows a pointer that animates to each click (Playwright's `showActions`); headless
-  Chromium has no OS cursor otherwise.
+- `--scale 2` (or 3) records a sharper video: the page renders at that device scale and the MP4 is
+  `--size` times `--scale`, so `--size 1280x720 --scale 2` gives 2560x1440. Use it for a film that zooms
+  into the UI. The run checks the MP4's width and height and exits 1 naming both sizes if they differ.
+  It captures through the DevTools screencast, which is why `webm` is `null`; the frames sit in
+  `assets/recordings/.frames-<stamp>/` while converting and stay there if the run fails.
+- Headless Chromium has no OS cursor, so the recording needs a drawn one. At `--scale 1` with no pointer
+  steps it is Playwright's `showActions`, a pointer that animates to each click. At `--scale` above 1, or
+  with any `hover`, `move` or `drag` step, the script draws its own pointer in the page, moved only by
+  real mouse events, and turns `showActions` off so there is one cursor. In that mode `hover`, `move`,
+  `drag` and the move before each `click` glide to the element's center instead of jumping.
 - Playwright encodes in real time, so frames can drop or repeat under load. Do not rely on it for
   frame-exact sync with narration; cut the clip to the beat instead.
 - Steps are embedded as data in the generated script. Use a demo account and seeded data, never real
   credentials or customer data; the steps file stays in the project.
 - Exit 3 means Node, ffmpeg or the pinned Playwright install is missing, and the JSON names the fix.
-  Exit 2 is a bad URL, size or step. The run is logged in `calls.jsonl` as local provider `playwright`.
+  Exit 2 is a bad URL, size, scale or step (a `drag` missing an endpoint, a `move` missing `x` or `y`, an
+  empty `key`). The run is logged in `calls.jsonl` as local provider `playwright`.
 
 ## Native macOS apps
 
