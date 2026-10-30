@@ -45,3 +45,10 @@ Reviewed every 2 weeks. Use `/quirk:artifacts:test-skip` to append.
 - **Edge cases to cover**: All five existing smoke cases still exit 0 with production statements under complete adjudication; correctness-guarded passes with absent: true; correctness-wrong-fix passes recommendation_contains ceil_div (a correct fix written as (total + size - 1) // size would miss the marker); a run with adjudicator.enabled false still passes all five baseline cases
 - **Priority**: P1
 
+## TEST-5: explaining-features end-to-end paths with no acceptance run: verify-first, no-UI, native-app and failure paths
+- **File under test**: skills/explaining-features/SKILL.md
+- **Test type**: e2e
+- **Reason skipped**: The user chose a blind remake of one explainer as the acceptance, which covers only the path with existing evidence and a film.
+- **Edge cases to cover**: SC-2 verify-first on a shipped feature; SC-8 no-UI page; SC-9 native app with no film; SC-3 and SC-12 stops; SC-17 omit and halt outcomes; SC-18 real data stop; SC-11 parent that won't build; SC-13 clips per behavior
+- **Priority**: P2
+

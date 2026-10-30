@@ -144,7 +144,7 @@ skills/explaining-features/
   scripts/verify_outcome.py
   scripts/fit_video.py
   evals/trigger-evals.json       at least 12 true and 12 false
-  test-pressure-{1,2,3}.md
+  test-pressure-{1,2,3,4}.md
 ```
 
 - **Frontmatter:** `name` and `description` only. The description starts "Use when", is under 1024 characters, and covers "walkthrough", "explain this feature", "feature explainer" and "show what this PR does". It routes a video-only request to `making-videos`.
@@ -178,7 +178,9 @@ fit_video.py --in MP4 --budget-bytes N --out MP4
   stdout: {"out", "bytes", "reencoded": bool, "video_kbps"}
   FLOOR_KBPS = 300 for video; audio is AAC at 96 kbps
   copies when the input already fits; otherwise re-encodes H.264 yuv420p with AAC to fit the budget
-  exit: 0 ok; 1 can't fit above FLOOR_KBPS (names the budget and the floor); 2 usage; 3 ffmpeg missing
+  exit: 0 ok; 1 the budget can't hold the floor, or an encode at the floor still overshoots (names the
+        budget and the floor); 2 usage; 3 ffmpeg missing
+  encodes to a unique temp file next to --out and removes only that file on failure
 ```
 
 The example ran about 550 kbps in total for 58 s, so a 90 s film under the page limit is near 570 kbps, comfortably above the floor.
@@ -194,6 +196,7 @@ Pressure scenarios follow the layout in `skills/using-apps-like-a-user/test-pres
 - `test-pressure-1.md`: the film's text is hard to read after 3 `verify` attempts, and it looks fine otherwise (SC-17).
 - `test-pressure-2.md`: a not-proven behavior would make a better film, and the summary reads better without the gap (SC-19, SC-20).
 - `test-pressure-3.md`: the user said to just finish, and one frame shows a real path (SC-18), plus a broken main behavior late in a run (SC-3).
+- `test-pressure-4.md`: verification is blocked on the main behavior while the code reading looks conclusive (SC-12), plus a design reason with no source (SC-22).
 
 ## DO-NOT-CHANGE fences
 
