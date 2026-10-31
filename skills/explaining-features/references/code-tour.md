@@ -21,7 +21,7 @@ Count the files the change touched at the commit, not counting tests, docs, lock
 A stop is one file shown at the commit, a few lines at a time. The map scene before the first stop names the files involved, and the last stop says where to change the feature and the main trap.
 
 - **Order the stops** the way the reader follows the feature: where it starts, where it's handled, where it ends up. Two to four nodes on the map, one stop per file that earns its place. There's no limit on stops, only the film's own limit of under 90 s.
-- **Show the lines that carry the idea.** A stop that won't fit on screen (about 14 rows after long lines wrap, 13 with a label) is refused, and the tool names it. Pick fewer lines or mark some as skipped with `{"skip": "<what they are>", "from": N, "to": M}`. Never shrink the code or cut it off.
+- **Show the lines that carry the idea.** A stop that won't fit on screen (about 14 rows after long lines wrap at 72 cells, 13 with a label) is refused, and the tool names it. Pick fewer lines or mark some as skipped with `{"skip": "<what they are>", "from": N, "to": M}`. Never shrink the code or cut it off.
 - **One narration line per highlight.** Each line says what the highlighted rows do, in a sentence or two, and the highlight moves as the line starts.
 - **The code is the commit's.** A line range that doesn't exist at the commit, or a scene whose text differs from it, is refused, including a difference only in what indentation removal cut off. Change `tour.json`, never the generated scenes.
 
@@ -35,7 +35,7 @@ This rule is for the tour only. It doesn't loosen the behavior film's rule that 
 
 ## The run
 
-`$T` is the tour project and `$E` the explainer folder. The project is `<date>-<slug>-code-tour`, with the same product as the film, `stops: none`, `narration: true` and `cloud_allow: []`. Sibling-skill scripts are the ones `quirk:making-videos` names.
+`$T` is the tour project and `$E` the explainer folder. The project is `<date>-<slug>-code-tour`, with the same product as the film, `stops: none`, `narration: true` and `cloud_allow: []`. The tour takes its display and mono fonts from that product's brand and keeps its own colours, and `build` refuses a brand with other font roles or a font it can't load. Sibling-skill scripts are the ones `quirk:making-videos` names.
 
 1. **Create the project.** Write a brief with `{"stops": "none", "narration": true, "length_s": <under 90>, "cloud_allow": []}` in `$E/harness/`, then run `studio.py project new --slug <slug>-code-tour --product <product> --brief-json <file>`.
 2. **Write `$T/tour.json`.** The format is below. A map scene opens the film, then one stop per file.
@@ -69,15 +69,15 @@ This rule is for the tour only. It doesn't loosen the behavior film's rule that 
     python3 "$SKILL_DIR/scripts/verify_outcome.py" --verify "$T/v1/verify.json"
     ```
 
-    The table in the skill's film step applies to the tour alone. A tour that fails `verify` 3 times is left out: the page says why, in its own row, and keeps the written notes. The behavior film is unaffected, except that `outside_calls` still stops the run.
+    The table in the skill's film step applies to the tour alone. `ship_disclosed` means the tour goes in and the page lists the failure. `omit` means the tour is left out: the page says why, in its own row, and keeps the written notes. `halt` stops the run. The behavior film is unaffected, except that `outside_calls` still stops the run.
 11. **Copy the MP4 and captions to `$E/media/`** as `tour.mp4` and `tour.srt`, and take the poster, a plain frame of the tour, as [page.md](page.md#the-code-tour-on-the-page) says.
 
 The frame check covers the tour's frames too, because code can carry a token or a real path. A real value on screen is stop 3.
 
 What the exit codes mean:
 
-- **1:** the tour can't ship, and the message names what and where. That's a commit that doesn't resolve, a path or line that isn't at the commit, a mismatch on screen, a stop over 14 rows (13 with a label), a film of 90 s or more, a narration line with no source, or a highlight on a line the stop doesn't show. Fix `tour.json` and run again.
-- **2:** a usage error, a bad `tour.json` or a missing input. The message gives the command that makes it.
+- **1:** the tour can't ship, and the message names what and where. That's a commit that doesn't resolve, a path or line that isn't at the commit, a mismatch on screen, a stop over 14 rows (13 with a label), a film of 90 s or more, a narration line with no source, a highlight on a line the stop doesn't show, a stop that is missing or incomplete on screen, or a brand font the tour can't load (a family with no font file, or a brand font role other than display and mono). Fix `tour.json` or the brand and run again.
+- **2:** a usage error, a bad `tour.json` or brand font name, or a missing input. The message gives the command that makes it.
 - **3:** git is missing, so the tour is left out and the page says why.
 
 ## `tour.json`
@@ -95,7 +95,7 @@ What the exit codes mean:
  ]}
 ```
 
-A map has 2 to 4 nodes and `lit` is an optional list of node indexes. A stop's `rows` are the real line numbers it shows, with `skip` entries for the lines left out, and `highlight` names rows the stop shows.
+A map has 2 to 4 nodes and `lit` is an optional list of node indexes. The title can be 54 cells wide and a label 72, where a wide East Asian character is 2 cells; a longer one is refused. A stop's `rows` are the real line numbers it shows, with `skip` entries for the lines left out, and `highlight` names rows the stop shows.
 
 ## A stop and a line
 

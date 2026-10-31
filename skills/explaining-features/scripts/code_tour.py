@@ -13,20 +13,23 @@ The agent writes ``P/tour.json``: a repo, a commit, a title and scenes. A map sc
   the code with ``git show <commit>:<path>``, times the scenes from the measured wav lengths on a 1/30 s grid (0.3 s
   lead, 0.35 s between lines, 0.8 s between scenes, 2.5 s hold), writes the compositions, the index body, the voice
   copies, ``beats.json``, ``sources.md``, ``storyboard.md`` and ``kit/kit.md``, then runs ``check`` on what it wrote.
+  The display and mono fonts come from the product's brand (``brief.json`` names the product, ``brands/<product>/
+  brand.json`` under ``$QUIRK_STUDIO`` or ``~/Studio`` the families); the colours are the tour's own.
   Prints ``{"scenes", "beats", "film_s", "stops": [{"stop", "rows"}]}``.
-- ``check`` compares every code line on screen in ``P/scenes/compositions/*.html`` with the source at the commit.
+- ``check`` compares the compositions with ``tour.json`` and the source at the commit: every stop must be on screen
+  with exactly the lines and skip rows ``tour.json`` gives it, and each of its lines must match the source.
   Prints ``{"commit", "checked", "mismatches": [{"scene", "line", "screen", "source", "reason"}]}``.
 
 Code is shown with tabs expanded to 4 spaces, a trailing carriage return dropped and the common leading whitespace
 of the stop's rows removed; ``build`` and ``check`` apply the same rule. The tokenizer only wraps runs of text in
-spans, so it can colour comments, strings and keywords but never change a character. A line longer than 72 characters
-wraps onto extra rows at the last space that fits, and mid-word only where a word is longer than a row; the blocks join
-back to the source line exactly.
+spans, so it can colour comments, strings and keywords but never change a character. A line wider than 72 cells (a
+wide East Asian character is 2 cells, anything else 1) wraps onto extra rows at the last space that fits, and mid-word
+only where a word is longer than a row; the blocks join back to the source line exactly.
 
 Exit 0 ok. Exit 1 a tour that can't ship: a commit that doesn't resolve, a path or line missing at it, a mismatch, a
-check that saw 0 lines, a cut that removes non-whitespace, a stop over MAX_ROWS rows after wrapping (13 with a
+stop missing or incomplete on screen, a check that saw 0 lines, a brand font the tour can't load, a cut that removes non-whitespace, a stop over MAX_ROWS rows after wrapping (13 with a
 label), a film of 90 s or more, a narration line with no source, or a highlight on a line the stop doesn't show.
-Exit 2 for a usage error, a bad tour.json or a missing input, naming the command that makes it. Exit 3 when git is
+Exit 2 for a usage error, a bad tour.json or brand font, or a missing input, naming the command that makes it. Exit 3 when git is
 missing. One JSON object goes to stdout and diagnostics to stderr; the script never prompts.
 """
 
@@ -41,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import wave
 from html.parser import HTMLParser
 from pathlib import Path
@@ -76,25 +80,31 @@ MAP_WIDTH = 1728
 MAX_LINE_NUMBER = 9999
 MAX_PATH = 80
 MAX_HEADING = 50
-MAX_TITLE = 80
-MAX_LABEL = 96
+MAX_TITLE = 54
+MAX_LABEL = 72
 MAX_NODE_NAME = 24
 MAX_NODE_FILE = 32
 
 MAKING_VIDEOS = Path(__file__).resolve().parents[2] / "making-videos" / "scripts"
 
-TOKENS = """:root {
-      --ground: #101114;
+PALETTE = """      --ground: #101114;
       --surface: #16171b;
       --selected: #2c3050;
       --border: #24262c;
       --text: #eceef2;
       --muted: #9aa0ab;
       --accent: #9aa6ff;
-      --string: #c6cbe8;
-      --font-display: "Inter", sans-serif;
-      --font-mono: "JetBrains Mono", monospace;
-    }"""
+      --string: #c6cbe8;"""
+
+ROLES = ("display", "mono")
+DEFAULT_FAMILIES = {"display": "Inter", "mono": "JetBrains Mono"}
+BUNDLED_FONTS = frozenset((
+    "Inter", "Montserrat", "Outfit", "Nunito", "Oswald", "League Gothic", "Archivo Black", "Space Mono", "IBM Plex Mono",
+    "JetBrains Mono", "EB Garamond", "Playfair Display", "Source Code Pro", "Noto Sans JP", "Roboto", "Open Sans", "Lato",
+    "Poppins",
+))
+FAMILY_NAME = re.compile(r"[A-Za-z0-9 _-]+")
+FONT_FILE_NAME = re.compile(r"[A-Za-z0-9._ -]+")
 
 BASE_CSS = """
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -129,13 +139,13 @@ MAP_CSS = """
 
 KIT = """# Scene kit
 
-Tokens (inlined as a `:root` block in every composition): ground #101114, surface #16171b, selected #2c3050, border #24262c, text #eceef2, muted #9aa0ab, accent #9aa6ff, string #c6cbe8, display Inter, mono JetBrains Mono.
+Tokens (inlined as a `:root` block in every composition; the fonts come from the product's brand, the colours are the tour's own): ground #101114, surface #16171b, selected #2c3050, border #24262c, text #eceef2, muted #9aa0ab, accent #9aa6ff, string #c6cbe8, display {display}, mono {mono}.
 
 Motion roles: highlight move 0.2 s `power2.out`, starting on the frame of its narration line; label enter 0.35 s `power3.out` with a 16 px rise; hard cuts between scenes; no exits, stagger or overshoot.
 
 Components: map node with a lit bar, arrow, stop line, commit line, path line, code card with line numbers, highlight band with an accent bar, skip row that names the skipped lines, bottom label.
 
-Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows, 72 characters to a row; longer lines wrap onto extra rows at the last space that fits, or mid-word only where a word is longer than a row. A stop shows at most 14 rows, 13 with a label.
+Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows, 72 cells to a row (a wide character is 2 cells); longer lines wrap onto extra rows at the last space that fits, or mid-word only where a word is longer than a row. A stop shows at most 14 rows, 13 with a label.
 """
 
 
@@ -149,6 +159,11 @@ class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         print(f"code_tour.py: {message}", file=sys.stderr)
         sys.exit(EXIT_BAD_INPUT)
+
+
+def _cells(text: str) -> int:
+    """How many monospace cells ``text`` takes on screen: a wide or fullwidth East Asian character is 2, anything else 1."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
 
 # tour.json ---------------------------------------------------------------------------------------------------
@@ -172,8 +187,8 @@ def _text_field(obj: Dict[str, Any], key: str, where: str, limit: Optional[int] 
         return None
     if not _is_text(value):
         _bad(where, f"{key!r} must be non-empty text")
-    if limit is not None and len(value) > limit:
-        _bad(where, f"{key!r} is {len(value)} characters; the screen has room for {limit}")
+    if limit is not None and _cells(value) > limit:
+        _bad(where, f"{key!r} is {_cells(value)} cells wide; the screen has room for {limit}")
     return value
 
 
@@ -209,6 +224,15 @@ def _parse_rows(rows: Any, where: str) -> List[Tuple[Any, ...]]:
     if not any(r[0] == "line" for r in out):
         _bad(where, "a stop must show at least one line")
     return out
+
+
+def _line_numbers(rows: List[Tuple[Any, ...]]) -> List[int]:
+    """The line numbers a stop shows as code rows, in order. ``build`` lays them out and ``check`` expects exactly these on screen."""
+    return [r[1] for r in rows if r[0] == "line"]
+
+
+def _skip_span(first: int, last: int) -> str:
+    return f"{first}-{last}"
 
 
 def _structure(tour: Any) -> Dict[str, Any]:
@@ -259,8 +283,8 @@ def _structure(tour: Any) -> Dict[str, Any]:
     for scene in scenes:
         if "stop" in scene:
             heading = f"STOP {stops} OF {stops} · {scene['stop']}"
-            if len(heading) > MAX_HEADING:
-                _bad("scene", f"stop {scene['stop']!r} is too long for the heading; the screen has room for {MAX_HEADING} characters with its STOP n OF N prefix")
+            if _cells(heading) > MAX_HEADING:
+                _bad("scene", f"stop {scene['stop']!r} is too long for the heading; the screen has room for {MAX_HEADING} cells with its STOP n OF N prefix")
     return tour
 
 
@@ -268,7 +292,7 @@ def _semantics(tour: Dict[str, Any]) -> None:
     """The checks that make a tour unshippable rather than malformed: a line with no source, a highlight off screen."""
     for index, scene in enumerate(tour["scenes"], 1):
         sid = f"s{index}"
-        shown = {r[1] for r in scene.get("_rows", []) if r[0] == "line"}
+        shown = set(_line_numbers(scene.get("_rows", [])))
         for line in scene["lines"]:
             source = line.get("source")
             if not _is_text(source):
@@ -488,16 +512,24 @@ def _slice_runs(runs: List[Run], start: int) -> List[Run]:
 
 
 def _break_at(text: str, width: int) -> int:
-    """Where to end the first block of ``text``: after the last space that fits, or at ``width`` when a word is too long."""
-    if len(text) <= width:
+    """Where to end the first block of ``text``, in characters: after the last space that fits in ``width`` cells, or at the cell limit when a word is too long. Always at least one character."""
+    used = 0
+    fit = 0
+    for char in text:
+        used += _cells(char)
+        if used > width:
+            break
+        fit += 1
+    else:
         return len(text)
+    fit = max(fit, 1)
     indent = len(text) - len(text.lstrip(" "))
-    space = text.rfind(" ", indent, width)
-    return space + 1 if space >= 0 else width
+    space = text.rfind(" ", indent, fit)
+    return space + 1 if space >= 0 else fit
 
 
 def _chunks(runs: List[Run], width: int = CHARS_PER_ROW) -> List[List[Run]]:
-    """Split a row's runs into blocks of at most ``width`` characters that join back to the row exactly."""
+    """Split a row's runs into blocks of at most ``width`` cells that join back to the row exactly."""
     text = "".join(piece for _, piece in runs)
     kinds = [kind for kind, piece in runs for _ in piece]
     chunks: List[List[Run]] = []
@@ -558,12 +590,12 @@ class Stop:
         self.path = scene["path"]
         self.label = scene.get("label")
         lines = sources.lines(self.path)
-        shown = [r for r in scene["_rows"] if r[0] == "line"]
+        numbers = _line_numbers(scene["_rows"])
         for row in scene["_rows"]:
             last = row[1] if row[0] == "line" else row[3]
             if last > len(lines):
                 _fail(EXIT_CANT_SHIP, f"{self.path}:{last} does not exist at commit {sources.sha[:8]} (the file has {len(lines)} lines); scene {scene_id}, stop {self.name!r}", path=self.path, line=last)
-        text_rows = [lines[r[1] - 1] for r in shown if lines[r[1] - 1].strip()]
+        text_rows = [lines[n - 1] for n in numbers if lines[n - 1].strip()]
         self.dedent = min((_leading_spaces(t) for t in text_rows), default=0)
         by_line = _runs_by_line(lines, self.path)
         self.rows: List[Row] = []
@@ -595,6 +627,73 @@ class Stop:
     def region(self, number: int) -> List[int]:
         row = self.row(number)
         return [BAR_X, row.y, BAR_W, row.height]
+
+
+# fonts -------------------------------------------------------------------------------------------------------
+
+
+def _json_object(path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _brand_fonts(project: Path) -> Tuple[str, Path, Dict[str, Any]]:
+    """The project's product, its brand folder and the ``fonts`` roles of its ``brand.json``; empty when the brief or brand is missing."""
+    product = _json_object(project / "brief.json").get("product")
+    if not _is_text(product) or Path(product).name != product:
+        return "", Path(), {}
+    studio = Path(os.environ.get("QUIRK_STUDIO") or "~/Studio").expanduser()
+    brand = studio / "brands" / product
+    fonts = _json_object(brand / "brand.json").get("fonts")
+    return product, brand, fonts if isinstance(fonts, dict) else {}
+
+
+def _fonts(project: Path) -> Tuple[Dict[str, str], str, List[Tuple[Path, str]]]:
+    """The display and mono families the film uses, the ``@font-face`` rules for any the renderer doesn't bundle, and the font files to copy.
+
+    Families come from the product's brand and fall back to Inter and JetBrains Mono per role. Refuses, before anything
+    is written, a family that can't be loaded and a brand with a family the tour doesn't use, because ``verify.py``
+    requires every brand family to be injected at render.
+    """
+    product, brand, fonts = _brand_fonts(project)
+    entries = {role: fonts.get(role) if isinstance(fonts.get(role), dict) else {} for role in ROLES}
+    used = {role: entries[role]["family"] if _is_text(entries[role].get("family")) else DEFAULT_FAMILIES[role] for role in ROLES}
+    for role, family in used.items():
+        if not FAMILY_NAME.fullmatch(family):
+            _fail(EXIT_BAD_INPUT, f"brand {product!r} font family {family!r} ({role}) must be letters, digits, spaces, hyphens and underscores only, because it is written into CSS")
+    unused = sorted({str(f["family"]) for role, f in fonts.items() if role not in ROLES and isinstance(f, dict) and f.get("family")} - set(used.values()))
+    if unused:
+        _fail(EXIT_CANT_SHIP, f"brand {product!r} has font famil{'y' if len(unused) == 1 else 'ies'} {', '.join(unused)} outside the display and mono roles, so the tour can't use {'it' if len(unused) == 1 else 'them'} and verify would fail the fonts check; move the brand's fonts into display and mono", families=unused)
+    rules: List[str] = []
+    copies: List[Tuple[Path, str]] = []
+    for role in ROLES:
+        family = used[role]
+        if family in BUNDLED_FONTS:
+            continue
+        listed = entries[role].get("files")
+        names = [f for f in listed if isinstance(f, str)] if isinstance(listed, list) else []
+        if not names:
+            _fail(EXIT_CANT_SHIP, f"font family {family!r} ({role}) is not bundled with HyperFrames and brand {product!r} lists no file for it; add a static TTF or OTF to {brand} and list it in fonts.{role}.files of brand.json", family=family)
+        for name in names:
+            file = (brand / name).resolve()
+            if not file.is_relative_to(brand.resolve()):
+                _fail(EXIT_BAD_INPUT, f"brand {product!r} font file {name!r} ({family!r}) is outside the brand folder {brand}")
+            if not file.is_file():
+                _fail(EXIT_CANT_SHIP, f"font family {family!r} ({role}) lists {name!r} but {file} does not exist; copy the font file there or fix fonts.{role}.files in brand.json", family=family)
+            if not FONT_FILE_NAME.fullmatch(file.name):
+                _fail(EXIT_BAD_INPUT, f"brand {product!r} font file name {file.name!r} ({family!r}) must be letters, digits, dots, spaces, hyphens and underscores only, because it is written into CSS")
+            rules.append(f"@font-face {{ font-family: \"{family}\"; src: url('assets/fonts/{file.name}'); }}")
+            copies.append((file, file.name))
+    return used, "\n    ".join(rules), copies
+
+
+def _tokens(used: Dict[str, str], faces: str) -> str:
+    """The inline token block every composition and the index carry: any ``@font-face`` rules, then the colours and font roles."""
+    root = f':root {{\n{PALETTE}\n      --font-display: "{used["display"]}", sans-serif;\n      --font-mono: "{used["mono"]}", monospace;\n    }}'
+    return f"{faces}\n    {root}" if faces else root
 
 
 # timing ------------------------------------------------------------------------------------------------------
@@ -684,10 +783,10 @@ def _moves(items: List[int], steps: List[Tuple[Narration, List[int]]], bar_id: A
     return js, focus
 
 
-def _composition(scene_id: str, css: str, body: str, script: str) -> str:
+def _composition(scene_id: str, tokens: str, css: str, body: str, script: str) -> str:
     return f"""<template>
   <style>
-    {TOKENS}
+    {tokens}
     {BASE_CSS}
     {css}
   </style>
@@ -713,10 +812,10 @@ class Built:
 
 
 def _row_html(sid: str, stop: Stop, row: Row) -> str:
-    """One card row. Wrapped lines are explicit blocks of at most CHARS_PER_ROW characters, so the row count never depends on the browser."""
+    """One card row. Wrapped lines are explicit blocks of at most CHARS_PER_ROW cells, so the row count never depends on the browser."""
     blocks = "".join('<span class="w">' + _runs_html(c) + "</span>" for c in row.chunks if c)
     if row.kind == "skip":
-        return f'<div class="row"><div class="num">⋯</div><div class="txt skip" data-skip="{row.first}-{row.last}">{blocks}</div></div>'
+        return f'<div class="row"><div class="num">⋯</div><div class="txt skip" data-skip="{_skip_span(row.first, row.last)}">{blocks}</div></div>'
     n = row.number
     return (
         f'<div class="row" id="{sid}-r{n}"><div class="band" id="{sid}-b{n}"></div><div class="num">{n}</div>'
@@ -724,7 +823,7 @@ def _row_html(sid: str, stop: Stop, row: Row) -> str:
     )
 
 
-def _render(tour: Dict[str, Any], lines: List[Narration], stops: Dict[int, Stop], timing: Timing, sha: str) -> Built:
+def _render(tour: Dict[str, Any], lines: List[Narration], stops: Dict[int, Stop], timing: Timing, sha: str, tokens: str) -> Built:
     built = Built()
     scenes = tour["scenes"]
     stop_total = sum(1 for s in scenes if "stop" in s)
@@ -795,11 +894,11 @@ def _render(tour: Dict[str, Any], lines: List[Narration], stops: Dict[int, Stop]
                 "clip_start_s": expected, "expected_s": expected, "region": LABEL_REGION,
                 "baseline_s": round(max(expected - 0.5, scene_start_s + 0.05), 6), **beat_base,
             })
-        built.compositions[sid] = _composition(sid, css, body, "\n    ".join(script))
+        built.compositions[sid] = _composition(sid, tokens, css, body, "\n    ".join(script))
     return built
 
 
-def _index_page(head: str, tour: Dict[str, Any], lines: List[Narration], lengths: Dict[str, float], timing: Timing) -> str:
+def _index_page(head: str, tour: Dict[str, Any], lines: List[Narration], lengths: Dict[str, float], timing: Timing, tokens: str) -> str:
     hosts = "\n".join(
         f'  <div id="s{i + 1}" class="clip" data-composition-id="s{i + 1}" data-composition-src="compositions/s{i + 1}.html" '
         f'data-start="{_num(_sec(timing.scene_start[i]))}" data-duration="{_num(_sec(timing.scene_end(i) - timing.scene_start[i]))}" '
@@ -814,7 +913,7 @@ def _index_page(head: str, tour: Dict[str, Any], lines: List[Narration], lengths
     )
     return f"""{head}<body>
 <style>
-  {TOKENS}
+  {tokens}
   html, body {{ margin: 0; background: var(--ground); }}
 </style>
 <div id="root" data-composition-id="main" data-start="0" data-duration="{_num(_sec(timing.film))}" data-width="1920" data-height="1080">
@@ -898,12 +997,14 @@ def _notes(tour: Dict[str, Any], lines: List[Narration], stops: Dict[int, Stop],
 
 
 class _CodeRows(HTMLParser):
-    """Collects a composition's path row and the text of each numbered code line, as a browser would read it."""
+    """Collects a composition's path row, the text of each numbered code line, each skip row, and the text of any code element with neither marker."""
 
     def __init__(self) -> None:
         super().__init__()
         self.path: Optional[str] = None
         self.rows: List[Tuple[Any, ...]] = []
+        self.skips: List[str] = []
+        self.loose: List[str] = []
         self.grab: Optional[str] = None
         self.depth = 0
         self.buffer: List[str] = []
@@ -911,11 +1012,16 @@ class _CodeRows(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: Any) -> None:
         a = dict(attrs)
+        classes = (a.get("class") or "").split()
         if self.grab:
             self.depth += 1
         elif "data-line" in a:
             self.grab, self.meta, self.depth, self.buffer = "line", (a["data-line"] or "", a.get("data-dedent") or "0"), 0, []
-        elif "path" in (a.get("class") or "").split():
+        elif "data-skip" in a:
+            self.skips.append(a["data-skip"] or "")
+        elif "txt" in classes:
+            self.grab, self.depth, self.buffer = "loose", 0, []
+        elif "path" in classes:
             self.grab, self.depth, self.buffer = "path", 0, []
 
     def handle_endtag(self, tag: str) -> None:
@@ -927,6 +1033,8 @@ class _CodeRows(HTMLParser):
         text = "".join(self.buffer)
         if self.grab == "path":
             self.path = text
+        elif self.grab == "loose":
+            self.loose.append(text)
         else:
             self.rows.append((*self.meta, text))
         self.grab = None
@@ -937,31 +1045,64 @@ class _CodeRows(HTMLParser):
 
 
 def _compare(project: Path, tour: Dict[str, Any], sha: str) -> Tuple[int, List[Dict[str, Any]]]:
-    """How many on-screen code lines were compared with the commit, and each that differs."""
+    """How many on-screen code lines were compared with the commit, and each difference from ``tour.json`` and the source.
+
+    Every stop must be on screen with exactly the lines and skip rows ``tour.json`` gives it, so a row that lost its
+    marker, a deleted row or a missing composition is a mismatch and never skipped silently.
+    """
     sources = Sources(tour["repo"], sha)
     checked = 0
     bad: List[Dict[str, Any]] = []
-    for scene in sorted((project / "scenes" / "compositions").glob("*.html")):
-        parser = _CodeRows()
-        parser.feed(re.sub(r"<script.*?</script>|<style.*?</style>", "", scene.read_text(encoding="utf-8"), flags=re.S))
-        if not parser.rows:
+    for index, scene in enumerate(tour["scenes"], 1):
+        if "stop" not in scene:
             continue
-        if not parser.path:
-            _fail(EXIT_CANT_SHIP, f"{scene.name} shows code lines but no path row, so they can't be compared with the commit")
-        source = sources.lines(parser.path)
+        name = f"s{index}.html"
+        where = f"stop {scene['stop']!r}"
+
+        def differ(reason: str, line: Optional[int] = None, screen: Optional[str] = None, source: Optional[str] = None, name: str = name) -> None:
+            bad.append({"scene": name, "line": line, "screen": screen, "source": source, "reason": reason})
+
+        file = project / "scenes" / "compositions" / name
+        if not file.is_file():
+            differ(f"{where} has no composition {name}, so none of its code is on screen")
+            continue
+        parser = _CodeRows()
+        parser.feed(re.sub(r"<script.*?</script>|<style.*?</style>", "", file.read_text(encoding="utf-8"), flags=re.S))
+        if not parser.rows:
+            differ(f"{where} has no numbered code rows on screen")
+            continue
+        path = scene["path"]
+        if parser.path != path:
+            differ(f"the path row shows {parser.path!r} and tour.json says {path!r}", screen=parser.path, source=path)
+        source = sources.lines(path)
+        seen: Dict[int, int] = {}
         for raw_number, raw_dedent, text in parser.rows:
             try:
                 number, dedent = int(raw_number), int(raw_dedent)
             except ValueError:
-                _fail(EXIT_CANT_SHIP, f"{scene.name}: a code line has an unreadable number or dedent ({raw_number!r}, {raw_dedent!r})")
+                _fail(EXIT_CANT_SHIP, f"{name}: a code line has an unreadable number or dedent ({raw_number!r}, {raw_dedent!r})")
             checked += 1
-            entry = {"scene": scene.name, "line": number, "screen": text}
+            seen[number] = seen.get(number, 0) + 1
             if not 1 <= number <= len(source):
-                bad.append({**entry, "source": None, "reason": f"{parser.path} has no line {number} at commit {sha[:8]}"})
+                differ(f"{path} has no line {number} at commit {sha[:8]}", number, text)
             elif not _cut_is_blank(source[number - 1], dedent):
-                bad.append({**entry, "source": source[number - 1], "reason": f"the indentation cut removes non-whitespace ({source[number - 1][:dedent]!r})"})
+                differ(f"the indentation cut removes non-whitespace ({source[number - 1][:dedent]!r})", number, text, source[number - 1])
             elif source[number - 1][dedent:] != text:
-                bad.append({**entry, "source": source[number - 1][dedent:], "reason": "the text on screen differs from the source"})
+                differ("the text on screen differs from the source", number, text, source[number - 1][dedent:])
+        wanted = _line_numbers(scene["_rows"])
+        for number in wanted:
+            if number not in seen:
+                differ(f"line {number} is in tour.json for {where} but not on screen", number)
+        for number in sorted(seen):
+            if number not in wanted:
+                differ(f"line {number} is on screen but tour.json doesn't show it in {where}", number)
+            elif seen[number] > 1:
+                differ(f"line {number} is on screen {seen[number]} times", number)
+        for text in parser.loose:
+            differ("a code element has neither data-line nor data-skip, so it can't be compared with the commit", screen=text)
+        skips = sorted(_skip_span(r[2], r[3]) for r in scene["_rows"] if r[0] == "skip")
+        if sorted(parser.skips) != skips:
+            differ(f"the skip rows on screen ({', '.join(sorted(parser.skips)) or 'none'}) differ from tour.json ({', '.join(skips) or 'none'})")
     return checked, bad
 
 
@@ -969,7 +1110,8 @@ def _report(project: Path, tour: Dict[str, Any], sha: str) -> Dict[str, Any]:
     checked, bad = _compare(project, tour, sha)
     result = {"commit": sha, "checked": checked, "mismatches": bad}
     for m in bad:
-        print(f"code_tour.py: {m['scene']} line {m['line']}: {m['reason']}; screen {m['screen']!r}, source {m['source']!r}", file=sys.stderr)
+        at = "" if m["line"] is None else f" line {m['line']}"
+        print(f"code_tour.py: {m['scene']}{at}: {m['reason']}; screen {m['screen']!r}, source {m['source']!r}", file=sys.stderr)
     if checked == 0:
         message = f"checked 0 code lines in {project / 'scenes' / 'compositions'}; a check that saw nothing proves nothing"
         print(f"code_tour.py: {message}", file=sys.stderr)
@@ -1009,6 +1151,8 @@ def _cmd_build(project: Path) -> None:
     tour = _load_tour(project)
     _semantics(tour)
     lines = _narration(tour)
+    used, faces, font_files = _fonts(project)
+    tokens = _tokens(used, faces)
     index = project / "scenes" / "index.html"
     if not index.is_file():
         _fail(EXIT_BAD_INPUT, f"{index} is missing; run: python3 {MAKING_VIDEOS / 'hf.py'} --project {project} -- init {project / 'scenes'} --non-interactive")
@@ -1039,7 +1183,7 @@ def _cmd_build(project: Path) -> None:
     if timing.film >= FILM_LIMIT_S * FPS:
         _fail(EXIT_CANT_SHIP, f"the film runs {_sec(timing.film):.1f} s and the limit is under {FILM_LIMIT_S} s; cut lines or stops", film_s=_sec(timing.film))
 
-    built = _render(tour, lines, stops, timing, sha)
+    built = _render(tour, lines, stops, timing, sha, tokens)
     compositions = project / "scenes" / "compositions"
     compositions.mkdir(parents=True, exist_ok=True)
     for old in compositions.glob("s*.html"):
@@ -1050,14 +1194,17 @@ def _cmd_build(project: Path) -> None:
     (project / "scenes" / "assets" / "voice").mkdir(parents=True, exist_ok=True)
     for ln in lines:
         shutil.copyfile(voice / f"{ln.clip}.wav", project / "scenes" / "assets" / "voice" / f"{ln.clip}.wav")
-    _write(index, _index_page(page.split("<body", 1)[0], tour, lines, lengths, timing))
+    for source, name in font_files:
+        (project / "scenes" / "assets" / "fonts").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, project / "scenes" / "assets" / "fonts" / name)
+    _write(index, _index_page(page.split("<body", 1)[0], tour, lines, lengths, timing, tokens))
     clips = [{"id": ln.clip, "text": ln.text, "start_s": _sec(timing.clip_start[ln.scene][_position(lines, ln)])} for ln in lines]
     _write(existing, json.dumps(clips, indent=2) + "\n")
     _write(project / "beats.json", json.dumps(built.beats, indent=1) + "\n")
     sources_md, storyboard_md = _notes(tour, lines, stops, timing, sha)
     _write(project / "sources.md", sources_md)
     _write(project / "storyboard.md", storyboard_md)
-    _write(project / "kit" / "kit.md", KIT)
+    _write(project / "kit" / "kit.md", KIT.format(**used))
 
     _report(project, tour, sha)
     print(json.dumps({"scenes": len(tour["scenes"]), "beats": len(built.beats), "film_s": _sec(timing.film), "stops": built.stops}))
