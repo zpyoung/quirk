@@ -360,3 +360,9 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: Measure the offset on a few renders and correct the guidance if it holds.
 - **Blocker for**: First-render sync
 
+## BUG-44: Two html kit element tests race animation under load
+- **Observed**: 2026-10-31
+- **File**: tests/test_html_kit_elements.py:6398
+- **Description**: test_flow_trace_pans_an_off_screen_current_node_into_view_at_the_same_zoom reads the zoom right after clicking with no settle wait, so it reads a tween mid-flight (2.9903 vs 2.9879): failed 3 of 4 runs at commit fd1296b under load average about 260, and passed 4 of 4 with a 3000 ms wait before the first read. test_seq_declined_trace_marks_each_step_and_returns_to_message_three_on_the_retry failed in 2 of 4 runs (dotsOf empty at step 1, tests/test_html_kit_elements.py:10806), passed the other 2; cause not investigated. Neither file changed in this branch's code tour work. A test-only flake that fails the skill gate on a busy machine.
+- **Severity**: low
+
