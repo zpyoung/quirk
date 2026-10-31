@@ -786,6 +786,12 @@ class TestBuild:
             assert "/*" not in composition(project, name)
         assert "&#47;" in composition(project, "s2")
 
+    def test_code_never_draws_a_ligature(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        # jetbrains mono draws === as a triple bar, so the screen stops matching the source the check compared
+        markup = composition(shared, "s2")
+        assert re.search(r"\.mono \{[^}]*font-variant-ligatures: none", markup)
+        assert re.search(r"\.txt \{[^}]*font-variant-ligatures: none", markup)
+
     def test_tokens_colour_comments_strings_and_keywords_without_changing_text(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = shared
         markup = composition(project, "s2")

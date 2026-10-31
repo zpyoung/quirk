@@ -14,7 +14,7 @@ Propose a tour when the reader is technical and the change crosses 3 or more sou
 
 ## What counts as a source file
 
-Count the files the change touched at the commit, not counting tests, docs, lockfiles and generated files. A stylesheet, a component, a config that changes how the app runs and a migration all count. A snapshot, a `.md` file, `pnpm-lock.yaml` and anything a build wrote do not.
+Count the files the change touched, not counting tests, docs, lockfiles and generated files. A stylesheet, a component, a config that changes how the app runs and a migration all count. A snapshot, a `.md` file, `pnpm-lock.yaml` and anything a build wrote do not.
 
 ## Picking stops and lines
 
@@ -38,7 +38,7 @@ This rule is for the tour only. It doesn't loosen the behavior film's rule that 
 `$T` is the tour project and `$E` the explainer folder. The project is `<date>-<slug>-code-tour`, with the same product as the film, `stops: none`, `narration: true` and `cloud_allow: []`. The tour takes its display and mono fonts from that product's brand and keeps its own colours, and `build` refuses a brand with other font roles or a font it can't load. Sibling-skill scripts are the ones `quirk:making-videos` names.
 
 1. **Create the project.** Write a brief with `{"stops": "none", "narration": true, "length_s": <under 90>, "cloud_allow": []}` in `$E/harness/`, then run `studio.py project new --slug <slug>-code-tour --product <product> --brief-json <file>`.
-2. **Write `$T/tour.json`.** The format is below. A map scene opens the film, then one stop per file.
+2. **Write `$T/tour.json`.** The format is below. A map scene opens the film, then one stop per file. Pin the branch head when later commits leave the shown files alone, because that is the code a teammate opens; a narration line can still cite the commit that made the change.
 3. **Check it and write the lines.**
 
    ```bash
@@ -55,14 +55,23 @@ This rule is for the tour only. It doesn't loosen the behavior film's rule that 
    ```
 
    It reads the code with `git show`, times the scenes from the measured wav lengths, writes the scenes, `beats.json`, `sources.md` and `storyboard.md`, then runs the same comparison as `check` before it exits. Its output lists each stop and its row count.
-7. **Captions:** `voice.py captions --project "$T" --lines "$T/assets/lines.json" --out "$T/assets/tour.srt"`. They come after `build` because it sets each clip's real start time.
+7. **Captions:** `voice.py captions --project "$T" --lines "$T/assets/lines.json" --out "$T/assets/tour.srt"`. They come after `build` because it sets each clip's real start time. Read the `text_mismatches` it prints: where the recognizer heard something else, the caption can show the misheard words. Reword that line in `tour.json` or fix its pronunciation ([audio.md](../../making-videos/references/audio.md)), then repeat from step 3.
 8. **Check the code on screen against the commit.**
 
    ```bash
    python3 "$SKILL_DIR/scripts/code_tour.py" check --project "$T"
    ```
 
-9. **Version, render and verify,** as making-videos describes: `studio.py version new --project "$T"`, copy the captions beside the MP4 as `$T/v1/<slug>-code-tour-16x9.srt`, render with `hf.py` into `$T/v1`, then `verify.py --project "$T" --version v1`.
+9. **Version, render and verify.** `<project>` is the folder's slug, ending in `-code-tour`:
+
+   ```bash
+   python3 "$MV/studio.py" version new --project "$T"
+   cp "$T/assets/tour.srt" "$T/v1/<project>-16x9.srt"
+   python3 "$MV/hf.py" --project "$T" -- render --quality delivery --workers 2 --output "$T/v1/<project>-16x9.mp4" "$T/scenes" > "$T/v1/render.log" 2>&1
+   python3 "$MV/verify.py" --project "$T" --version v1
+   ```
+
+   `$MV` is `quirk:making-videos`'s `scripts` folder.
 10. **Sort the result** with the same table as the behavior film:
 
     ```bash
@@ -70,7 +79,12 @@ This rule is for the tour only. It doesn't loosen the behavior film's rule that 
     ```
 
     The table in the skill's film step applies to the tour alone. `ship_disclosed` means the tour goes in and the page lists the failure. `omit` means the tour is left out: the page says why, in its own row, and keeps the written notes. `halt` stops the run. The behavior film is unaffected, except that `outside_calls` still stops the run.
-11. **Copy the MP4 and captions to `$E/media/`** as `tour.mp4` and `tour.srt`, and take the poster, a plain frame of the tour, as [page.md](page.md#the-code-tour-on-the-page) says.
+11. **Copy the MP4 and captions to `$E/media/`** as `tour.mp4` and `tour.srt`, and take the poster, a plain frame of the tour, as [page.md](page.md#the-code-tour-on-the-page) says:
+
+    ```bash
+    mkdir -p "$E/frames"
+    ffmpeg -v error -ss 1 -i "$E/media/tour.mp4" -frames:v 1 "$E/frames/tour-poster.png"
+    ```
 
 The frame check covers the tour's frames too, because code can carry a token or a real path. A real value on screen is stop 3.
 

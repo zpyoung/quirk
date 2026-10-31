@@ -110,7 +110,7 @@ FONT_FILE_NAME = re.compile(r"[A-Za-z0-9._ -]+")
 BASE_CSS = """
     * { margin: 0; padding: 0; box-sizing: border-box; }
     #root { position: relative; width: 1920px; height: 1080px; background: var(--ground); color: var(--text); font-family: var(--font-display); overflow: hidden; }
-    .mono { font-family: var(--font-mono); font-size: 36px; line-height: 1.3; }
+    .mono { font-family: var(--font-mono); font-variant-ligatures: none; font-size: 36px; line-height: 1.3; }
     .stop { position: absolute; left: 96px; top: 60px; width: 1100px; color: var(--accent); font-weight: 600; white-space: pre; }
     .commit { position: absolute; right: 96px; top: 60px; width: 500px; text-align: right; color: var(--muted); white-space: pre; }
     .path { position: absolute; left: 96px; top: 110px; width: 1728px; color: var(--text); white-space: pre; }
@@ -118,7 +118,7 @@ BASE_CSS = """
     .row { position: relative; display: flex; padding: 0 28px; }
     .band { position: absolute; inset: 0; background: var(--selected); border-left: 6px solid var(--accent); opacity: 0; }
     .num { position: relative; flex: 0 0 104px; color: var(--muted); font-family: var(--font-mono); font-size: 36px; line-height: 52px; }
-    .txt { position: relative; flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 36px; line-height: 52px; }
+    .txt { position: relative; flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-variant-ligatures: none; font-size: 36px; line-height: 52px; }
     .w { display: block; white-space: pre; min-height: 52px; }
     .skip { color: var(--muted); font-style: italic; }
     .k { color: var(--accent); }
@@ -146,7 +146,7 @@ Motion roles: highlight move 0.2 s `power2.out`, starting on the frame of its na
 
 Components: map node with a lit bar, arrow, stop line, commit line, path line, code card with line numbers, highlight band with an accent bar, skip row that names the skipped lines, bottom label.
 
-Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows, 72 cells to a row (a wide character is 2 cells); longer lines wrap onto extra rows at the last space that fits, or mid-word only where a word is longer than a row. A stop shows at most 14 rows, 13 with a label.
+Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows with ligatures off, 72 cells to a row (a wide character is 2 cells); longer lines wrap onto extra rows at the last space that fits, or mid-word only where a word is longer than a row. A stop shows at most 14 rows, 13 with a label.
 """
 
 
