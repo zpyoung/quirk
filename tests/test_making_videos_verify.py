@@ -439,6 +439,63 @@ def test_fonts_pass_when_every_brand_family_is_embedded_and_the_log_has_no_injec
     assert fonts["measured"]["injected"] == 2
 
 
+def test_fonts_read_an_embedded_file_name_that_contains_a_space(tmp_path):
+    spaced = "assets/fonts/My Font.ttf"
+    faces = ("@font-face { font-family: 'Geist'; src: url('%s'); }\n"
+             "  @font-face { font-family: 'JetBrains Mono'; src: url('assets/fonts/Mono.woff2'); }") % spaced
+    log = ("[INFO] [Compiler] Embedded local font file: %s (68 KB \u2192 data URI)\n"
+           "[INFO] [Compiler] Embedded local font file: assets/fonts/Mono.woff2\n") % spaced
+    s = _geist_studio(tmp_path, faces, log)
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "pass", fonts
+    assert fonts["measured"]["injected"] == 2
+
+
+def test_fonts_fail_when_an_unnamed_count_could_be_the_embedded_family(tmp_path):
+    face = "@font-face { font-family: 'Geist'; src: url('%s'); }" % GEIST_FILE
+    log = ("[INFO] [Compiler] Injected deterministic @font-face rules for 1 requested font families\n"
+           "[INFO] [Compiler] Embedded local font file: %s (68 KB \u2192 data URI)\n") % GEIST_FILE
+    s = _geist_studio(tmp_path, face, log)
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail"
+    assert "JetBrains Mono" in fonts["detail"].split("names:")[0]
+
+
+def _append_to_index(s: Studio, snippet: str) -> None:
+    index = s.project / "scenes" / "index.html"
+    index.write_text(index.read_text() + "\n" + snippet + "\n")
+
+
+GEIST_FACE = "@font-face { font-family: 'Geist'; src: url('%s'); }" % GEIST_FILE
+
+
+def test_fonts_ignore_a_font_face_outside_a_style_element(tmp_path):
+    s = _geist_studio(tmp_path, "", EMBEDDED_LOG % GEIST_FILE)
+    _append_to_index(s, '<script type="text/plain">%s</script>' % GEIST_FACE)
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail" and fonts["measured"]["injected"] == 1
+
+
+@pytest.mark.parametrize("opening", ["<style>", '<style type="text/css" media="all">'])
+def test_fonts_count_a_font_face_in_any_style_element(tmp_path, opening):
+    s = _geist_studio(tmp_path, "", EMBEDDED_LOG % GEIST_FILE)
+    _append_to_index(s, "%s%s</style>" % (opening, GEIST_FACE))
+    code, out = s.run()
+    assert check_of(out, "fonts")["status"] == "pass"
+
+
+@pytest.mark.parametrize("wrap", ["<!-- <style>%s</style> -->", "<style>/* %s */</style>"])
+def test_fonts_ignore_a_font_face_inside_a_comment(tmp_path, wrap):
+    s = _geist_studio(tmp_path, "", EMBEDDED_LOG % GEIST_FILE)
+    _append_to_index(s, wrap % GEIST_FACE)
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert code == 1 and fonts["status"] == "fail" and fonts["measured"]["injected"] == 1
+
+
 def test_fonts_fail_when_an_embedded_file_is_not_mapped_to_a_brand_family(tmp_path):
     other = "@font-face { font-family: 'Other Sans'; src: url('%s'); }" % GEIST_FILE
     s = _geist_studio(tmp_path, other, EMBEDDED_LOG % GEIST_FILE)
