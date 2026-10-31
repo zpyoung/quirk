@@ -89,6 +89,7 @@ Header fields:
 - `data` is an optional JSON or CSV path relative to the source file. Data too large to embed moves to a sidecar file next to the page.
 - Media in a slot is inlined when its tag carries `data-inline`; see [inline media](../SKILL.md#data-and-modes). The paths follow the same containment rule as `data`: under the source file's directory or the project directory.
 - `tier_reason` is optional; set it when you overrode the tier signals.
+- `size_limit` is optional and its only value is `"none"`, which removes the 10 MB `size` failure for a page whose film size is the point, such as an explainer. The 2 MB warning stays, and the built header records it so `check` agrees with the build. Any other value is exit 2.
 
 Slot names match `^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$`. A rebuild of an existing artifact reuses the library versions recorded in its header; pass `--upgrade` to use the current pins.
 

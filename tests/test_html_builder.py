@@ -790,6 +790,73 @@ def test_inlined_media_over_10_mib_fails_the_size_check_and_never_becomes_a_side
     assert [f["check"] for f in result["checks"]["failures"]] == ["size"]
 
 
+def opted_out_page(tmp_path, env, project, media: bytes, **meta):
+    (tmp_path / "f.mp4").write_bytes(media)
+    src = write_src(
+        tmp_path / "o.src.html",
+        {"template": "report", "title": "Film", **meta},
+        {"main": '<video data-inline src="f.mp4"></video>'},
+    )
+    out = tmp_path / "o.html"
+    rc, result = build(src, out, env, project)
+    return rc, result, out
+
+
+def test_size_limit_none_builds_a_page_over_10_mib_with_the_warning_and_no_sidecar(tmp_path, env, project):
+    big = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (10 * 1024 * 1024)
+    rc, result, out = opted_out_page(tmp_path, env, project, big, size_limit="none")
+    assert rc == 0, result
+    assert result["size"] > checks_size_fail()
+    assert result["checks"]["passed"] is True and result["checks"]["failures"] == []
+    assert [w["check"] for w in result["checks"]["warnings"]] == ["size"]
+    assert result["sidecar"] is None and not list(tmp_path.glob("o.data.*"))
+    assert '"size_limit": "none"' in out.read_text(encoding="utf-8").split("\n", 2)[1]
+
+
+def test_check_on_an_opted_out_built_file_has_no_size_failure(tmp_path, env, project):
+    big = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (10 * 1024 * 1024)
+    rc, result, out = opted_out_page(tmp_path, env, project, big, size_limit="none")
+    assert rc == 0, result
+    rc, check = run_cli("check", out, env=env)
+    assert rc == 0 and check["passed"] is True and check["failures"] == []
+    assert [w["check"] for w in check["warnings"]] == ["size"]
+
+
+def test_a_page_over_10_mib_without_size_limit_still_fails_on_check(tmp_path, env, project):
+    big = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (10 * 1024 * 1024)
+    rc, result, out = opted_out_page(tmp_path, env, project, big)
+    assert rc == 1, result
+    rc, check = run_cli("check", out, env=env)
+    assert rc == 1 and [f["check"] for f in check["failures"]] == ["size"]
+
+
+@pytest.mark.parametrize("value", ["10MiB", "None", "", 0, None, True, ["none"]])
+def test_a_size_limit_other_than_none_is_exit_2(tmp_path, env, project, value):
+    rc, result, out = opted_out_page(tmp_path, env, project, b"\x00\x00\x00\x18ftypmp42", size_limit=value)
+    assert rc == 2 and "size_limit" in result["error"], result
+    assert not out.exists()
+
+
+def test_size_limit_none_on_a_small_page_changes_only_the_header(tmp_path, env, project):
+    small = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 1024
+    rc, plain, plain_out = opted_out_page(tmp_path, env, project, small)
+    assert rc == 0, plain
+    plain_html = plain_out.read_text(encoding="utf-8")
+    rc, opted, opted_out = opted_out_page(tmp_path, env, project, small, size_limit="none")
+    assert rc == 0, opted
+    opted_html = opted_out.read_text(encoding="utf-8")
+    plain_lines, opted_lines = plain_html.split("\n"), opted_html.split("\n")
+    assert len(plain_lines) == len(opted_lines)
+    differing = [i for i, (a, b) in enumerate(zip(plain_lines, opted_lines)) if a != b]
+    assert differing == [1]
+    header = json.loads(opted_lines[1].removeprefix("<!-- quirk-html-artifact ").removesuffix(" -->"))
+    assert header.pop("size_limit") == "none"
+    plain_header = json.loads(plain_lines[1].removeprefix("<!-- quirk-html-artifact ").removesuffix(" -->"))
+    header["built_at"] = plain_header["built_at"]
+    assert header == plain_header
+    assert opted["checks"] == plain["checks"] and opted["checks"]["warnings"] == []
+
+
 def test_inlined_media_passes_external_refs_and_the_note_explains_the_2_mb_warning(tmp_path, env, project):
     clip = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * (2 * 1024 * 1024)
     rc, result, out = media_page(tmp_path, env, project, '<video data-inline src="f.mp4"></video>', {"f.mp4": clip})

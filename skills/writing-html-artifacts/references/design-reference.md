@@ -280,7 +280,7 @@ Run these on the final file, in this order. Any edit after verify means run veri
 - [ ] `license`: every inlined library has a license comment
 - [ ] `checksum`: every library block matches its recorded hash
 - [ ] `external-refs`: no external scripts, styles, fonts, images or fetches in offline mode
-- [ ] `size`: under 2 MB (warning) and 10 MB (failure)
+- [ ] `size`: under 2 MB (warning) and 10 MB (failure); a source header with `"size_limit": "none"` drops the failure and keeps the warning
 
 `scripts/quirk_html.py verify FILE` (browser, when one is reachable):
 
