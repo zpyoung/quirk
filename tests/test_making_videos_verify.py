@@ -471,9 +471,10 @@ def _append_to_index(s: Studio, snippet: str) -> None:
 GEIST_FACE = "@font-face { font-family: 'Geist'; src: url('%s'); }" % GEIST_FILE
 
 
-def test_fonts_ignore_a_font_face_outside_a_style_element(tmp_path):
+@pytest.mark.parametrize("inert", ["%s", "<style>%s</style>"])
+def test_fonts_ignore_a_font_face_outside_a_style_element(tmp_path, inert):
     s = _geist_studio(tmp_path, "", EMBEDDED_LOG % GEIST_FILE)
-    _append_to_index(s, '<script type="text/plain">%s</script>' % GEIST_FACE)
+    _append_to_index(s, '<script type="text/plain">%s</script>' % (inert % GEIST_FACE))
     code, out = s.run()
     fonts = check_of(out, "fonts")
     assert code == 1 and fonts["status"] == "fail" and fonts["measured"]["injected"] == 1

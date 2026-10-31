@@ -91,6 +91,7 @@ LOG_LINES_SHOWN = 10
 _FONT_USE = re.compile(r"var\(\s*(--font-[A-Za-z0-9_-]*)")
 _FONT_DEF = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:")
 _STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.S | re.I)
+_SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script>", re.S | re.I)
 _STYLE_ATTR = re.compile(r"""\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 _LINK_TAG = re.compile(r"<link\b[^>]*>", re.I)
 _REL_STYLESHEET = re.compile(r"""\brel\s*=\s*["']?[^"'>]*\bstylesheet\b""", re.I)
@@ -290,7 +291,7 @@ def embedded_families(scenes: Path, log_text: str) -> "set[str]":
     files = {key(f) for f in _FONT_EMBEDDED.findall(log_text)}
     found: "set[str]" = set()
     for page in _html_files(scenes):
-        text = _COMMENTS.sub("", page.read_text(encoding="utf-8", errors="replace"))
+        text = _SCRIPT_BLOCK.sub("", _COMMENTS.sub("", page.read_text(encoding="utf-8", errors="replace")))
         for body in (b for css in _STYLE_BLOCK.findall(text) for b in _FONT_FACE.findall(css)):
             family, url = _FACE_FAMILY.search(body), _FACE_URL.search(body)
             if family and url and key(next(g for g in url.groups() if g is not None)) in files:
