@@ -41,7 +41,7 @@ plus anything cut.
    for real data.
 5. **Film.** It runs `making-videos` with no stops, then sorts any `verify` failures.
 6. **Page.** It builds the page with `writing-html-artifacts`, compressing the video so everything fits
-   in one file.
+   in one file, then has a fresh agent read the top of the page cold.
 7. **Hand over.** It gives the path, the `verify` result and what was cut, and warns that the page
    disappears with the worktree.
 
@@ -443,3 +443,4 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 
 - 2026-10-30: The ledger, page source and scripts live in `~/Studio/explainers/<date>-<slug>/`, not the video project folder. `studio.py project new` refuses a folder that already exists, and a run with no film has no video project. The film project stays in `~/Studio/videos/`. This settles the folder-layout item deferred to the tech spec.
 - 2026-10-31: The acceptance standard for scripts changes from "the only script is the project-specific fixture" to "no script redoes what the skills now cover". The blind remake wrote seven scripts (393 lines, against the original's 621), all specific to one feature or app, and the user chose this standard over building more shared tooling. The user compared the remake with the original and signed off the same day. The remake's film and page predate the last doc and `leftovers.py` fixes and weren't rebuilt.
+- 2026-10-31: The page gains three rules, because nothing tested whether a reader understands it. "What it does" opens with a problem sentence from a named source, or says no source gives one. The poster is a real film frame of the main behavior's result. A fresh agent then reads the poster, the first frame, the summary and that sentence, and says what the feature does, why it was made and what wasn't proven. This isn't a fourth stop: a miss gets one fix and one more read, then goes in the hand-over note. A weak first frame is only reported, because a re-render spends a `verify` attempt. On the remake, the read answered "can't tell" for why the feature was made, and answered correctly once the spec's reason was added. The remake's page wasn't rebuilt. The idea comes from the still-frame test in [shouvik12/living-canvas](https://github.com/shouvik12/living-canvas), which has the author ask the question; this uses a fresh agent because the author already knows the answer.

@@ -236,7 +236,7 @@ def test_skill_points_at_every_reference() -> None:
 
 def test_skill_points_at_every_pressure_scenario() -> None:
     body = SKILL_PATH.read_text()
-    for n in (1, 2, 3, 4):
+    for n in (1, 2, 3, 4, 5):
         assert f"test-pressure-{n}.md" in body
 
 
@@ -247,7 +247,7 @@ def test_required_strings_are_present(rel: str) -> None:
         assert needle.lower() in text, f"{rel} is missing {needle!r}"
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 4])
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5])
 def test_pressure_scenario_follows_the_house_layout(n: int) -> None:
     text = (SKILL_DIR / f"test-pressure-{n}.md").read_text()
     assert text.startswith(f"# Pressure Test {n}:")
@@ -266,6 +266,60 @@ def test_pressure_scenario_4_covers_the_sourced_reasoning_rule_and_the_blocked_s
     for needle in ("blocked", "login", "stop 2", "from reading the code", "design reason", "names the code or spec"):
         assert needle in text, needle
     assert re.search(r"## correct choice\n\n\*\*c\.\*\*", text)
+
+
+def _page_section(heading: str) -> str:
+    return (REFERENCES_DIR / "page.md").read_text().split(f"## {heading}", 1)[1].split("\n## ", 1)[0]
+
+
+def test_page_outline_links_the_poster_and_the_problem_sentence() -> None:
+    outline = _page_section("The outline")
+    assert "(#the-poster)" in outline
+    assert "(#the-problem-sentence)" in outline
+
+
+def test_problem_sentence_needs_a_source_and_never_a_guess() -> None:
+    section = _page_section("The problem sentence")
+    for needle in ("source", "No spec, commit or issue says why", "Never infer", "evidence.md", "stays out of the film"):
+        assert needle in section, needle
+    assert "problem sentence" in _page_section("Readers")
+    assert "problem sentence" in (REFERENCES_DIR / "evidence.md").read_text()
+
+
+def test_poster_is_a_real_checked_frame_of_the_result() -> None:
+    section = _page_section("The poster")
+    for needle in ("main behavior", "real frame", "ffmpeg", "Never composite", "frame check", "clip per behavior", "no film"):
+        assert needle in section, needle
+
+
+def test_cold_read_is_fresh_bounded_and_reports_when_it_did_not_run() -> None:
+    section = _page_section("The cold read")
+    for needle in (
+        "no conversation history",
+        "can't tell",
+        "$E/cold-read.md",
+        "two reads",
+        "not a stop",
+        "never the ledger",
+        "not run, because",
+        "first frame",
+    ):
+        assert needle in section, needle
+
+
+def test_skill_runs_the_cold_read_and_reports_it_at_hand_over() -> None:
+    skill = SKILL_PATH.read_text()
+    assert "references/page.md#the-cold-read" in skill
+    assert "cold-read.md" in skill
+    hand_over = skill.split("### 7. Hand over", 1)[1].split("\n## ", 1)[0]
+    assert "Cold read:" in hand_over
+
+
+def test_pressure_scenario_5_covers_the_invented_reason_and_the_skipped_cold_read() -> None:
+    text = (SKILL_DIR / "test-pressure-5.md").read_text().lower()
+    for needle in ("no spec, commit or issue says why", "can't tell", "cold read", "fresh"):
+        assert needle in text, needle
+    assert re.search(r"## correct choice\n\n\*\*b\.\*\*", text)
 
 
 def test_trigger_evals_are_balanced() -> None:

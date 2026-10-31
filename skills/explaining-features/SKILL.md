@@ -32,7 +32,8 @@ Invoke each by name when its step starts, and follow it. They name their own scr
 
 ```
 ~/Studio/explainers/<date>-<slug>/
-  evidence.md            the ledger
+  evidence.md            the ledger, with the problem sentence and its source above it
+  cold-read.md           what a fresh agent understood from the top of the page
   <slug>.src.html        page source; media paths are relative to it
   media/                 screenshots, poster, and the fitted MP4 and captions the page inlines
   harness/               project-specific scripts, plus a README saying they aren't guaranteed to run
@@ -120,11 +121,14 @@ Exit 1 means the film can't fit above the 300 kbps video floor: compress images 
 Invoke `quirk:writing-html-artifacts` and build the page from `$E/<slug>.src.html`, using the outline and rules in [page.md](references/page.md). The page is one file with the film at the top and the video compressed to fit. The page is the review, and the honesty rules below are part of the build, not a polish pass.
 
 - **The summary under the title names the biggest gap**, for example "Tested in the browser engines but not in the desktop window." The film doesn't carry it, so an MP4 shared alone looks fully proven. That is why the summary must.
+- **The poster shows the main behavior's result,** in a real frame of the film with its label on screen ([page.md](references/page.md#the-poster)).
+- **"What it does" opens with why the change was made,** in one sentence from the spec, commit or issue. If none says, write that none says ([page.md](references/page.md#the-problem-sentence)).
 - **The video's caption names all the staging:** seeded data, a drawn pointer, added labels, a separately built "before", and any sped-up waits.
 - **"How it's built"** keeps a design reason only if it names the code or spec it came from. A behavior claim needs a ledger result.
 - **A dated record** sits near the top: the date, branch and commit, and "this shows the app at this commit".
 - **"What's still open"** is every ledger row that isn't Pass, plus anything cut (a skipped install, a native app with no film, a dropped screenshot, an omitted film).
 - **The page doesn't say "I".** It states what was measured and how.
+- **The cold read comes last.** A fresh subagent with no conversation history gets only the poster, the film's first frame, the summary and the problem sentence, then says what the feature does, why it was made and what wasn't proven. Fix what it misses and read once more ([page.md](references/page.md#the-cold-read)).
 
 ### 7. Hand over
 
@@ -134,6 +138,7 @@ Give the path, the `verify` result, what was cut, and a warning that the page di
 Done: <repo>/.quirk/html/<slug>.html (<size>), written for <reader>.
 Film: <58 s, verify passed | no film, because <reason> | left out, because <check> failed>.
 Cut: <what was left out and why, or "nothing">.
+Cold read: <a fresh agent got all three | still missed <question> after two reads | not run, because <reason>>. First frame: <says what the film is about | doesn't say what the film is about | no film>.
 The frame check was mine: one frame every 3 s plus every screenshot. Small or fleeting text can get past it.
 The page lives in this worktree's .quirk/html and disappears with the worktree. The source, media and film
 are in ~/Studio/explainers/<date>-<slug>/, so it can be rebuilt.
@@ -155,8 +160,10 @@ Tell the user that notes make a v2. A note that changes the film (say, one line 
 | "Nobody will read the caption." | The caption names all the staging. A reader shouldn't have to guess which parts are staged. |
 | "It's obviously true, so the ledger row can say Pass." | Pass needs a real run you can point to. Check it, or mark it Not proven. |
 | "I'll offer an explainer now that the branch is done." | Don't. It runs only when asked. |
+| "The reason for the change is obvious from the diff." | Take it from the spec, commit or issue, or write that none says why. |
+| "I wrote the summary, so I know a stranger would get it." | That's why you can't judge it. Run the cold read, or report "not run, because". |
 
-Pressure scenarios for the rules a script can't enforce: [test-pressure-1.md](test-pressure-1.md), [test-pressure-2.md](test-pressure-2.md), [test-pressure-3.md](test-pressure-3.md), [test-pressure-4.md](test-pressure-4.md).
+Pressure scenarios for the rules a script can't enforce: [test-pressure-1.md](test-pressure-1.md), [test-pressure-2.md](test-pressure-2.md), [test-pressure-3.md](test-pressure-3.md), [test-pressure-4.md](test-pressure-4.md), [test-pressure-5.md](test-pressure-5.md).
 
 ## References
 
@@ -164,4 +171,4 @@ Read a reference when its step starts, not before.
 
 - [evidence.md](references/evidence.md): the ledger columns and results, how each row is filled, verifying first, and features with no UI.
 - [capture.md](references/capture.md): the private instance and seeded data, stopping what you started, resets between takes, the parent-commit build, the frame check, the real-data search, and label timing.
-- [page.md](references/page.md): the section outline, reader variants, the staging caption, reasoning and the dated record, and the size budget.
+- [page.md](references/page.md): the section outline, reader variants, the poster, the staging caption, the problem sentence, reasoning and the dated record, the size budget, and the cold read.

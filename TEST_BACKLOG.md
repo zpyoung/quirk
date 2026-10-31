@@ -52,3 +52,9 @@ Reviewed every 2 weeks. Use `/quirk:artifacts:test-skip` to append.
 - **Edge cases to cover**: SC-2 verify-first on a shipped feature; SC-8 no-UI page; SC-9 native app with no film; SC-3 and SC-12 stops; SC-17 omit and halt outcomes; SC-18 real data stop; SC-11 parent that won't build; SC-13 clips per behavior
 - **Priority**: P2
 
+## TEST-6: explaining-features: poster rule, problem sentence and cold read have no full end-to-end run
+- **File under test**: skills/explaining-features/SKILL.md
+- **Test type**: e2e
+- **Reason skipped**: Checked with doc tests, a cold read of the remake's real poster and summary, and a pressure scenario, but no run has built a page under the new step 6, and the remake's page wasn't rebuilt.
+- **Priority**: P2
+

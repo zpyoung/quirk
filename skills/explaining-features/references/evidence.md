@@ -1,6 +1,6 @@
 # The evidence ledger
 
-Every claim the page or the film makes has one row in `$E/evidence.md`, and the page's results table is that ledger. Write the ledger before any footage, so the film is a tour of what is already proven.
+Every behavior claim the page or the film makes has one row in `$E/evidence.md`, and the page's results table is that ledger. Write the ledger before any footage, so the film is a tour of what is already proven.
 
 ## The columns
 
@@ -47,5 +47,6 @@ A behavior that's true but unchecked is Not proven until you check it. Then chec
 - The results table is the ledger, with Proof as links to the inlined screenshots or the saved output.
 - "What's still open" is every row that isn't Pass, plus anything cut.
 - The summary names the biggest gap among those rows.
+- The problem sentence isn't a behavior, so it has no row. Keep it and its source above the table, unchanged for any reader ([page.md](page.md#the-problem-sentence)).
 
 Section wording and reader variants are in [page.md](page.md).
