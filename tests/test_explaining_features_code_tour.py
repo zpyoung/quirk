@@ -1,0 +1,925 @@
+"""Behavior of explaining-features/scripts/code_tour.py: it turns tour.json and measured voice clips into a code-tour film's scenes, and refuses a tour whose code differs from its commit."""
+
+from __future__ import annotations
+
+import ast
+import html
+import importlib.util
+import json
+import re
+import shutil
+import subprocess
+import sys
+import sysconfig
+import wave
+from pathlib import Path
+from typing import Any, Optional
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CODE_TOUR = REPO_ROOT / "skills" / "explaining-features" / "scripts" / "code_tour.py"
+
+FRAME = 1 / 30
+FIRST_ROW_Y = 200
+ROW_H = 52
+
+APP = [
+    'import { useState } from "react";',
+    "",
+    "/* a block",
+    " * comment */",
+    "export function App() {",
+    "\tconst a = x < 3 && y > 2;",
+    '\tconst s = "say \\"hi\\" & bye";',
+    "\t// a /* nested */ comment",
+    "\tif (a) {",
+    "\t\treturn <p>{s}</p>;",
+    "\t}",
+    '\tconst long = "' + "word " * 17 + '";',
+    '\tconst glob = "src/**/*.ts";',
+    "\treturn null;",
+    "}",
+]
+BIG = [f"const v{n} = {n};" for n in range(1, 41)]
+BIG[19] = 'const wide = "' + "w" * 100 + '";'
+
+
+def git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", *args],
+        cwd=repo, capture_output=True, text=True, check=True,
+    )
+    return done.stdout.strip()
+
+
+@pytest.fixture(scope="module")
+def repo(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str]:
+    """One read-only repository for the whole module, because every git process is slow to start."""
+    root = tmp_path_factory.mktemp("tour-repo") / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "app.tsx").write_bytes(("\n".join(APP) + "\n").encode())
+    (root / "src" / "big.ts").write_bytes(("\n".join(BIG) + "\n").encode())
+    git(root.parent, "init", "-q", str(root))
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "first")
+    return root, git(root, "rev-parse", "HEAD")
+
+
+def write_wav(path: Path, seconds: float, rate: int = 1000) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(round(seconds * rate)))
+
+
+def line(text: str, source: str = "src/app.tsx:1", **extra: Any) -> dict[str, Any]:
+    return {"text": text, "source": source, **extra}
+
+
+def default_scenes() -> list[dict[str, Any]]:
+    return [
+        {
+            "map": [{"name": "Plugin", "file": "app.tsx"}, {"name": "Big file", "file": "big.ts"}, {"name": "Styles", "file": "x.css"}],
+            "lines": [line("Add project crosses three files.", "git diff", lit=[0]), line("The rest lives lower down.", "spec", lit=[1, 2])],
+            "label": "Three files",
+        },
+        {
+            "stop": "PLUGIN", "path": "src/app.tsx",
+            "rows": [3, 4, 5, 6, 7, 8, {"skip": "branch", "from": 9, "to": 12}, 13],
+            "lines": [line("It compares two numbers.", "src/app.tsx:6", highlight=[6]), line("Then it globs the sources.", "src/app.tsx:13", highlight=[13])],
+            "label": "Two things happen",
+        },
+        {
+            "stop": "INNER", "path": "src/app.tsx", "rows": [6, 7, 8, 9, 10, 11],
+            "lines": [line("It returns a paragraph.", "src/app.tsx:10", highlight=[10])],
+        },
+    ]
+
+
+def count_lines(scenes: list[dict[str, Any]]) -> int:
+    return sum(len(s["lines"]) for s in scenes)
+
+
+SCAFFOLD = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      /* Placeholders: replace all three with the film's own palette and display face. */
+      :root { --ground: #6b6b6b; }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div id="title">Hello</div></div>
+  </body>
+</html>
+"""
+
+
+def make_project(
+    tmp_path: Path,
+    sha: str,
+    repo_dir: Path,
+    scenes: Optional[list[dict[str, Any]]] = None,
+    *,
+    seconds: Any = 1.5,
+    commit: Optional[str] = None,
+    scaffold: bool = True,
+    wavs: bool = True,
+    title: str = "Add project: how it's built",
+) -> Path:
+    scenes = default_scenes() if scenes is None else scenes
+    project = tmp_path / "proj"
+    project.mkdir(exist_ok=True)
+    tour = {"repo": str(repo_dir), "commit": sha if commit is None else commit, "title": title, "scenes": scenes}
+    (project / "tour.json").write_text(json.dumps(tour), encoding="utf-8")
+    if scaffold:
+        (project / "scenes").mkdir(exist_ok=True)
+        (project / "scenes" / "index.html").write_text(SCAFFOLD, encoding="utf-8")
+    if wavs:
+        for n in range(1, count_lines(scenes) + 1):
+            length = seconds[n - 1] if isinstance(seconds, (list, tuple)) else seconds
+            write_wav(project / "assets" / "voice" / f"l{n:02d}.wav", length)
+    return project
+
+
+LENGTHS = [1.234, 2.001, 0.777, 3.3333, 1.0]
+
+
+@pytest.fixture(scope="module")
+def shared(repo: tuple[Path, str], tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The default tour built once. Tests that only read it share it; tests that edit it work on a clone."""
+    return built(tmp_path_factory.mktemp("tour-shared"), repo, seconds=LENGTHS)
+
+
+def clone(project: Path, tmp_path: Path) -> Path:
+    target = tmp_path / "clone"
+    shutil.copytree(project, target)
+    return target
+
+
+def copy_repo(repo: tuple[Path, str], tmp_path: Path) -> tuple[Path, str]:
+    target = tmp_path / "repo-copy"
+    shutil.copytree(repo[0], target)
+    return target, repo[1]
+
+
+def run(command: str, project: Path, *, env: Optional[dict[str, str]] = None) -> tuple[int, dict[str, Any], str]:
+    proc = subprocess.run(
+        [sys.executable, str(CODE_TOUR), command, "--project", str(project)],
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+    out = proc.stdout.strip()
+    return proc.returncode, (json.loads(out) if out else {}), proc.stderr
+
+
+def built(tmp_path: Path, repo: tuple[Path, str], scenes: Optional[list[dict[str, Any]]] = None, **kw: Any) -> Path:
+    project = make_project(tmp_path, repo[1], repo[0], scenes, **kw)
+    code, _, err = run("build", project)
+    assert code == 0, err
+    return project
+
+
+def composition(project: Path, name: str) -> str:
+    return (project / "scenes" / "compositions" / f"{name}.html").read_text(encoding="utf-8")
+
+
+def no_git_env(tmp_path: Path) -> dict[str, str]:
+    empty = tmp_path / "empty-bin"
+    empty.mkdir(exist_ok=True)
+    return {"PATH": str(empty)}
+
+
+def on_frame(seconds: float) -> bool:
+    return abs(seconds / FRAME - round(seconds / FRAME)) < 1e-3
+
+
+def code_rows(markup: str) -> dict[int, tuple[int, str]]:
+    """data-line -> (data-dedent, text) for each code row, read back the way a browser would."""
+    rows: dict[int, tuple[int, str]] = {}
+    for match in re.finditer(r'<div class="txt" id="[^"]*" data-line="(\d+)" data-dedent="(\d+)">(.*?)</div>', markup, re.S):
+        text = html.unescape(re.sub(r"<[^>]+>", "", match.group(3)))
+        rows[int(match.group(1))] = (int(match.group(2)), text)
+    return rows
+
+
+class TestLines:
+    def test_writes_one_clip_per_narration_line_in_order(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], wavs=False, scaffold=False)
+        code, out, _ = run("lines", project)
+        assert code == 0
+        assert out == {"lines": 5}
+        clips = json.loads((project / "assets" / "lines.json").read_text())
+        assert [c["id"] for c in clips] == ["l01", "l02", "l03", "l04", "l05"]
+        assert [c["text"] for c in clips] == [
+            "Add project crosses three files.", "The rest lives lower down.", "It compares two numbers.",
+            "Then it globs the sources.", "It returns a paragraph.",
+        ]
+        assert all(c["start_s"] == 0 for c in clips)
+
+    def test_never_touches_git(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, "no-such-ref", tmp_path / "gone", wavs=False, scaffold=False)
+        code, out, _ = run("lines", project, env=no_git_env(tmp_path))
+        assert code == 0
+        assert out == {"lines": 5}
+
+    def test_a_line_with_no_source_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        del scenes[1]["lines"][1]["source"]
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False)
+        code, _, err = run("lines", project)
+        assert code == 1
+        assert "Then it globs the sources." in err
+        assert "source" in err
+        assert not (project / "assets" / "lines.json").exists()
+
+    @pytest.mark.parametrize("source", ["", "   ", None, 7])
+    def test_a_blank_or_non_text_source_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str], source: Any) -> None:
+        scenes = default_scenes()
+        scenes[2]["lines"][0]["source"] = source
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False)
+        assert run("lines", project)[0] == 1
+
+    def test_a_highlight_naming_a_line_the_stop_does_not_show_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[1]["lines"][0]["highlight"] = [10]
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False)
+        code, _, err = run("lines", project)
+        assert code == 1
+        assert "10" in err and "PLUGIN" in err
+
+    def test_a_highlight_on_a_skipped_line_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[1]["lines"][0]["highlight"] = [9]
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False)
+        assert run("lines", project)[0] == 1
+
+    def test_a_lit_node_the_map_does_not_have_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[0]["lines"][0]["lit"] = [3]
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False)
+        assert run("lines", project)[0] == 1
+
+    def test_missing_tour_is_a_usage_error_naming_the_file(self, tmp_path: Path) -> None:
+        code, _, err = run("lines", tmp_path)
+        assert code == 2
+        assert "tour.json" in err
+
+    @pytest.mark.parametrize("breakage", [
+        lambda t: t.pop("commit"),
+        lambda t: t.pop("title"),
+        lambda t: t.update(repo="relative/path"),
+        lambda t: t.update(scenes=[]),
+        lambda t: t["scenes"][0].update(map=t["scenes"][0]["map"][:1]),
+        lambda t: t["scenes"][0].update(map=t["scenes"][0]["map"] + [{"name": "a", "file": "b"}, {"name": "c", "file": "d"}]),
+        lambda t: t["scenes"][1].update(rows=[]),
+        lambda t: t["scenes"][1].update(rows=[3, 4, 6]),
+        lambda t: t["scenes"][1].update(rows=[3, 4, 5, 6, 7, 8, {"skip": "x", "from": 10, "to": 12}, 13]),
+        lambda t: t["scenes"][1].update(rows=[0, 1]),
+        lambda t: t["scenes"][1].update(path=""),
+        lambda t: t["scenes"][1].update(lines=[]),
+        lambda t: t["scenes"][1]["lines"][0].update(text=""),
+        lambda t: t["scenes"][1]["lines"][0].update(highlight=[]),
+        lambda t: t["scenes"][1]["lines"][0].update(highlight="6"),
+        lambda t: t["scenes"][2].update(label="x" * 200),
+        lambda t: t["scenes"].append({"neither": "map nor stop", "lines": []}),
+    ])
+    def test_a_malformed_tour_is_a_usage_error(self, tmp_path: Path, repo: tuple[Path, str], breakage: Any) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], wavs=False)
+        tour = json.loads((project / "tour.json").read_text())
+        breakage(tour)
+        (project / "tour.json").write_text(json.dumps(tour))
+        assert run("lines", project)[0] == 2
+
+    def test_tour_that_is_not_json_is_a_usage_error(self, tmp_path: Path) -> None:
+        (tmp_path / "tour.json").write_text("{not json")
+        assert run("lines", tmp_path)[0] == 2
+
+    def test_a_missing_project_flag_is_a_usage_error(self) -> None:
+        proc = subprocess.run([sys.executable, str(CODE_TOUR), "lines"], capture_output=True, text=True)
+        assert proc.returncode == 2
+        assert proc.stdout == ""
+
+
+class TestMissingInputs:
+    def test_build_without_the_scaffold_names_the_command_that_makes_it(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], scaffold=False)
+        code, _, err = run("build", project)
+        assert code == 2
+        assert "hf.py" in err and "init" in err
+
+    def test_build_without_a_voice_clip_names_the_clip_and_the_command(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        (project / "assets" / "voice" / "l03.wav").unlink()
+        code, _, err = run("build", project)
+        assert code == 2
+        assert "l03" in err and "voice.py" in err and "say" in err
+
+    def test_build_without_a_tour_is_a_usage_error(self, tmp_path: Path) -> None:
+        code, _, err = run("build", tmp_path)
+        assert code == 2
+        assert "tour.json" in err
+
+    def test_build_with_a_voice_clip_that_is_not_a_wav_is_a_usage_error(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        (project / "assets" / "voice" / "l01.wav").write_bytes(b"not a wav")
+        code, _, err = run("build", project)
+        assert code == 2
+        assert "l01" in err
+
+    def test_build_with_a_lines_file_that_no_longer_matches_the_tour_asks_for_new_voice(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        assert run("lines", project)[0] == 0
+        tour = json.loads((project / "tour.json").read_text())
+        tour["scenes"][2]["lines"][0]["text"] = "A different sentence."
+        (project / "tour.json").write_text(json.dumps(tour))
+        code, _, err = run("build", project)
+        assert code == 2
+        assert "l05" in err and "lines" in err
+
+    def test_check_without_a_tour_is_a_usage_error(self, tmp_path: Path) -> None:
+        code, _, err = run("check", tmp_path)
+        assert code == 2
+        assert "tour.json" in err
+
+    def test_check_before_any_build_names_the_build_command(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        code, _, err = run("check", project)
+        assert code == 2
+        assert "code_tour.py build" in err
+
+
+class TestGit:
+    def test_build_and_check_exit_3_when_git_is_missing(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        assert run("build", project, env=no_git_env(tmp_path))[0] == 3
+        assert run("check", shared, env=no_git_env(tmp_path))[0] == 3
+
+    def test_a_commit_that_does_not_resolve_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], commit="deadbeefdeadbeef")
+        code, out, err = run("build", project)
+        assert code == 1
+        assert "deadbeefdeadbeef" in err
+        assert "error" in out
+        assert not (project / "beats.json").exists()
+
+    def test_a_commit_shaped_like_an_option_is_a_ref_not_a_flag(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], commit="--all")
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "--all" in err
+
+    def test_a_directory_that_is_not_a_repository_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        bare = tmp_path / "plain"
+        bare.mkdir()
+        project = make_project(tmp_path, repo[1], bare)
+        assert run("build", project)[0] == 1
+
+    def test_a_path_that_does_not_exist_at_the_commit_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[2]["path"] = "src/missing.tsx"
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "src/missing.tsx" in err
+
+    def test_a_path_that_is_a_folder_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[2]["path"] = "src"
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        assert run("build", project)[0] == 1
+
+    def test_a_line_past_the_end_of_the_file_cannot_ship_and_is_named(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[2]["rows"] = [14, 15, 16]
+        scenes[2]["lines"][0]["highlight"] = [15]
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "src/app.tsx:16" in err
+
+    def test_a_skipped_range_past_the_end_of_the_file_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[2]["rows"] = [13, {"skip": "tail", "from": 14, "to": 99}]
+        scenes[2]["lines"][0]["highlight"] = [13]
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "99" in err
+
+    def test_code_is_read_at_the_commit_not_the_working_tree(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        root, sha = copy_repo(repo, tmp_path)
+        (root / "src" / "app.tsx").write_text("changed\n" * 20)
+        git(root, "commit", "-q", "-am", "second")
+        project = built(tmp_path, (root, sha))
+        assert code_rows(composition(project, "s2"))[6][1].strip().startswith("const a = x < 3")
+
+
+class TestRowLimit:
+    def stop(self, rows: list[Any], label: Optional[str] = None) -> list[dict[str, Any]]:
+        first = next(r for r in rows if isinstance(r, int))
+        scene: dict[str, Any] = {
+            "stop": "BIG", "path": "src/big.ts", "rows": rows,
+            "lines": [line("Look here.", "src/big.ts:1", highlight=[first])],
+        }
+        if label:
+            scene["label"] = label
+        return [scene]
+
+    def test_a_stop_at_exactly_fourteen_rows_builds(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = self.stop(list(range(1, 15)))
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        code, out, err = run("build", project)
+        assert code == 0, err
+        assert out["stops"] == [{"stop": "BIG", "rows": 14}]
+
+    def test_a_stop_at_fifteen_rows_is_refused_and_named(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], self.stop(list(range(1, 16))))
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "BIG" in err and "15" in err and "14" in err
+        assert not (project / "scenes" / "compositions").exists()
+
+    def test_a_label_takes_a_row_so_thirteen_is_the_limit(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        ok = make_project(tmp_path, repo[1], repo[0], self.stop(list(range(1, 14)), "Why it matters"))
+        assert run("build", ok)[0] == 0
+        over = tmp_path / "over"
+        over.mkdir()
+        project = make_project(over, repo[1], repo[0], self.stop(list(range(1, 15)), "Why it matters"))
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "13" in err
+
+    def test_a_long_line_wraps_into_extra_rows_that_count(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        # line 20 is 100 characters, so it takes two rows
+        fits = make_project(tmp_path, repo[1], repo[0], self.stop(list(range(8, 21))))
+        code, out, _ = run("build", fits)
+        assert code == 0
+        assert out["stops"][0]["rows"] == 14
+        over = tmp_path / "over"
+        over.mkdir()
+        project = make_project(over, repo[1], repo[0], self.stop(list(range(7, 21))))
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "15" in err
+
+    def test_a_skip_row_counts_as_one_row(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        rows = [1, 2, {"skip": "many", "from": 3, "to": 30}, 31]
+        project = make_project(tmp_path, repo[1], repo[0], self.stop(rows))
+        code, out, _ = run("build", project)
+        assert code == 0
+        assert out["stops"][0]["rows"] == 4
+
+    def test_a_film_of_ninety_seconds_or_more_cannot_ship(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        project = make_project(tmp_path, repo[1], repo[0], scenes, seconds=18.0)
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "90" in err
+        assert not (project / "beats.json").exists()
+
+    def test_a_film_just_under_ninety_seconds_builds(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        project = make_project(tmp_path, repo[1], repo[0], scenes, seconds=16.0)
+        code, out, err = run("build", project)
+        assert code == 0, err
+        assert 85 < out["film_s"] < 90
+
+
+class TestBuild:
+    def test_reports_scenes_beats_film_and_stops(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        code, out, err = run("build", project)
+        assert code == 0, err
+        assert out["scenes"] == 3
+        assert out["stops"] == [{"stop": "PLUGIN", "rows": 8}, {"stop": "INNER", "rows": 6}]
+        beats = json.loads((project / "beats.json").read_text())
+        assert out["beats"] == len(beats)
+        assert on_frame(out["film_s"])
+
+    def test_writes_every_file_the_film_needs(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        for name in ("s1", "s2", "s3"):
+            assert (project / "scenes" / "compositions" / f"{name}.html").is_file()
+        for n in range(1, 6):
+            assert (project / "scenes" / "assets" / "voice" / f"l{n:02d}.wav").read_bytes() == (project / "assets" / "voice" / f"l{n:02d}.wav").read_bytes()
+        for name in ("beats.json", "sources.md", "storyboard.md"):
+            assert (project / name).is_file()
+        assert (project / "kit" / "kit.md").is_file()
+
+    def test_index_keeps_the_scaffold_head_and_hosts_every_scene(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        page = (project / "scenes" / "index.html").read_text()
+        assert "gsap.min.js" in page.split("<body", 1)[0]
+        assert "Placeholders: replace all three" in page
+        for name in ("s1", "s2", "s3"):
+            assert f'<div id="{name}" class="clip" data-composition-id="{name}" data-composition-src="compositions/{name}.html"' in page
+        assert 'data-composition-id="main"' in page
+        assert 'window.__timelines["main"]' in page
+        assert page.count("<audio") == 5
+        assert "Hello" not in page
+
+    def test_scenes_are_seek_safe_and_named_by_scene_id(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        for name in ("s1", "s2", "s3"):
+            markup = composition(project, name)
+            assert f'data-composition-id="{name}"' in markup
+            assert f'window.__timelines["{name}"] = tl;' in markup
+            assert "gsap.timeline({ paused: true })" in markup
+            tweens = re.findall(r"tl\.fromTo\([^;]*\);", markup)
+            assert tweens
+            assert all("immediateRender: false" in t for t in tweens)
+            assert "tl.set(" not in markup
+            assert not re.search(r"font:\s", markup)
+            assert "font-family" in markup
+        assert 'gsap.set("#s2-label", { opacity: 0 });' in composition(project, "s2")
+
+    def test_tokens_and_fonts_are_inlined_in_every_scene(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        for name in ("s1", "s2", "s3"):
+            markup = composition(project, name)
+            for token in ("#101114", "#16171b", "#2c3050", "#24262c", "#eceef2", "#9aa0ab", "#9aa6ff", "#c6cbe8", "Inter", "JetBrains Mono"):
+                assert token in markup
+            assert "<link" not in markup
+
+    def test_code_text_is_the_source_after_unescaping(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        rows = code_rows(composition(project, "s2"))
+        assert sorted(rows) == [3, 4, 5, 6, 7, 8, 13]
+        for number, (dedent, text) in rows.items():
+            expected = APP[number - 1].replace("\t", "    ")
+            assert dedent == 0
+            assert text == expected, number
+        inner = code_rows(composition(project, "s3"))
+        assert sorted(inner) == [6, 7, 8, 9, 10, 11]
+        for number, (dedent, text) in inner.items():
+            assert dedent == 4
+            assert text == APP[number - 1].replace("\t", "    ")[4:]
+
+    def test_the_markup_holds_no_literal_comment_opener(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        for name in ("s1", "s2", "s3"):
+            assert "/*" not in composition(project, name)
+        assert "&#47;" in composition(project, "s2")
+
+    def test_tokens_colour_comments_strings_and_keywords_without_changing_text(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        markup = composition(project, "s2")
+        assert re.search(r'<span class="c">[^<]*a block', markup)
+        assert re.search(r'<span class="s">&quot;|<span class="s">"', markup)
+        assert '<span class="k">export</span>' in markup
+        assert '<span class="k">function</span>' in markup
+
+    def test_a_skipped_range_is_marked_on_screen(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        markup = composition(shared, "s2")
+        assert 'data-skip="9-12"' in markup
+        assert "branch (lines 9–12 skipped)" in markup
+
+    def test_the_stop_commit_and_path_are_on_screen(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        markup = composition(shared, "s2")
+        assert "STOP 1 OF 2 · PLUGIN" in markup
+        assert f"commit {repo[1][:8]}" in markup
+        assert re.search(r'class="mono path">src/app.tsx</div>', markup)
+
+    def test_the_map_names_its_files_and_the_title_is_on_the_first_frame(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        markup = composition(shared, "s1")
+        assert "Add project: how it&#x27;s built" in markup or "Add project: how it's built" in markup
+        for text in ("Plugin", "app.tsx", "Big file", "big.ts", "Styles", "x.css"):
+            assert text in markup
+
+    def test_a_rebuild_is_identical_and_drops_scenes_the_tour_no_longer_has(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        first = {p.name: p.read_bytes() for p in (project / "scenes" / "compositions").glob("*.html")}
+        stale = project / "scenes" / "compositions" / "s9.html"
+        stale.write_text("stale")
+        keep = project / "scenes" / "compositions" / "notes.html"
+        keep.write_text("mine")
+        assert run("build", project)[0] == 0
+        again = {p.name: p.read_bytes() for p in (project / "scenes" / "compositions").glob("s[123].html")}
+        assert again == {k: v for k, v in first.items() if k.startswith("s")}
+        assert not stale.exists()
+        assert keep.exists()
+
+
+class TestTiming:
+    def starts(self, project: Path) -> dict[str, tuple[float, float]]:
+        page = (project / "scenes" / "index.html").read_text()
+        out = {}
+        for match in re.finditer(r'<audio id="vo-(l\d+)"[^>]*data-start="([\d.]+)" data-duration="([\d.]+)"', page):
+            out[match.group(1)] = (float(match.group(2)), float(match.group(3)))
+        return out
+
+    def hosts(self, project: Path) -> list[tuple[str, float, float]]:
+        page = (project / "scenes" / "index.html").read_text()
+        return [(m.group(1), float(m.group(2)), float(m.group(3))) for m in re.finditer(
+            r'<div id="(s\d+)" class="clip"[^>]*data-start="([\d.]+)" data-duration="([\d.]+)"', page)]
+
+    def test_every_clip_start_and_scene_boundary_is_on_a_frame(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        clips = json.loads((project / "assets" / "lines.json").read_text())
+        assert all(on_frame(c["start_s"]) for c in clips)
+        assert all(on_frame(s) for s, _ in self.starts(project).values())
+        hosts = self.hosts(project)
+        assert all(on_frame(start) and on_frame(duration) for _, start, duration in hosts)
+        page = (project / "scenes" / "index.html").read_text()
+        assert on_frame(float(re.search(r'data-composition-id="main" data-start="0" data-duration="([\d.]+)"', page).group(1)))
+
+    def test_lead_gaps_and_hold_follow_the_measured_clip_lengths(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        lengths = [1.234, 2.001, 0.777, 3.3333, 1.0]
+        project = built(tmp_path, repo, seconds=lengths)
+        clips = json.loads((project / "assets" / "lines.json").read_text())
+        starts = [c["start_s"] for c in clips]
+        assert starts[0] == pytest.approx(0.3, abs=1e-6)
+        ends = [s + n for s, n in zip(starts, lengths)]
+        # l01-l02 share scene 1, l03-l04 share scene 2, l05 is scene 3
+        for left, right in ((0, 1), (2, 3)):
+            gap = starts[right] - ends[left]
+            assert 0.35 - 1e-6 <= gap < 0.35 + FRAME
+        for left, right in ((1, 2), (3, 4)):
+            gap = starts[right] - ends[left]
+            assert 0.8 - 1e-6 <= gap < 0.8 + FRAME
+        page = (project / "scenes" / "index.html").read_text()
+        film = float(re.search(r'data-composition-id="main" data-start="0" data-duration="([\d.]+)"', page).group(1))
+        assert 2.5 - 1e-6 <= film - ends[-1] < 2.5 + FRAME
+
+    def test_scenes_tile_the_film_with_no_gap_or_overlap(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        hosts = self.hosts(project)
+        assert hosts[0][1] == 0
+        for (_, start, duration), (_, nxt, _) in zip(hosts, hosts[1:]):
+            assert start + duration == pytest.approx(nxt, abs=1e-5)
+        page = (project / "scenes" / "index.html").read_text()
+        film = float(re.search(r'data-composition-id="main" data-start="0" data-duration="([\d.]+)"', page).group(1))
+        assert hosts[-1][1] + hosts[-1][2] == pytest.approx(film, abs=1e-5)
+
+    def test_lines_json_is_rewritten_with_the_real_starts(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        assert run("lines", project)[0] == 0
+        assert run("build", project)[0] == 0
+        clips = json.loads((project / "assets" / "lines.json").read_text())
+        assert [c["id"] for c in clips] == ["l01", "l02", "l03", "l04", "l05"]
+        assert clips[0]["start_s"] > 0
+        assert [c["start_s"] for c in clips] == sorted(c["start_s"] for c in clips)
+        assert {s: v[0] for s, v in self.starts(project).items()} == {c["id"]: c["start_s"] for c in clips}
+
+    def test_each_highlight_tween_starts_one_frame_before_its_clip(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        clips = {c["id"]: c["start_s"] for c in json.loads((project / "assets" / "lines.json").read_text())}
+        scene_start = {name: start for name, start, _ in self.hosts(project)}
+        cases = {"s2": [("l03", "#s2-b6"), ("l04", "#s2-b13")], "s3": [("l05", "#s3-b10")]}
+        for scene, expected in cases.items():
+            markup = composition(project, scene)
+            for clip, selector in expected:
+                match = re.search(r'tl\.fromTo\("%s",.*?\}, ([\d.]+)\);' % re.escape(selector), markup)
+                assert match, selector
+                assert float(match.group(1)) == pytest.approx(clips[clip] - scene_start[scene] - FRAME, abs=1e-5)
+                assert on_frame(float(match.group(1)))
+
+    def test_highlight_is_a_band_on_the_row_and_the_rest_dim(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        markup = composition(shared, "s2")
+        assert re.search(r'tl\.fromTo\("#s2-b6", \{ opacity: 0 \}, \{ opacity: 1, duration: 0\.2, ease: "power2\.out", immediateRender: false \}', markup)
+        assert re.search(r'tl\.fromTo\("#s2-t5", \{ opacity: 1 \}, \{ opacity: 0\.72, duration: 0\.2, ease: "power2\.out", immediateRender: false \}', markup)
+        assert len(re.findall(r'"#s2-t6"', markup)) == 1
+        # the second highlight takes the band off line 6 and puts it on 13
+        assert re.search(r'tl\.fromTo\("#s2-b6", \{ opacity: 1 \}, \{ opacity: 0,', markup)
+        assert re.search(r'tl\.fromTo\("#s2-b13", \{ opacity: 0 \}, \{ opacity: 1,', markup)
+
+    def test_the_label_enters_with_the_last_line_of_its_scene(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        clips = {c["id"]: c["start_s"] for c in json.loads((project / "assets" / "lines.json").read_text())}
+        scene_start = {name: start for name, start, _ in self.hosts(project)}
+        match = re.search(r'tl\.fromTo\("#s2-label",.*?power3\.out.*?\}, ([\d.]+)\);', composition(project, "s2"))
+        assert match
+        assert float(match.group(1)) == pytest.approx(clips["l04"] - scene_start["s2"] - FRAME, abs=1e-5)
+
+
+class TestBeats:
+    def beats(self, project: Path) -> dict[str, dict[str, Any]]:
+        return {b["id"]: b for b in json.loads((project / "beats.json").read_text())}
+
+    def test_a_beat_region_is_the_accent_bar_of_the_highlighted_row(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        beats = self.beats(shared)
+        # rows 3, 4 and 5 come before line 6; the skip row and rows 6 to 8 come before line 13
+        assert beats["s2-l03"]["region"] == [98, FIRST_ROW_Y + 3 * ROW_H, 8, ROW_H]
+        assert beats["s2-l04"]["region"] == [98, FIRST_ROW_Y + 7 * ROW_H, 8, ROW_H]
+        assert beats["s3-l05"]["region"] == [98, FIRST_ROW_Y + 4 * ROW_H, 8, ROW_H]
+
+    def test_a_wrapped_row_pushes_the_rows_after_it_down(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = [{
+            "stop": "WRAP", "path": "src/app.tsx", "rows": [12, 13, 14],
+            "lines": [line("Look at the glob.", "src/app.tsx:13", highlight=[13]), line("Then the wrapped line.", "src/app.tsx:12", highlight=[12])],
+        }]
+        project = built(tmp_path, repo, scenes)
+        beats = self.beats(project)
+        # line 12 is 101 characters once dedented, so it takes two rows
+        assert beats["s1-l01"]["region"] == [98, FIRST_ROW_Y + 2 * ROW_H, 8, ROW_H]
+        assert beats["s1-l02"]["region"] == [98, FIRST_ROW_Y, 8, 2 * ROW_H]
+
+    def test_a_beat_carries_what_verify_needs(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        clips = {c["id"]: c["start_s"] for c in json.loads((project / "assets" / "lines.json").read_text())}
+        starts = {name: start for name, start, _ in TestTiming().hosts(project)}
+        beat = self.beats(project)["s2-l03"]
+        assert beat["word"] == "it"
+        assert beat["clip"] == "assets/voice/l03.wav"
+        assert beat["clip_start_s"] == pytest.approx(clips["l03"], abs=1e-6)
+        assert beat["expected_s"] == pytest.approx(clips["l03"], abs=1e-6)
+        assert beat["baseline_s"] == pytest.approx(max(clips["l03"] - 0.5, starts["s2"] + 0.05), abs=1e-3)
+        assert beat["detector"] == "changed"
+
+    def test_a_label_has_a_beat_over_its_box(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        beats = self.beats(shared)
+        assert beats["s2-label"]["region"] == [96, 900, 1728, 120]
+        assert beats["s2-label"]["clip"] == "assets/voice/l04.wav"
+        assert "s3-label" not in beats
+
+    def test_a_line_that_moves_nothing_has_no_beat(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = default_scenes()
+        scenes[1]["lines"].append(line("And once more.", "src/app.tsx:13", highlight=[13]))
+        scenes[1]["lines"].append(line("A line with no highlight.", "src/app.tsx:1"))
+        project = make_project(tmp_path, repo[1], repo[0], scenes)
+        assert run("build", project)[0] == 0
+        beats = self.beats(project)
+        assert "s2-l05" not in beats and "s2-l06" not in beats
+
+    def test_a_map_node_lights_with_a_bar_the_beat_watches(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        beats = self.beats(project)
+        assert "s1-l01" in beats and "s1-l02" in beats
+        region = beats["s1-l01"]["region"]
+        assert region[2] == 8
+        assert 96 <= region[0] and region[0] + region[2] <= 1824
+        assert beats["s1-l02"]["region"][0] > region[0]
+        assert 'id="s1-p0"' in composition(project, "s1")
+
+
+class TestCheck:
+    def test_passes_a_fresh_build_and_counts_every_code_line(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        code, out, err = run("check", project)
+        assert code == 0, err
+        assert out == {"commit": repo[1], "checked": 13, "mismatches": []}
+
+    def test_fails_after_a_code_line_in_a_built_scene_is_changed(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        path = project / "scenes" / "compositions" / "s2.html"
+        path.write_text(path.read_text().replace("x &lt; 3", "x &lt; 4"))
+        code, out, err = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert len(out["mismatches"]) == 1
+        mismatch = out["mismatches"][0]
+        assert mismatch["scene"] == "s2.html"
+        assert mismatch["line"] == 6
+        assert "x < 4" in mismatch["screen"]
+        assert "x < 3" in mismatch["source"]
+        assert "s2.html" in err and "6" in err
+
+    def test_fails_after_a_dedent_that_cuts_non_whitespace(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        scenes = [{
+            "stop": "TAIL", "path": "src/app.tsx", "rows": [13, 14],
+            "lines": [line("The end.", "src/app.tsx:14", highlight=[14])],
+        }]
+        project = built(tmp_path, repo, scenes)
+        path = project / "scenes" / "compositions" / "s1.html"
+        markup = path.read_text()
+        assert 'data-line="14" data-dedent="4"' in markup
+        # the screen text still equals what is left of the source after the cut, so only the cut can give it away
+        edited = re.sub(r'(data-line="14" data-dedent=")4(">).*?(</div>)', r"\g<1>8\g<2>rn null;\g<3>", markup, flags=re.S)
+        assert edited != markup
+        path.write_text(edited)
+        code, out, err = run("check", project)
+        assert code == 1
+        assert [m["line"] for m in out["mismatches"]] == [14]
+        assert "retu" in err or "whitespace" in err
+
+    def test_fails_when_no_code_line_is_found_on_screen(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        for path in (project / "scenes" / "compositions").glob("*.html"):
+            path.write_text(path.read_text().replace("data-line=", "data-ln="))
+        code, out, err = run("check", project)
+        assert code == 1
+        assert out["checked"] == 0
+        assert "0" in err
+
+    def test_a_tour_with_no_code_stop_cannot_be_built(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0], default_scenes()[:1])
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "checked" in err or "0" in err
+
+    def test_fails_when_the_commit_in_the_tour_changes_under_a_built_film(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        root, sha = copy_repo(repo, tmp_path)
+        (root / "src" / "app.tsx").write_bytes(("\n".join(APP).replace("x < 3", "x < 9") + "\n").encode())
+        git(root, "commit", "-q", "-am", "second")
+        project = built(tmp_path, (root, sha))
+        tour = json.loads((project / "tour.json").read_text())
+        tour["commit"] = git(root, "rev-parse", "HEAD")
+        (project / "tour.json").write_text(json.dumps(tour))
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["mismatches"][0]["line"] == 6
+
+    def test_fails_when_a_scene_names_a_path_the_commit_does_not_have(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        path = project / "scenes" / "compositions" / "s3.html"
+        path.write_text(path.read_text().replace(">src/app.tsx<", ">src/gone.tsx<"))
+        code, _, err = run("check", project)
+        assert code == 1
+        assert "src/gone.tsx" in err
+
+    def test_fails_when_the_commit_no_longer_resolves(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        tour = json.loads((project / "tour.json").read_text())
+        tour["commit"] = "0" * 40
+        (project / "tour.json").write_text(json.dumps(tour))
+        assert run("check", project)[0] == 1
+
+
+class TestScript:
+    def test_imports_only_the_standard_library(self) -> None:
+        tree = ast.parse(CODE_TOUR.read_text(encoding="utf-8"))
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+        assert names
+        stdlib = Path(sysconfig.get_paths()["stdlib"]).resolve()
+        for name in names:
+            spec = importlib.util.find_spec(name)
+            assert spec is not None, name
+            origin = spec.origin or ""
+            assert origin in ("built-in", "frozen") or Path(origin).resolve().is_relative_to(stdlib), name
+            assert "site-packages" not in origin, name
+
+    def test_runs_with_site_packages_switched_off(self) -> None:
+        proc = subprocess.run([sys.executable, "-I", "-S", str(CODE_TOUR), "--help"], capture_output=True, text=True)
+        assert proc.returncode == 0
+        assert "lines" in proc.stdout and "build" in proc.stdout and "check" in proc.stdout
+
+    def test_parses_as_python_3_9(self) -> None:
+        ast.parse(CODE_TOUR.read_text(encoding="utf-8"), feature_version=(3, 9))
+
+    def test_prints_one_json_object_on_stdout_and_never_prompts(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        project = make_project(tmp_path, repo[1], repo[0])
+        proc = subprocess.run(
+            [sys.executable, str(CODE_TOUR), "build", "--project", str(project)],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120,
+        )
+        assert proc.returncode == 0
+        assert len(proc.stdout.strip().splitlines()) == 1
+        assert isinstance(json.loads(proc.stdout), dict)
+
+
+class TestWrittenNotes:
+    def test_sources_lists_every_narration_line_with_its_source_and_the_commit(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        text = (project / "sources.md").read_text()
+        assert repo[1] in text
+        assert str(repo[0]) in text
+        for source in ("git diff", "spec", "src/app.tsx:6", "src/app.tsx:13", "src/app.tsx:10"):
+            assert source in text
+        assert "It compares two numbers." in text
+
+    def test_storyboard_has_a_script_item_and_a_timed_row_per_scene(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = shared
+        text = (project / "storyboard.md").read_text()
+        assert text.startswith("# Add project: how it's built")
+        script = re.search(r"## Script\n\n(.*?)\n\n## ", text, re.S).group(1)
+        assert len(re.findall(r"^\d+\. ", script, re.M)) == 3
+        table = [row for row in text.splitlines() if row.startswith("| s")]
+        assert len(table) == 3
+        header = next(row for row in text.splitlines() if row.startswith("| Scene"))
+        assert "Time" in header
+        starts = [float(re.search(r"\d+(?:\.\d+)?", row.split("|")[2]).group(0)) for row in table]
+        assert starts[0] == 0
+        assert starts == sorted(starts)
+
+    def test_storyboard_scenes_are_found_by_the_making_videos_parser(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        scripts = REPO_ROOT / "skills" / "making-videos" / "scripts"
+        spec = importlib.util.spec_from_file_location("review_page_under_test", scripts / "review_page.py")
+        assert spec and spec.loader
+        sys.path.insert(0, str(scripts))
+        try:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        finally:
+            sys.path.remove(str(scripts))
+        project = shared
+        scenes = module.parse_scenes((project / "storyboard.md").read_text())
+        assert scenes is not None
+        assert [s.scene_id for s in scenes] == ["s1", "s2", "s3"]
+        assert scenes[0].start == "0.0" or float(scenes[0].start) == 0
+        assert "Add project crosses three files." in scenes[0].words
+
+    def test_the_kit_names_the_tokens_and_motion(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        text = (shared / "kit" / "kit.md").read_text()
+        for token in ("#101114", "#9aa6ff", "Inter", "JetBrains Mono", "0.2 s", "power2.out"):
+            assert token in text
