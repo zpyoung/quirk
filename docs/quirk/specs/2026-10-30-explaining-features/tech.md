@@ -143,7 +143,7 @@ skills/explaining-features/
   SKILL.md                       under 300 lines
   references/{evidence.md,capture.md,page.md}
   scripts/verify_outcome.py
-  scripts/fit_video.py
+  scripts/code_tour.py
   scripts/leftovers.py
   evals/trigger-evals.json       at least 12 true and 12 false
   test-pressure-{1,2,3,4}.md
@@ -283,7 +283,7 @@ Details that the prototype paid for, at `~/Studio/videos/2026-10-31-add-project-
 - `tests/test_making_videos_studio.py`, `tests/test_making_videos_skill.py`: `stops` default, value and rejection; doc strings.
 - `tests/test_using_apps_like_a_user_{cli,web,effects,fixtures}.py`: hover plan per surface, native refusal, no gate on a "Delete" target, `pixels_changed` with crafted PNGs. **A live hover test in `TestLive` with a new `web_hover` scenario must show `OBSERVED` on a real CSS-only hover and `NO_EFFECT` on a dead control:** per the project's review experience, a negative that can't fail proves nothing.
 - `tests/test_html_builder.py`, `tests/test_htmlkit_core.py`: inlining each type, `.srt` conversion, containment and missing-file exits, over-10 MiB failure with no sidecar, the `q-grid` warning. `tests/test_html_verify.py`: a valid video passes, a corrupt one fails when H.264 is available, and the unchecked path reports itself.
-- `tests/test_explaining_features_skill.py`, modeled on `tests/test_making_videos_skill.py`: frontmatter, body under 300 lines, links resolve, references linked, balanced evals, required honesty strings. `tests/test_explaining_features_scripts.py`: every `verify_outcome.py` outcome and an unknown check; `fit_video.py` copy, re-encode, floor and missing-ffmpeg paths.
+- `tests/test_explaining_features_skill.py`, modeled on `tests/test_making_videos_skill.py`: frontmatter, body under 300 lines, links resolve, references linked, balanced evals, required honesty strings. `tests/test_explaining_features_scripts.py`: every `verify_outcome.py` outcome and an unknown check; `leftovers.py`. `tests/test_explaining_features_code_tour.py`: each `code_tour.py` exit 1 case against a temporary git repo, timing on frames, and the check failing on a changed line.
 
 `COMMAND:`
 ```
