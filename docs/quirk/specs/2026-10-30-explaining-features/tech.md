@@ -235,7 +235,8 @@ code_tour.py build --project P
   then runs the same comparison as check before it exits
   stdout: {"scenes": N, "beats": N, "film_s": X, "stops": [{"stop", "rows"}]}
 code_tour.py check --project P
-  compares every code line on screen in scenes/compositions/*.html with `git show <commit>:<path>`
+  requires each stop on screen with exactly the lines and skip rows tour.json gives it, and
+  compares every code line in scenes/compositions/*.html with `git show <commit>:<path>`
   stdout: {"commit", "checked": N, "mismatches": [{"scene", "line", "screen", "source"}]}
 exit: 0 ok; 1 a tour that can't ship, naming what and where (below); 2 usage, bad tour.json, or a missing
       input, with the command that makes it; 3 git missing
