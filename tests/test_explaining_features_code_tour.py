@@ -1303,6 +1303,24 @@ class TestCheck:
         self.edit(project, "s2", lambda m: m.replace('data-skip="9-12"', 'data-skp="9-12"'))
         assert run("check", project)[0] == 1
 
+    def test_fails_when_a_skip_row_is_moved_to_the_wrong_place(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+
+        def move(markup: str) -> str:
+            skip = re.search(r'<div class="row"><div class="num">⋯</div><div class="txt skip" data-skip="9-12">.*?</div></div>', markup, re.S)
+            assert skip
+            first = self.row_markup(markup, "s2", 3)
+            return markup.replace(skip.group(0), "").replace(first, skip.group(0) + "\n" + first)
+
+        self.edit(project, "s2", move)
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert len(out["mismatches"]) == 1
+        reason = out["mismatches"][0]["reason"]
+        assert "out of order" in reason
+        assert "skip 9-12" in reason and reason.index("skip 9-12") < reason.index("line 3")
+
     def test_fails_when_a_stop_has_no_composition(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = clone(shared, tmp_path)
         (project / "scenes" / "compositions" / "s3.html").unlink()

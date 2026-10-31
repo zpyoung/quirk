@@ -98,7 +98,7 @@ _HREF = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
 _INJECTED = re.compile(r"Injected deterministic @font-face rules for (\d+) requested font famil", re.I)
 _FONT_VALUE = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:\s*([^;}]*)")
 _FONT_NAMED = re.compile(r"""Fetched\s+\d+\s+font face\(s\) for ["']([^"']+)["']""", re.I)
-_FONT_EMBEDDED = re.compile(r"Embedded local font file:\s*(\S+)", re.I)
+_FONT_EMBEDDED = re.compile(r"Embedded local font file:\s*(.+?)(?:\s+\(\d[\d.,]*\s*[KMGT]?i?B\b.*)?$", re.I | re.M)
 _FONT_FACE = re.compile(r"@font-face\s*\{([^}]*)\}", re.I)
 _FACE_FAMILY = re.compile(r"""font-family\s*:\s*(?:"([^"]*)"|'([^']*)'|([^;}"']+))""", re.I)
 _FACE_URL = re.compile(r"""url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)""", re.I)
@@ -291,7 +291,7 @@ def embedded_families(scenes: Path, log_text: str) -> "set[str]":
     found: "set[str]" = set()
     for page in _html_files(scenes):
         text = _COMMENTS.sub("", page.read_text(encoding="utf-8", errors="replace"))
-        for body in _FONT_FACE.findall(text):
+        for body in (b for css in _STYLE_BLOCK.findall(text) for b in _FONT_FACE.findall(css)):
             family, url = _FACE_FAMILY.search(body), _FACE_URL.search(body)
             if family and url and key(next(g for g in url.groups() if g is not None)) in files:
                 found.add(next(g for g in family.groups() if g is not None).strip().lower())
@@ -324,7 +324,7 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
                 "render log injected %d font famil%s but the brand has %d"
                 % (injected, "y" if injected == 1 else "ies", required)
             )
-        elif wanted and (logged or not counts):
+        elif wanted and (logged or embedded or not counts):
             absent = [n for n in names if n.lower() not in logged | embedded]
             if absent:
                 problems.append(

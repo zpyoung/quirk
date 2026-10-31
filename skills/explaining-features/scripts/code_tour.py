@@ -1042,6 +1042,7 @@ class _CodeRows(HTMLParser):
         self.path: Optional[str] = None
         self.rows: List[Tuple[Any, ...]] = []
         self.skips: List[str] = []
+        self.sequence: List[str] = []
         self.loose: List[str] = []
         self.grab: Optional[str] = None
         self.depth = 0
@@ -1057,6 +1058,7 @@ class _CodeRows(HTMLParser):
             self.grab, self.meta, self.depth, self.buffer = "line", (a["data-line"] or "", a.get("data-dedent") or "0"), 0, []
         elif "data-skip" in a:
             self.skips.append(a["data-skip"] or "")
+            self.sequence.append(f"skip {a['data-skip'] or ''}")
         elif "txt" in classes:
             self.grab, self.depth, self.buffer = "loose", 0, []
         elif "path" in classes:
@@ -1075,11 +1077,17 @@ class _CodeRows(HTMLParser):
             self.loose.append(text)
         else:
             self.rows.append((*self.meta, text))
+            self.sequence.append(f"line {self.meta[0]}")
         self.grab = None
 
     def handle_data(self, data: str) -> None:
         if self.grab:
             self.buffer.append(data)
+
+
+def _normal_row(row: str) -> str:
+    kind, _, value = row.partition(" ")
+    return f"{kind} {int(value)}" if kind == "line" else row
 
 
 def _screen(file: Path) -> _CodeRows:
@@ -1150,11 +1158,16 @@ def _compare(project: Path, tour: Dict[str, Any], sha: str) -> Tuple[int, List[D
                 differ(name, f"line {number} is on screen {seen[number]} times", number)
         if len(bad) == before and order != wanted:
             differ(name, f"the code rows of {where} are out of order: the screen shows lines {order} and tour.json gives {wanted}")
+        rows_clean = len(bad) == before
         for text in parser.loose:
             differ(name, "a code element has neither data-line nor data-skip, so it can't be compared with the commit", screen=text)
         skips = sorted(_skip_span(r[2], r[3]) for r in scene["_rows"] if r[0] == "skip")
         if sorted(parser.skips) != skips:
             differ(name, f"the skip rows on screen ({', '.join(sorted(parser.skips)) or 'none'}) differ from tour.json ({', '.join(skips) or 'none'})")
+        elif rows_clean:
+            given = [f"line {r[1]}" if r[0] == "line" else f"skip {_skip_span(r[2], r[3])}" for r in scene["_rows"]]
+            if [_normal_row(r) for r in parser.sequence] != given:
+                differ(name, f"the rows of {where} are out of order: the screen shows {', '.join(parser.sequence)} and tour.json gives {', '.join(given)}")
     for file in sorted(folder.glob("*.html")):
         if file.name in stop_files or not file.is_file():
             continue
