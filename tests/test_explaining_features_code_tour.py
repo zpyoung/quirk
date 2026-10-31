@@ -6,11 +6,13 @@ import ast
 import html
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import sysconfig
+import unicodedata
 import wave
 from html.parser import HTMLParser
 from pathlib import Path
@@ -34,7 +36,7 @@ APP = [
     "\tconst a = x < 3 && y > 2;",
     '\tconst s = "say \\"hi\\" & bye";',
     "\t// a /* nested */ comment",
-    "\tif (a) {",
+    "\tif (a <= 1 && b >= 2) {",
     "\t\treturn <p>{s}</p>;",
     "\t}",
     '\tconst long = "' + "word " * 17 + '";',
@@ -195,6 +197,19 @@ def no_git_env(tmp_path: Path) -> dict[str, str]:
     return {"PATH": str(empty)}
 
 
+def cells(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+@pytest.fixture(scope="module")
+def tour_module() -> Any:
+    spec = importlib.util.spec_from_file_location("code_tour_under_test", CODE_TOUR)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def on_frame(seconds: float) -> bool:
     return abs(seconds / FRAME - round(seconds / FRAME)) < 1e-3
 
@@ -343,6 +358,40 @@ class TestLines:
         proc = subprocess.run([sys.executable, str(CODE_TOUR), "lines"], capture_output=True, text=True)
         assert proc.returncode == 2
         assert proc.stdout == ""
+
+
+class TestTextLimits:
+    def lines(self, tmp_path: Path, repo: tuple[Path, str], *, label: Optional[str] = None, title: Optional[str] = None) -> tuple[int, str]:
+        scenes = default_scenes()
+        if label is not None:
+            scenes[2]["label"] = label
+        project = make_project(tmp_path, repo[1], repo[0], scenes, wavs=False, **({} if title is None else {"title": title}))
+        code, _, err = run("lines", project)
+        return code, err
+
+    def test_a_label_of_exactly_72_cells_is_accepted_and_73_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="x" * 72)[0] == 0
+        code, err = self.lines(tmp_path, repo, label="x" * 73)
+        assert code == 2
+        assert "73" in err and "72" in err
+
+    def test_a_cjk_label_is_measured_in_cells(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="漢" * 36)[0] == 0
+        code, err = self.lines(tmp_path, repo, label="漢" * 40)
+        assert code == 2
+        assert "80" in err and "cells" in err
+
+    def test_a_title_of_exactly_54_cells_is_accepted_and_55_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, title="x" * 54)[0] == 0
+        code, err = self.lines(tmp_path, repo, title="x" * 55)
+        assert code == 2
+        assert "55" in err and "54" in err
+
+    def test_a_cjk_title_is_measured_in_cells(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, title="漢" * 27)[0] == 0
+        code, err = self.lines(tmp_path, repo, title="漢" * 30)
+        assert code == 2
+        assert "60" in err
 
 
 class TestMissingInputs:
@@ -516,6 +565,42 @@ class TestWrapping:
         assert not blocks[1].startswith(" ")
         assert "".join(blocks) == self.INDENTED
 
+    def test_wide_characters_wrap_by_cells_and_join_back_exactly(self, tmp_path: Path) -> None:
+        text = "// " + "漢" * 69
+        project, _ = self.build(tmp_path, ["a", text], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert blocks == ["// ", "漢" * 36, "漢" * 33]
+        assert "".join(blocks) == text
+        assert all(cells(b) <= 72 for b in blocks)
+
+    def test_a_wide_character_that_does_not_fit_the_last_cell_moves_to_the_next_block(self, tmp_path: Path) -> None:
+        text = "a" * 71 + "漢" * 3
+        project, _ = self.build(tmp_path, ["a", text], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert blocks == ["a" * 71, "漢漢漢"]
+
+    def test_a_stop_of_wide_lines_overflows_by_cells_and_is_refused(self, tmp_path: Path) -> None:
+        root, sha = self.source(tmp_path, ["漢" * 50] * 8)
+        project = make_project(tmp_path, sha, root, self.stop(list(range(1, 9))))
+        code, _, err = run("build", project)
+        assert code == 1
+        assert "16" in err
+
+    def test_check_passes_a_clean_build_of_wide_lines(self, tmp_path: Path) -> None:
+        project, _ = self.build(tmp_path, ["a", "// " + "漢" * 69, "漢" * 50], [1, 2, 3])
+        code, out, err = run("check", project)
+        assert code == 0, err
+        assert out["checked"] == 3
+
+    def test_cells_count_wide_and_fullwidth_as_two(self, tour_module: Any) -> None:
+        assert tour_module._cells("a漢Ａ") == 5
+        assert tour_module._cells("") == 0
+
+    def test_a_wide_character_always_makes_progress_on_a_budget_smaller_than_it(self, tour_module: Any) -> None:
+        assert tour_module._break_at("漢漢", 1) == 1
+        chunks = tour_module._chunks([(None, "漢漢漢")], 1)
+        assert ["".join(p for _, p in c) for c in chunks] == ["漢", "漢", "漢"]
+
     def test_check_still_compares_whole_lines(self, tmp_path: Path) -> None:
         project, _ = self.build(tmp_path, ["a", self.COMMENT, self.LONG], [1, 2, 3])
         code, out, err = run("check", project)
@@ -673,6 +758,8 @@ class TestBuild:
         for number, (dedent, text) in inner.items():
             assert dedent == 4
             assert text == APP[number - 1].replace("\t", "    ")[4:]
+        assert inner[9][1] == "if (a <= 1 && b >= 2) {"
+        assert "&lt;=" in composition(project, "s3") and "&gt;=" in composition(project, "s3")
 
     def test_the_markup_holds_no_literal_comment_opener(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = shared
@@ -705,6 +792,17 @@ class TestBuild:
         for text in ("Plugin", "app.tsx", "Big file", "big.ts", "Styles", "x.css"):
             assert text in markup
 
+    def test_markup_in_a_title_or_a_map_node_is_escaped(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        raw = "<img src=x onerror=alert(1)>"
+        scenes = default_scenes()
+        scenes[0]["map"][0] = {"name": "<img onerror=alert(1)>", "file": raw}
+        project = built(tmp_path, repo, scenes, title=raw)
+        markup = composition(project, "s1")
+        assert raw not in markup
+        assert "<img" not in markup
+        assert html.escape(raw, quote=False) in markup
+        assert "&lt;img onerror=alert(1)&gt;" in markup
+
     def test_the_title_balances_its_lines_so_no_word_is_left_alone(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         css = re.search(r"\.title \{([^}]*)\}", composition(shared, "s1"))
         assert css and "text-wrap: balance" in css.group(1)
@@ -721,6 +819,133 @@ class TestBuild:
         assert again == {k: v for k, v in first.items() if k.startswith("s")}
         assert not stale.exists()
         assert keep.exists()
+
+
+class TestBrandFonts:
+    def studio(self, tmp_path: Path, fonts: dict[str, Any], files: Optional[dict[str, bytes]] = None, product: str = "acme") -> dict[str, str]:
+        brand = tmp_path / "studio" / "brands" / product
+        brand.mkdir(parents=True, exist_ok=True)
+        (brand / "brand.json").write_text(json.dumps({"product": product, "fonts": fonts}))
+        for name, data in (files or {}).items():
+            (brand / name).parent.mkdir(parents=True, exist_ok=True)
+            (brand / name).write_bytes(data)
+        return {**os.environ, "QUIRK_STUDIO": str(tmp_path / "studio")}
+
+    def project(self, tmp_path: Path, repo: tuple[Path, str], product: str = "acme") -> Path:
+        project = make_project(tmp_path, repo[1], repo[0])
+        (project / "brief.json").write_text(json.dumps({"product": product}))
+        return project
+
+    def families(self, markup: str) -> tuple[str, str]:
+        return (
+            re.search(r'--font-display: "([^"]*)"', markup).group(1),
+            re.search(r'--font-mono: "([^"]*)"', markup).group(1),
+        )
+
+    def nothing_written(self, project: Path) -> None:
+        assert not (project / "scenes" / "compositions").exists()
+        assert not (project / "beats.json").exists()
+        assert not (project / "scenes" / "assets" / "fonts").exists()
+
+    def test_bundled_brand_families_replace_the_defaults_everywhere_and_need_no_font_face(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {"display": {"family": "Outfit", "files": []}, "mono": {"family": "IBM Plex Mono", "files": []}})
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 0, err
+        for markup in [composition(project, n) for n in ("s1", "s2", "s3")] + [(project / "scenes" / "index.html").read_text()]:
+            assert self.families(markup) == ("Outfit", "IBM Plex Mono")
+            assert "Inter" not in markup and "JetBrains" not in markup
+            assert "@font-face" not in markup
+        assert not (project / "scenes" / "assets" / "fonts").exists()
+        kit = (project / "kit" / "kit.md").read_text()
+        assert "display Outfit" in kit and "mono IBM Plex Mono" in kit
+        assert "Inter" not in kit
+
+    def test_a_family_that_is_not_bundled_ships_its_file_and_an_inline_font_face(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(
+            tmp_path,
+            {"display": {"family": "Fraunces", "files": ["fonts/Fraunces.ttf"]}, "mono": {"family": "JetBrains Mono", "files": []}},
+            {"fonts/Fraunces.ttf": b"font-bytes"},
+        )
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 0, err
+        assert (project / "scenes" / "assets" / "fonts" / "Fraunces.ttf").read_bytes() == b"font-bytes"
+        face = "@font-face { font-family: \"Fraunces\"; src: url('assets/fonts/Fraunces.ttf'); }"
+        for markup in [composition(project, n) for n in ("s1", "s2", "s3")] + [(project / "scenes" / "index.html").read_text()]:
+            assert markup.count(face) == 1
+            assert markup.index(face) < markup.rindex(":root")
+            assert self.families(markup) == ("Fraunces", "JetBrains Mono")
+        assert "display Fraunces" in (project / "kit" / "kit.md").read_text()
+
+    def test_a_missing_brief_brand_or_role_falls_back_to_the_defaults_for_that_role(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {"mono": {"family": "Space Mono"}})
+        for name, brief, expected in (
+            ("nobrief", None, ("Inter", "JetBrains Mono")),
+            ("nobrand", {"product": "ghost"}, ("Inter", "JetBrains Mono")),
+            ("norole", {"product": "acme"}, ("Inter", "Space Mono")),
+        ):
+            where = tmp_path / name
+            where.mkdir()
+            project = make_project(where, repo[1], repo[0])
+            if brief is not None:
+                (project / "brief.json").write_text(json.dumps(brief))
+            code, _, err = run("build", project, env=env)
+            assert code == 0, err
+            assert self.families(composition(project, "s2")) == expected, name
+
+    def test_a_family_that_is_not_bundled_and_has_no_file_exits_1_before_writing(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {"display": {"family": "Fraunces", "files": []}, "mono": {"family": "JetBrains Mono"}})
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 1
+        assert "Fraunces" in err and "files" in err
+        self.nothing_written(project)
+
+    def test_a_font_file_that_does_not_exist_exits_1_before_writing(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {"display": {"family": "Fraunces", "files": ["fonts/Fraunces.ttf"]}, "mono": {"family": "JetBrains Mono"}})
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 1
+        assert "Fraunces" in err and "Fraunces.ttf" in err
+        self.nothing_written(project)
+
+    def test_a_font_file_outside_the_brand_folder_is_a_bad_input(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(
+            tmp_path,
+            {"display": {"family": "Fraunces", "files": ["../../outside.ttf"]}, "mono": {"family": "JetBrains Mono"}},
+            {"../../outside.ttf": b"x"},
+        )
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 2
+        assert "outside.ttf" in err
+        self.nothing_written(project)
+
+    @pytest.mark.parametrize("family", ['Evil"; } body { color: red', "Name;", "A/B", "Bad'quote", "Tab\there", "Ünïcode"])
+    def test_a_family_name_that_could_break_out_of_the_css_is_a_bad_input(self, tmp_path: Path, repo: tuple[Path, str], family: str) -> None:
+        env = self.studio(tmp_path, {"display": {"family": family, "files": []}, "mono": {"family": "JetBrains Mono"}})
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 2
+        assert "font" in err
+        self.nothing_written(project)
+
+    def test_a_brand_family_outside_the_display_and_mono_roles_exits_1_naming_it(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {
+            "display": {"family": "Outfit"}, "mono": {"family": "IBM Plex Mono"}, "accent": {"family": "Playfair Display"},
+        })
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 1
+        assert "Playfair Display" in err
+        self.nothing_written(project)
+
+    def test_another_role_that_repeats_a_used_family_is_fine(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(tmp_path, {"display": {"family": "Outfit"}, "mono": {"family": "IBM Plex Mono"}, "heading": {"family": "Outfit"}})
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 0, err
 
 
 class TestTiming:
@@ -914,6 +1139,85 @@ class TestCheck:
         assert code == 1
         assert [m["line"] for m in out["mismatches"]] == [14]
         assert "retu" in err or "whitespace" in err
+
+    def row_markup(self, markup: str, scene: str, number: int) -> str:
+        match = re.search(r'<div class="row" id="%s-r%d">.*?</div></div>' % (scene, number), markup, re.S)
+        assert match
+        return match.group(0)
+
+    def edit(self, project: Path, name: str, change: Any) -> None:
+        path = project / "scenes" / "compositions" / f"{name}.html"
+        markup = path.read_text()
+        edited = change(markup)
+        assert edited != markup
+        path.write_text(edited)
+
+    def test_fails_when_a_row_loses_its_marker_and_others_remain(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s2", lambda m: m.replace(' data-line="6" data-dedent="0"', ""))
+        code, out, _ = run("check", project)
+        assert code == 1
+        reasons = " | ".join(m["reason"] for m in out["mismatches"])
+        assert any(m["line"] == 6 for m in out["mismatches"])
+        assert "data-line" in reasons
+
+    def test_fails_when_a_text_element_has_no_marker_even_if_its_code_matches(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+
+        def twin(markup: str) -> str:
+            row = self.row_markup(markup, "s2", 6)
+            return markup.replace(row, row + row.replace(' data-line="6" data-dedent="0"', "").replace('id="s2-r6"', 'id="s2-r6x"'))
+
+        self.edit(project, "s2", twin)
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert [m["reason"] for m in out["mismatches"]] == [out["mismatches"][0]["reason"]]
+        assert "data-line" in out["mismatches"][0]["reason"]
+
+    def test_fails_when_a_row_is_deleted_outright(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s2", lambda m: m.replace(self.row_markup(m, "s2", 7), ""))
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert [m["line"] for m in out["mismatches"]] == [7]
+        assert "tour.json" in out["mismatches"][0]["reason"]
+
+    def test_fails_when_a_line_is_on_screen_that_the_tour_does_not_show(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s2", lambda m: m.replace('data-line="13"', 'data-line="14"'))
+        code, out, _ = run("check", project)
+        assert code == 1
+        for number in (13, 14):
+            assert any("tour.json" in m["reason"] for m in out["mismatches"] if m["line"] == number)
+
+    def test_fails_when_a_skip_row_is_gone(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s2", lambda m: m.replace('data-skip="9-12"', 'data-skp="9-12"'))
+        assert run("check", project)[0] == 1
+
+    def test_fails_when_a_stop_has_no_composition(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        (project / "scenes" / "compositions" / "s3.html").unlink()
+        code, out, err = run("check", project)
+        assert code == 1
+        assert any(m["scene"] == "s3.html" for m in out["mismatches"])
+        assert "s3.html" in err
+
+    def test_fails_when_one_stop_has_no_code_rows_and_the_others_do(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s3", lambda m: m.replace("data-line=", "data-ln="))
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["checked"] == 7
+        assert any(m["scene"] == "s3.html" for m in out["mismatches"])
+
+    def test_fails_when_the_path_on_screen_is_not_the_tours(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s3", lambda m: m.replace(">src/app.tsx<", ">src/big.ts<"))
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert any("src/big.ts" in m["reason"] for m in out["mismatches"])
 
     def test_fails_when_no_code_line_is_found_on_screen(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = clone(shared, tmp_path)
