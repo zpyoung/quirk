@@ -369,29 +369,48 @@ class TestTextLimits:
         code, _, err = run("lines", project)
         return code, err
 
-    def test_a_label_of_exactly_72_cells_is_accepted_and_73_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
-        assert self.lines(tmp_path, repo, label="x" * 72)[0] == 0
-        code, err = self.lines(tmp_path, repo, label="x" * 73)
-        assert code == 2
-        assert "73" in err and "72" in err
+    WORST_LABEL = " ".join(["aaaaa"] * 12)
+    WORST_TITLE = "Add project: one button, three places"
 
-    def test_a_cjk_label_is_measured_in_cells(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
-        assert self.lines(tmp_path, repo, label="漢" * 36)[0] == 0
-        code, err = self.lines(tmp_path, repo, label="漢" * 40)
+    def refused(self, code: int, err: str) -> None:
         assert code == 2
-        assert "80" in err and "cells" in err
+        assert "more rows than the screen has" in err and "shorten" in err
 
-    def test_a_title_of_exactly_54_cells_is_accepted_and_55_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
-        assert self.lines(tmp_path, repo, title="x" * 54)[0] == 0
-        code, err = self.lines(tmp_path, repo, title="x" * 55)
-        assert code == 2
-        assert "55" in err and "54" in err
+    def test_the_worst_label_in_two_rows_of_35_is_accepted(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert len(self.WORST_LABEL) == 71
+        assert self.lines(tmp_path, repo, label=self.WORST_LABEL)[0] == 0
 
-    def test_a_cjk_title_is_measured_in_cells(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
-        assert self.lines(tmp_path, repo, title="漢" * 27)[0] == 0
-        code, err = self.lines(tmp_path, repo, title="漢" * 30)
-        assert code == 2
-        assert "60" in err
+    def test_three_long_words_that_wrap_to_a_third_label_row_are_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        label = " ".join(["a" * 23] * 3)
+        assert len(label) == 71
+        self.refused(*self.lines(tmp_path, repo, label=label))
+
+    def test_a_label_word_longer_than_a_row_cannot_wrap_and_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="x" * 35)[0] == 0
+        self.refused(*self.lines(tmp_path, repo, label="x" * 36))
+        self.refused(*self.lines(tmp_path, repo, label="x" * 200))
+
+    def test_a_cjk_label_breaks_between_characters_so_two_rows_of_35_fit(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="漢" * 70)[0] == 0
+        self.refused(*self.lines(tmp_path, repo, label="漢" * 71))
+
+    def test_a_cjk_run_can_only_break_between_wide_characters(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="a" * 30 + "漢" * 10)[0] == 0
+        self.refused(*self.lines(tmp_path, repo, label="a" * 36 + "漢" * 3))
+
+    def test_a_title_in_three_rows_of_17_is_accepted(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, title=self.WORST_TITLE)[0] == 0
+
+    def test_a_title_that_needs_four_rows_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        self.refused(*self.lines(tmp_path, repo, title=" ".join(["a" * 10] * 4)))
+
+    def test_a_title_word_longer_than_a_row_is_refused(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, title="x" * 17)[0] == 0
+        self.refused(*self.lines(tmp_path, repo, title="x" * 18))
+
+    def test_a_blank_label_or_title_is_still_a_usage_error(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        assert self.lines(tmp_path, repo, label="  ")[0] == 2
+        assert self.lines(tmp_path, repo, title="")[0] == 2
 
 
 class TestMissingInputs:
@@ -870,13 +889,42 @@ class TestBrandFonts:
         project = self.project(tmp_path, repo)
         code, _, err = run("build", project, env=env)
         assert code == 0, err
-        assert (project / "scenes" / "assets" / "fonts" / "Fraunces.ttf").read_bytes() == b"font-bytes"
-        face = "@font-face { font-family: \"Fraunces\"; src: url('assets/fonts/Fraunces.ttf'); }"
+        assert (project / "scenes" / "assets" / "fonts" / "display-0-Fraunces.ttf").read_bytes() == b"font-bytes"
+        face = "@font-face { font-family: \"Fraunces\"; src: url('assets/fonts/display-0-Fraunces.ttf'); }"
         for markup in [composition(project, n) for n in ("s1", "s2", "s3")] + [(project / "scenes" / "index.html").read_text()]:
             assert markup.count(face) == 1
             assert markup.index(face) < markup.rindex(":root")
             assert self.families(markup) == ("Fraunces", "JetBrains Mono")
         assert "display Fraunces" in (project / "kit" / "kit.md").read_text()
+
+    def test_two_font_files_with_the_same_name_keep_their_own_bytes_and_rules(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(
+            tmp_path,
+            {"display": {"family": "Fraunces", "files": ["display/font.ttf"]}, "mono": {"family": "Space Mono Custom", "files": ["mono/font.ttf"]}},
+            {"display/font.ttf": b"display-bytes", "mono/font.ttf": b"mono-bytes"},
+        )
+        project = self.project(tmp_path, repo)
+        code, _, err = run("build", project, env=env)
+        assert code == 0, err
+        fonts = project / "scenes" / "assets" / "fonts"
+        assert sorted(p.name for p in fonts.iterdir()) == ["display-0-font.ttf", "mono-0-font.ttf"]
+        assert (fonts / "display-0-font.ttf").read_bytes() == b"display-bytes"
+        assert (fonts / "mono-0-font.ttf").read_bytes() == b"mono-bytes"
+        markup = composition(project, "s1")
+        assert "font-family: \"Fraunces\"; src: url('assets/fonts/display-0-font.ttf')" in markup
+        assert "font-family: \"Space Mono Custom\"; src: url('assets/fonts/mono-0-font.ttf')" in markup
+
+    def test_two_files_of_one_role_with_the_same_name_do_not_collide(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
+        env = self.studio(
+            tmp_path,
+            {"display": {"family": "Fraunces", "files": ["regular/font.ttf", "bold/font.ttf"]}, "mono": {"family": "JetBrains Mono"}},
+            {"regular/font.ttf": b"regular", "bold/font.ttf": b"bold"},
+        )
+        project = self.project(tmp_path, repo)
+        assert run("build", project, env=env)[0] == 0
+        fonts = project / "scenes" / "assets" / "fonts"
+        assert (fonts / "display-0-font.ttf").read_bytes() == b"regular"
+        assert (fonts / "display-1-font.ttf").read_bytes() == b"bold"
 
     def test_a_missing_brief_brand_or_role_falls_back_to_the_defaults_for_that_role(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
         env = self.studio(tmp_path, {"mono": {"family": "Space Mono"}})
@@ -1190,6 +1238,65 @@ class TestCheck:
         assert code == 1
         for number in (13, 14):
             assert any("tour.json" in m["reason"] for m in out["mismatches"] if m["line"] == number)
+
+    def test_fails_when_rows_are_swapped_in_the_markup(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+
+        def swap(markup: str) -> str:
+            first, second = self.row_markup(markup, "s2", 7), self.row_markup(markup, "s2", 8)
+            assert markup.index(first) < markup.index(second)
+            return markup.replace(first + "\n" + second, second + "\n" + first)
+
+        self.edit(project, "s2", swap)
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert len(out["mismatches"]) == 1
+        reason = out["mismatches"][0]["reason"]
+        assert "out of order" in reason
+        assert "[3, 4, 5, 6, 8, 7, 13]" in reason and "[3, 4, 5, 6, 7, 8, 13]" in reason
+
+    def test_a_missing_row_is_reported_as_missing_and_not_as_out_of_order(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        self.edit(project, "s2", lambda m: m.replace(self.row_markup(m, "s2", 7), ""))
+        _, out, _ = run("check", project)
+        assert not any("out of order" in m["reason"] for m in out["mismatches"])
+
+    def stray(self, kind: str, markup: str) -> str:
+        return {
+            "rows": self.row_markup(markup, "s2", 6),
+            "loose": '<div class="txt" id="stray">const a = 1;</div>',
+            "skip": '<div class="row"><div class="num">x</div><div class="txt skip" data-skip="1-2"><span class="w">lines 1-2</span></div></div>',
+        }[kind]
+
+    @pytest.mark.parametrize("kind", ["rows", "loose", "skip"])
+    def test_fails_when_a_map_scene_carries_code(self, tmp_path: Path, repo: tuple[Path, str], shared: Path, kind: str) -> None:
+        project = clone(shared, tmp_path)
+        extra = self.stray(kind, composition(shared, "s2"))
+        self.edit(project, "s1", lambda m: m.replace('<div class="nodes">', extra + '<div class="nodes">'))
+        code, out, err = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert [m["scene"] for m in out["mismatches"]] == ["s1.html"]
+        assert "shows none" in out["mismatches"][0]["reason"]
+        assert "s1.html" in err
+
+    @pytest.mark.parametrize("kind", ["rows", "loose", "skip"])
+    def test_fails_when_a_composition_the_tour_does_not_name_carries_code(self, tmp_path: Path, repo: tuple[Path, str], shared: Path, kind: str) -> None:
+        project = clone(shared, tmp_path)
+        (project / "scenes" / "compositions" / "s9.html").write_text("<template><div>" + self.stray(kind, composition(shared, "s2")) + "</div></template>")
+        code, out, _ = run("check", project)
+        assert code == 1
+        assert out["checked"] == 13
+        assert [m["scene"] for m in out["mismatches"]] == ["s9.html"]
+        assert "shows none" in out["mismatches"][0]["reason"]
+
+    def test_a_composition_without_code_that_the_tour_does_not_name_is_fine(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        project = clone(shared, tmp_path)
+        (project / "scenes" / "compositions" / "outro.html").write_text("<template><div class=\"title\">The end</div></template>")
+        code, out, err = run("check", project)
+        assert code == 0, err
+        assert out["checked"] == 13
 
     def test_fails_when_a_skip_row_is_gone(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = clone(shared, tmp_path)
