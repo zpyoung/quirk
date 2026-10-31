@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import SKILL_DIR, kitcheck
-from .checks import MODES, SIZE_FAIL, SIZE_WARN, default_shells, run_checks
+from .checks import MODES, SIZE_FAIL, SIZE_LIMIT_NONE, SIZE_WARN, default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import read_header, render_header
 from .layouts import DEFAULT_LAYOUT, LAYOUTS, NAV_MODES, build_nav, collect_ids, render_regions, summary_hint, validate_layout
@@ -71,6 +71,7 @@ class Source:
     slots: dict[str, str] = field(default_factory=dict)
     layout: Optional[str] = None
     nav: str = "auto"
+    size_limit: Optional[str] = None
 
 
 def _string_list(meta: dict, key: str) -> list[str]:
@@ -115,6 +116,11 @@ def parse_source(path: Path) -> Source:
     reason = meta.get("tier_reason")
     if reason is not None and not isinstance(reason, str):
         raise SourceError("header field 'tier_reason' must be a string")
+    size_limit = None
+    if "size_limit" in meta:
+        size_limit = meta["size_limit"]
+        if size_limit != SIZE_LIMIT_NONE:
+            raise SourceError(f"header field 'size_limit' must be \"{SIZE_LIMIT_NONE}\" or absent, got {size_limit!r}")
 
     marks = list(_SLOT_LINE.finditer(rest))
     if not marks:
@@ -141,6 +147,7 @@ def parse_source(path: Path) -> Source:
         slots=slots,
         layout=layout,
         nav=nav,
+        size_limit=size_limit,
     )
 
 
@@ -620,6 +627,8 @@ def build_tier1(
             "built_at": built_at,
             "quirk_version": _quirk_version(skill),
         }
+        if source.size_limit:
+            meta["size_limit"] = source.size_limit
         if plan.layout:
             meta["layout"] = plan.layout
         if plan.defaulted:
