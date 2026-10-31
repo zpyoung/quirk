@@ -370,8 +370,8 @@ No decision here was fast-tracked. Each was answered by the user during drill-in
 - The honesty rules (SC-19 to SC-22, and the three stops) have pressure scenarios, because those are what an
   agent is tempted to skip.
 - A fresh agent remakes the add-project explainer **without access to the old `harness/` folder or the old
-  report**, since copying would only prove it can copy. The only script it writes is the project-specific
-  fixture. The user compares the two and signs off.
+  report**, since copying would only prove it can copy. None of the scripts it writes redoes what the skills
+  now cover: hover, 2x capture, the pointer or page embedding. The user compares the two and signs off.
 
 The verify-first, no-UI, native-app and failure paths get no end-to-end run under this acceptance, by the
 user's choice. They go into `TEST_BACKLOG.md` when the skill is built.
@@ -442,3 +442,4 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 **Amendments:**
 
 - 2026-10-30: The ledger, page source and scripts live in `~/Studio/explainers/<date>-<slug>/`, not the video project folder. `studio.py project new` refuses a folder that already exists, and a run with no film has no video project. The film project stays in `~/Studio/videos/`. This settles the folder-layout item deferred to the tech spec.
+- 2026-10-31: The acceptance standard for scripts changes from "the only script is the project-specific fixture" to "no script redoes what the skills now cover". The blind remake wrote seven scripts (393 lines, against the original's 621), all specific to one feature or app, and the user chose this standard over building more shared tooling. The user compared the remake with the original and signed off the same day. The remake's film and page predate the last doc and `leftovers.py` fixes and weren't rebuilt.
