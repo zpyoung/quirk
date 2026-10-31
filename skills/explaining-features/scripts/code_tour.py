@@ -80,8 +80,9 @@ MAP_WIDTH = 1728
 MAX_LINE_NUMBER = 9999
 MAX_PATH = 80
 MAX_HEADING = 50
-MAX_TITLE = 54
-MAX_LABEL = 72
+# a row keeps one character spare, because a fallback CJK face measured 1.005 em and a full row spilled onto the next
+TITLE_FIT = (MAP_WIDTH // 96 - 1, 3)
+LABEL_FIT = (MAP_WIDTH // 48 - 1, 2)
 MAX_NODE_NAME = 24
 MAX_NODE_FILE = 32
 
@@ -166,6 +167,36 @@ def _cells(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
 
+def _pieces(word: str) -> List[str]:
+    """The parts of a word a browser can put on different rows: it breaks only between two wide East Asian characters."""
+    out = [word[0]]
+    for c in word[1:]:
+        if _cells(c) == 2 and _cells(out[-1][-1]) == 2:
+            out.append(c)
+        else:
+            out[-1] += c
+    return out
+
+
+def _rows_needed(text: str, per_row: int) -> Optional[int]:
+    """The rows ``text`` can take in a box ``per_row`` characters wide, counting every character as the font's widest.
+
+    Wraps greedily at spaces, so the answer bounds any font. ``None`` when a part can't break and is longer than a row,
+    because it would run off the frame instead of wrapping.
+    """
+    rows, used = 1, 0
+    for word in re.findall(r"[^ \t\r\n\f]+", text):
+        for n, piece in enumerate(_pieces(word)):
+            if len(piece) > per_row:
+                return None
+            gap = 1 if used and n == 0 else 0
+            if used + gap + len(piece) > per_row:
+                rows, used = rows + 1, len(piece)
+            else:
+                used += gap + len(piece)
+    return rows
+
+
 # tour.json ---------------------------------------------------------------------------------------------------
 
 
@@ -181,7 +212,8 @@ def _bad(where: str, message: str) -> NoReturn:
     _fail(EXIT_BAD_INPUT, f"tour.json {where}: {message}")
 
 
-def _text_field(obj: Dict[str, Any], key: str, where: str, limit: Optional[int] = None, required: bool = True) -> Optional[str]:
+def _text_field(obj: Dict[str, Any], key: str, where: str, limit: Optional[int] = None, required: bool = True, fit: Optional[Tuple[int, int]] = None) -> Optional[str]:
+    """The text at ``key``. ``limit`` caps its width in cells; ``fit`` is (characters per row, rows) it must wrap into."""
     value = obj.get(key)
     if value is None and not required:
         return None
@@ -189,6 +221,10 @@ def _text_field(obj: Dict[str, Any], key: str, where: str, limit: Optional[int] 
         _bad(where, f"{key!r} must be non-empty text")
     if limit is not None and _cells(value) > limit:
         _bad(where, f"{key!r} is {_cells(value)} cells wide; the screen has room for {limit}")
+    if fit is not None:
+        rows = _rows_needed(value, fit[0])
+        if rows is None or rows > fit[1]:
+            _bad(where, f"{key!r} could take more rows than the screen has ({fit[1]} rows of {fit[0]} characters, counting each as the font's widest); shorten it")
     return value
 
 
@@ -242,7 +278,7 @@ def _structure(tour: Any) -> Dict[str, Any]:
     if not _is_text(repo) or not os.path.isabs(repo):
         _bad("", "'repo' must be an absolute path")
     _text_field(tour, "commit", "")
-    _text_field(tour, "title", "", MAX_TITLE)
+    _text_field(tour, "title", "", fit=TITLE_FIT)
     scenes = tour.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         _bad("", "'scenes' must be a non-empty list")
@@ -251,7 +287,7 @@ def _structure(tour: Any) -> Dict[str, Any]:
         where = f"scene s{index}"
         if not isinstance(scene, dict):
             _bad(where, "must be an object")
-        _text_field(scene, "label", where, MAX_LABEL, required=False)
+        _text_field(scene, "label", where, required=False, fit=LABEL_FIT)
         if "map" in scene:
             nodes = scene["map"]
             if not isinstance(nodes, list) or not 2 <= len(nodes) <= 4:
@@ -656,7 +692,8 @@ def _fonts(project: Path) -> Tuple[Dict[str, str], str, List[Tuple[Path, str]]]:
 
     Families come from the product's brand and fall back to Inter and JetBrains Mono per role. Refuses, before anything
     is written, a family that can't be loaded and a brand with a family the tour doesn't use, because ``verify.py``
-    requires every brand family to be injected at render.
+    requires every brand family to be injected at render. Each copy is named by role and position, so same-named
+    files from different folders never overwrite each other.
     """
     product, brand, fonts = _brand_fonts(project)
     entries = {role: fonts.get(role) if isinstance(fonts.get(role), dict) else {} for role in ROLES}
@@ -677,7 +714,7 @@ def _fonts(project: Path) -> Tuple[Dict[str, str], str, List[Tuple[Path, str]]]:
         names = [f for f in listed if isinstance(f, str)] if isinstance(listed, list) else []
         if not names:
             _fail(EXIT_CANT_SHIP, f"font family {family!r} ({role}) is not bundled with HyperFrames and brand {product!r} lists no file for it; add a static TTF or OTF to {brand} and list it in fonts.{role}.files of brand.json", family=family)
-        for name in names:
+        for position, name in enumerate(names):
             file = (brand / name).resolve()
             if not file.is_relative_to(brand.resolve()):
                 _fail(EXIT_BAD_INPUT, f"brand {product!r} font file {name!r} ({family!r}) is outside the brand folder {brand}")
@@ -685,8 +722,9 @@ def _fonts(project: Path) -> Tuple[Dict[str, str], str, List[Tuple[Path, str]]]:
                 _fail(EXIT_CANT_SHIP, f"font family {family!r} ({role}) lists {name!r} but {file} does not exist; copy the font file there or fix fonts.{role}.files in brand.json", family=family)
             if not FONT_FILE_NAME.fullmatch(file.name):
                 _fail(EXIT_BAD_INPUT, f"brand {product!r} font file name {file.name!r} ({family!r}) must be letters, digits, dots, spaces, hyphens and underscores only, because it is written into CSS")
-            rules.append(f"@font-face {{ font-family: \"{family}\"; src: url('assets/fonts/{file.name}'); }}")
-            copies.append((file, file.name))
+            copy = f"{role}-{position}-{file.name}"
+            rules.append(f"@font-face {{ font-family: \"{family}\"; src: url('assets/fonts/{copy}'); }}")
+            copies.append((file, copy))
     return used, "\n    ".join(rules), copies
 
 
@@ -1044,65 +1082,85 @@ class _CodeRows(HTMLParser):
             self.buffer.append(data)
 
 
+def _screen(file: Path) -> _CodeRows:
+    parser = _CodeRows()
+    parser.feed(re.sub(r"<script.*?</script>|<style.*?</style>", "", file.read_text(encoding="utf-8"), flags=re.S))
+    return parser
+
+
 def _compare(project: Path, tour: Dict[str, Any], sha: str) -> Tuple[int, List[Dict[str, Any]]]:
     """How many on-screen code lines were compared with the commit, and each difference from ``tour.json`` and the source.
 
-    Every stop must be on screen with exactly the lines and skip rows ``tour.json`` gives it, so a row that lost its
-    marker, a deleted row or a missing composition is a mismatch and never skipped silently.
+    Every stop must be on screen with exactly the lines, in order, and skip rows ``tour.json`` gives it. Every other
+    composition must show no code at all. A row that lost its marker, a deleted row, a missing composition or code on a
+    scene that shows none is a mismatch and never skipped silently.
     """
     sources = Sources(tour["repo"], sha)
     checked = 0
     bad: List[Dict[str, Any]] = []
+    folder = project / "scenes" / "compositions"
+
+    def differ(name: str, reason: str, line: Optional[int] = None, screen: Optional[str] = None, source: Optional[str] = None) -> None:
+        bad.append({"scene": name, "line": line, "screen": screen, "source": source, "reason": reason})
+
+    stop_files = set()
     for index, scene in enumerate(tour["scenes"], 1):
         if "stop" not in scene:
             continue
         name = f"s{index}.html"
+        stop_files.add(name)
         where = f"stop {scene['stop']!r}"
-
-        def differ(reason: str, line: Optional[int] = None, screen: Optional[str] = None, source: Optional[str] = None, name: str = name) -> None:
-            bad.append({"scene": name, "line": line, "screen": screen, "source": source, "reason": reason})
-
-        file = project / "scenes" / "compositions" / name
+        file = folder / name
         if not file.is_file():
-            differ(f"{where} has no composition {name}, so none of its code is on screen")
+            differ(name, f"{where} has no composition {name}, so none of its code is on screen")
             continue
-        parser = _CodeRows()
-        parser.feed(re.sub(r"<script.*?</script>|<style.*?</style>", "", file.read_text(encoding="utf-8"), flags=re.S))
+        parser = _screen(file)
         if not parser.rows:
-            differ(f"{where} has no numbered code rows on screen")
+            differ(name, f"{where} has no numbered code rows on screen")
             continue
         path = scene["path"]
         if parser.path != path:
-            differ(f"the path row shows {parser.path!r} and tour.json says {path!r}", screen=parser.path, source=path)
+            differ(name, f"the path row shows {parser.path!r} and tour.json says {path!r}", screen=parser.path, source=path)
         source = sources.lines(path)
         seen: Dict[int, int] = {}
+        order: List[int] = []
         for raw_number, raw_dedent, text in parser.rows:
             try:
                 number, dedent = int(raw_number), int(raw_dedent)
             except ValueError:
                 _fail(EXIT_CANT_SHIP, f"{name}: a code line has an unreadable number or dedent ({raw_number!r}, {raw_dedent!r})")
             checked += 1
+            order.append(number)
             seen[number] = seen.get(number, 0) + 1
             if not 1 <= number <= len(source):
-                differ(f"{path} has no line {number} at commit {sha[:8]}", number, text)
+                differ(name, f"{path} has no line {number} at commit {sha[:8]}", number, text)
             elif not _cut_is_blank(source[number - 1], dedent):
-                differ(f"the indentation cut removes non-whitespace ({source[number - 1][:dedent]!r})", number, text, source[number - 1])
+                differ(name, f"the indentation cut removes non-whitespace ({source[number - 1][:dedent]!r})", number, text, source[number - 1])
             elif source[number - 1][dedent:] != text:
-                differ("the text on screen differs from the source", number, text, source[number - 1][dedent:])
+                differ(name, "the text on screen differs from the source", number, text, source[number - 1][dedent:])
         wanted = _line_numbers(scene["_rows"])
+        before = len(bad)
         for number in wanted:
             if number not in seen:
-                differ(f"line {number} is in tour.json for {where} but not on screen", number)
+                differ(name, f"line {number} is in tour.json for {where} but not on screen", number)
         for number in sorted(seen):
             if number not in wanted:
-                differ(f"line {number} is on screen but tour.json doesn't show it in {where}", number)
+                differ(name, f"line {number} is on screen but tour.json doesn't show it in {where}", number)
             elif seen[number] > 1:
-                differ(f"line {number} is on screen {seen[number]} times", number)
+                differ(name, f"line {number} is on screen {seen[number]} times", number)
+        if len(bad) == before and order != wanted:
+            differ(name, f"the code rows of {where} are out of order: the screen shows lines {order} and tour.json gives {wanted}")
         for text in parser.loose:
-            differ("a code element has neither data-line nor data-skip, so it can't be compared with the commit", screen=text)
+            differ(name, "a code element has neither data-line nor data-skip, so it can't be compared with the commit", screen=text)
         skips = sorted(_skip_span(r[2], r[3]) for r in scene["_rows"] if r[0] == "skip")
         if sorted(parser.skips) != skips:
-            differ(f"the skip rows on screen ({', '.join(sorted(parser.skips)) or 'none'}) differ from tour.json ({', '.join(skips) or 'none'})")
+            differ(name, f"the skip rows on screen ({', '.join(sorted(parser.skips)) or 'none'}) differ from tour.json ({', '.join(skips) or 'none'})")
+    for file in sorted(folder.glob("*.html")):
+        if file.name in stop_files or not file.is_file():
+            continue
+        parser = _screen(file)
+        if parser.rows or parser.loose or parser.skips:
+            differ(file.name, f"{file.name} has code on screen ({len(parser.rows)} numbered rows, {len(parser.loose)} unmarked, {len(parser.skips)} skip rows) but tour.json gives it no stop, so it is code on a scene that shows none")
     return checked, bad
 
 

@@ -95,7 +95,7 @@ What the exit codes mean:
  ]}
 ```
 
-A map has 2 to 4 nodes and `lit` is an optional list of node indexes. The title can be 54 cells wide and a label 72, where a wide East Asian character is 2 cells; a longer one is refused. A stop's `rows` are the real line numbers it shows, with `skip` entries for the lines left out, and `highlight` names rows the stop shows.
+A map has 2 to 4 nodes and `lit` is an optional list of node indexes. A title has to fit 3 rows of 17 characters and a label 2 rows of 35, counted as if every character were as wide as the font's widest, so about 45 and 65 characters in practice. Text that could need more rows, or a word too long for a row, is refused and the tool says to shorten it. A stop's `rows` are the real line numbers it shows, with `skip` entries for the lines left out, and `highlight` names rows the stop shows.
 
 ## A stop and a line
 
