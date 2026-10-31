@@ -463,10 +463,16 @@ SLEEPER = "import sys, time\nheld = open(sys.argv[1]) if len(sys.argv) > 1 else 
 
 
 @contextlib.contextmanager
-def sleeper(*, home: Path, cwd: Path, holding: Optional[Path] = None) -> Iterator[int]:
-    """A real process with the given HOME and working directory, optionally holding a file open; stopped on exit."""
+def sleeper(
+    *, home: Path, cwd: Path, holding: Optional[Path] = None, extra: Optional[dict[str, str]] = None, extra_first: bool = False
+) -> Iterator[int]:
+    """A real process with the given HOME and working directory, optionally holding a file open; stopped on exit.
+
+    ``extra`` adds variables, placed before HOME when ``extra_first`` so a test controls the order ``ps`` prints.
+    """
     argv = [sys.executable, "-c", SLEEPER] + ([str(holding)] if holding else [])
-    env = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    base = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    env = {**(extra or {}), **base} if extra_first else {**base, **(extra or {})}
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, text=True)
     try:
         assert proc.stdout is not None and proc.stdout.readline().strip() == "ready"
@@ -557,6 +563,21 @@ class TestLeftovers:
         ):
             assert groups(explainer) == ({under, exact}, set())
 
+    @pytest.mark.parametrize("extra_first", [False, True])
+    def test_a_home_quoted_inside_another_variable_does_not_make_it_yours(
+        self, folders: tuple[Path, Path, Path], extra_first: bool
+    ) -> None:
+        explainer, _, elsewhere = folders
+        note = {"NOTE": f"ticket HOME={explainer}/harness"}
+        with sleeper(home=elsewhere, cwd=elsewhere, extra=note, extra_first=extra_first) as pid:
+            assert pid not in groups(explainer)[0]
+
+    def test_a_home_that_climbs_out_of_the_folder_is_not_yours(self, folders: tuple[Path, Path, Path]) -> None:
+        explainer, _, elsewhere = folders
+        climbing = Path(f"{explainer}/harness/../../elsewhere")
+        with sleeper(home=climbing, cwd=elsewhere) as pid:
+            assert pid not in groups(explainer)[0]
+
     def test_it_never_lists_itself_or_its_parent(self, folders: tuple[Path, Path, Path]) -> None:
         explainer, home, _ = folders
         env = {"HOME": str(home), "PATH": os.environ.get("PATH", "")}
@@ -573,6 +594,18 @@ class TestLeftovers:
     def test_a_missing_folder_exits_2(self, tmp_path: Path) -> None:
         done = leftovers(tmp_path / "nope")
         assert done.returncode == 2 and done.stdout == "" and done.stderr
+
+    def test_lsof_exiting_1_with_text_on_stderr_exits_3(self, tmp_path: Path) -> None:
+        folder = tmp_path / "explainer"
+        folder.mkdir()
+        fakes = tmp_path / "fakes"
+        fakes.mkdir()
+        fake = fakes / "lsof"
+        fake.write_text("#!/bin/sh\necho 'boom' >&2\nexit 1\n")
+        fake.chmod(0o755)
+        path = os.pathsep.join([str(fakes), str(Path(shutil.which("ps") or "").parent)])
+        done = leftovers(folder, env={"PATH": path})
+        assert done.returncode == 3 and done.stdout == "" and done.stderr
 
     @pytest.mark.parametrize("broken", ["none", "lsof", "ps"])
     def test_a_missing_or_failing_tool_exits_3_without_json(self, tmp_path: Path, broken: str) -> None:

@@ -71,22 +71,33 @@ def _is_under(path: str, base: Path) -> bool:
 
 
 def _home_is_under(env_line: str, bases: set[Path], literal_dirs: set[str]) -> bool:
-    """Whether the ``HOME`` that ``ps -e`` appended after the command line is under the folder.
+    """Whether the process owning ``env_line`` has a ``HOME`` under the folder, read out of the text ``ps -E`` printed.
 
-    ``ps`` joins the environment with spaces, so a value containing spaces can't be cut out by splitting. The
-    known folder is matched as a literal prefix first, then the value is cut at the next ``NAME=``.
+    ``ps`` joins the environment with spaces, so ``HOME=`` can also appear inside another variable's value or in
+    the command line, and a parsing mistake must never make a process look like yours. The answer is True only
+    when the line has at least one `` HOME=`` and every occurrence's value is an absolute path that resolves to the folder
+    or under it, so one occurrence outside the folder means not yours, whatever order they come in.
+
+    A value is cut at the next ``NAME=``. The known folder is matched as a literal first, and only so a folder
+    name containing spaces is not cut short: the value is then the folder plus whatever follows it up to the next
+    ``NAME=``, and the whole value is checked, so ``<folder>/../elsewhere`` is not under the folder.
     """
-    marker = env_line.rfind(" HOME=")
-    if marker < 0:
-        return False
-    rest = env_line[marker + len(" HOME="):]
-    for literal in literal_dirs:
-        if rest.startswith(literal):
-            after = rest[len(literal):]
-            if after == "" or after[0] == "/" or NEXT_ENV_VAR.match(after):
-                return True
-    value = NEXT_ENV_VAR.split(rest, maxsplit=1)[0]
-    return any(_is_under(value, base) for base in bases)
+    seen = 0
+    start = env_line.find(" HOME=")
+    while start >= 0:
+        rest = env_line[start + len(" HOME="):]
+        value = NEXT_ENV_VAR.split(rest, maxsplit=1)[0]
+        for literal in literal_dirs:
+            if rest.startswith(literal):
+                after = rest[len(literal):]
+                if after == "" or after[0] == "/" or NEXT_ENV_VAR.match(after):
+                    value = literal + NEXT_ENV_VAR.split(after, maxsplit=1)[0]
+                    break
+        if not value.startswith("/") or not any(_is_under(value, base) for base in bases):
+            return False
+        seen += 1
+        start = env_line.find(" HOME=", start + 1)
+    return seen > 0
 
 
 def _processes_with_environment() -> dict[int, tuple[int, str]]:

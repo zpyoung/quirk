@@ -207,6 +207,13 @@ def test_stopping_processes_is_a_hard_rule_in_skill_and_capture() -> None:
         assert needle in section, needle
 
 
+def test_capture_requires_checking_that_a_yours_entry_is_a_command_you_started() -> None:
+    capture = (REFERENCES_DIR / "capture.md").read_text()
+    section = capture.split("## Stopping what you started", 1)[1].split("\n## ", 1)[0]
+    assert "only if its command is one you started" in section
+    assert "out of text" in section
+
+
 def test_capture_finds_survivors_with_leftovers_not_a_lsof_sweep() -> None:
     capture = (REFERENCES_DIR / "capture.md").read_text()
     section = capture.split("## Stopping what you started", 1)[1].split("\n## ", 1)[0]

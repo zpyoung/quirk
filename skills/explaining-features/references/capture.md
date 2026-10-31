@@ -28,7 +28,7 @@ Stop only the processes you started, by PID, because the user's own instance of 
   ```
 
   It prints `yours` (processes whose `HOME` is under `$E`) and `check_by_hand` (processes that only have their working directory there). It never stops anything.
-  - Stop each PID in `yours` by its PID, then run it again until `yours` is empty.
+  - Stop each PID in `yours` by its PID, then run it again until `yours` is empty. Stop an entry only if its command is one you started, and name anything else in the delivery note instead. The script reads each environment out of text, so a listing is not proof that the process is yours.
   - Never stop anything in `check_by_hand`, because it may be the user's own shell or editor. If an entry looks like your own, name it in the delivery note.
   - Exit 3 means the check didn't run (`ps` or `lsof` is missing or failed). Say so in the delivery note instead of reporting that nothing is left.
 
