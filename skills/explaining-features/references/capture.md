@@ -57,12 +57,12 @@ git -C "$REPO" archive <parent-sha> | tar -x -C "$E/harness/before"
 
 - **Web footage** goes through `making-videos`' `record.py` at `--scale 2`. Its steps include `hover`, `move`, `press` and `drag` beside `goto`, `click`, `fill`, `wait` and `scroll`, and with `--scale` above 1 the result's `webm` is null, so use the `mp4`. It checks the frames are really size times scale, and fails if not.
 - **Wait on UI state, not fixed sleeps.** Use a `wait` step on the selector or text that shows the state is ready.
-- **Screenshots** come from the verification run or from a script in `$E/harness/`. Copy the ones the page uses into `$E/media/` and compress them before they count against the size budget ([page.md](page.md#the-size-budget)).
+- **Screenshots** come from the verification run or from a script in `$E/harness/`. Copy the ones the page uses into `$E/media/` and compress them first ([page.md](page.md#compressing-images)).
 - **Keep every script you wrote** in `$E/harness/`, with a `README.md` saying they're a starting point for the next explainer and aren't guaranteed to run.
 
 ## The frame check
 
-The frame check is yours, so do it with your own eyes and say so in the hand-over note. Run it on the raw footage after capture. Run it again on the fitted MP4 only when `fit_video.py` reports `reencoded: true`, because then the fitted file differs from the raw one and is the one readers see.
+The frame check is yours, so do it with your own eyes and say so in the hand-over note. Run it on the footage after capture.
 
 1. **Sample one frame every 3 s plus every screenshot:**
 

@@ -54,6 +54,14 @@
       "should_trigger": true
     },
     {
+      "query": "Walk me through the code changes behind the Add project button, file by file, as a narrated tour on a page",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a code walkthrough of the PR that added the search filter so a reviewer can follow the change across its files",
+      "should_trigger": true
+    },
+    {
       "query": "Make a 30 second video announcing our release",
       "should_trigger": false
     },
