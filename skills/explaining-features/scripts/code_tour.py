@@ -19,7 +19,9 @@ The agent writes ``P/tour.json``: a repo, a commit, a title and scenes. A map sc
 
 Code is shown with tabs expanded to 4 spaces, a trailing carriage return dropped and the common leading whitespace
 of the stop's rows removed; ``build`` and ``check`` apply the same rule. The tokenizer only wraps runs of text in
-spans, so it can colour comments, strings and keywords but never change a character.
+spans, so it can colour comments, strings and keywords but never change a character. A line longer than 72 characters
+wraps onto extra rows at the last space that fits, and mid-word only where a word is longer than a row; the blocks join
+back to the source line exactly.
 
 Exit 0 ok. Exit 1 a tour that can't ship: a commit that doesn't resolve, a path or line missing at it, a mismatch, a
 check that saw 0 lines, a cut that removes non-whitespace, a stop over MAX_ROWS rows after wrapping (13 with a
@@ -115,7 +117,7 @@ BASE_CSS = """
 """
 
 MAP_CSS = """
-    .title { position: absolute; left: 96px; top: 110px; width: 1728px; font-size: 96px; font-weight: 700; line-height: 1.1; }
+    .title { position: absolute; left: 96px; top: 110px; width: 1728px; font-size: 96px; font-weight: 700; line-height: 1.1; text-wrap: balance; }
     .nodes { position: absolute; left: 96px; top: 470px; width: 1728px; display: flex; align-items: stretch; }
     .node { position: relative; min-height: 300px; background: var(--surface); border: 2px solid var(--border); border-radius: 14px; padding: 36px; }
     .node h3 { font-size: 48px; font-weight: 600; line-height: 1.2; margin-bottom: 24px; }
@@ -129,11 +131,11 @@ KIT = """# Scene kit
 
 Tokens (inlined as a `:root` block in every composition): ground #101114, surface #16171b, selected #2c3050, border #24262c, text #eceef2, muted #9aa0ab, accent #9aa6ff, string #c6cbe8, display Inter, mono JetBrains Mono.
 
-Motion roles: highlight move 0.2 s `power2.out`, starting the frame before its narration line; label enter 0.35 s `power3.out` with a 16 px rise; hard cuts between scenes; no exits, stagger or overshoot.
+Motion roles: highlight move 0.2 s `power2.out`, starting on the frame of its narration line; label enter 0.35 s `power3.out` with a 16 px rise; hard cuts between scenes; no exits, stagger or overshoot.
 
 Components: map node with a lit bar, arrow, stop line, commit line, path line, code card with line numbers, highlight band with an accent bar, skip row that names the skipped lines, bottom label.
 
-Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows, 72 characters to a row; longer lines wrap onto extra rows. A stop shows at most 14 rows, 13 with a label.
+Type scale (1920x1080): 96 px title, 48 px labels and node names, 36 px code and metadata. Code is 36 px on 52 px rows, 72 characters to a row; longer lines wrap onto extra rows at the last space that fits, or mid-word only where a word is longer than a row. A stop shows at most 14 rows, 13 with a label.
 """
 
 
@@ -485,17 +487,31 @@ def _slice_runs(runs: List[Run], start: int) -> List[Run]:
     return out
 
 
+def _break_at(text: str, width: int) -> int:
+    """Where to end the first block of ``text``: after the last space that fits, or at ``width`` when a word is too long."""
+    if len(text) <= width:
+        return len(text)
+    indent = len(text) - len(text.lstrip(" "))
+    space = text.rfind(" ", indent, width)
+    return space + 1 if space >= 0 else width
+
+
 def _chunks(runs: List[Run], width: int = CHARS_PER_ROW) -> List[List[Run]]:
+    """Split a row's runs into blocks of at most ``width`` characters that join back to the row exactly."""
+    text = "".join(piece for _, piece in runs)
+    kinds = [kind for kind, piece in runs for _ in piece]
     chunks: List[List[Run]] = []
-    room = 0
-    for kind, piece in runs:
-        while piece:
-            if room == 0:
-                chunks.append([])
-                room = width
-            take, piece = piece[:room], piece[room:]
-            chunks[-1].append((kind, take))
-            room -= len(take)
+    start = 0
+    while start < len(text):
+        end = start + _break_at(text[start:], width)
+        chunk: List[Run] = []
+        for i in range(start, end):
+            if chunk and chunk[-1][0] == kinds[i]:
+                chunk[-1] = (kinds[i], chunk[-1][1] + text[i])
+            else:
+                chunk.append((kinds[i], text[i]))
+        chunks.append(chunk)
+        start = end
     return chunks
 
 
@@ -720,7 +736,7 @@ def _render(tour: Dict[str, Any], lines: List[Narration], stops: Dict[int, Stop]
         start_of = {ln.clip: timing.clip_start[index][n] for n, ln in enumerate(mine)}
 
         def rel(line: Narration, origin: int = origin, start_of: Dict[str, int] = start_of) -> float:
-            return (start_of[line.clip] - 1 - origin) / FPS
+            return (start_of[line.clip] - origin) / FPS
 
         steps = [(ln, ln.marks) for ln in mine if ln.marks]
         if "map" in scene:

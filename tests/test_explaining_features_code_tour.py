@@ -12,6 +12,7 @@ import subprocess
 import sys
 import sysconfig
 import wave
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
 
@@ -205,6 +206,45 @@ def code_rows(markup: str) -> dict[int, tuple[int, str]]:
         text = html.unescape(re.sub(r"<[^>]+>", "", match.group(3)))
         rows[int(match.group(1))] = (int(match.group(2)), text)
     return rows
+
+
+class WrapBlocks(HTMLParser):
+    """The text of each explicit wrap block (span.w) of each numbered code row, in order."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: dict[int, list[str]] = {}
+        self.line = 0
+        self.depth = 0
+        self.inside = False
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        a = dict(attrs)
+        if "data-line" in a:
+            self.line = int(a["data-line"])
+            self.rows[self.line] = []
+        elif tag == "span" and self.inside:
+            self.depth += 1
+        elif tag == "span" and a.get("class") == "w" and self.line:
+            self.inside, self.depth = True, 0
+            self.rows[self.line].append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "span" and self.inside:
+            if self.depth:
+                self.depth -= 1
+            else:
+                self.inside = False
+
+    def handle_data(self, data: str) -> None:
+        if self.inside:
+            self.rows[self.line][-1] += data
+
+
+def wrap_blocks(markup: str) -> dict[int, list[str]]:
+    parser = WrapBlocks()
+    parser.feed(markup)
+    return parser.rows
 
 
 class TestLines:
@@ -419,6 +459,80 @@ class TestGit:
         assert code_rows(composition(project, "s2"))[6][1].strip().startswith("const a = x < 3")
 
 
+class TestWrapping:
+    COMMENT = "/* the highlight bar sits on the row and moves when the line changes, to the button's right */"
+    LONG = "x" * 200
+    INDENTED = "        " + "word " * 20 + "end"
+
+    def source(self, tmp_path: Path, lines: list[str]) -> tuple[Path, str]:
+        root = tmp_path / "wrap-repo"
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "w.ts").write_text("\n".join(lines) + "\n")
+        git(root.parent, "init", "-q", str(root))
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "first")
+        return root, git(root, "rev-parse", "HEAD")
+
+    def stop(self, rows: list[int]) -> list[dict[str, Any]]:
+        return [{"stop": "WRAP", "path": "src/w.ts", "rows": rows, "lines": [line("Look.", "src/w.ts:1", highlight=[rows[-1]])]}]
+
+    def build(self, tmp_path: Path, lines: list[str], rows: list[int]) -> tuple[Path, dict[str, Any]]:
+        root, sha = self.source(tmp_path, lines)
+        project = make_project(tmp_path, sha, root, self.stop(rows))
+        code, out, err = run("build", project)
+        assert code == 0, err
+        return project, out
+
+    def test_a_long_comment_breaks_at_a_space_and_keeps_its_words(self, tmp_path: Path) -> None:
+        assert len(self.COMMENT) > 72
+        project, _ = self.build(tmp_path, ["a", self.COMMENT], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert len(blocks) == 2
+        assert "".join(blocks) == self.COMMENT
+        assert all(len(b) <= 72 for b in blocks)
+        assert blocks[0].endswith(" ")
+        assert not blocks[1].startswith(" ")
+        assert blocks[0] + blocks[1] == self.COMMENT
+        assert {w for b in blocks for w in b.split()} == set(self.COMMENT.split())
+
+    def test_an_unbroken_run_longer_than_a_row_still_hard_breaks(self, tmp_path: Path) -> None:
+        project, _ = self.build(tmp_path, ["a", self.LONG], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert [len(b) for b in blocks] == [72, 72, 56]
+        assert "".join(blocks) == self.LONG
+
+    def test_a_row_whose_only_spaces_are_its_indentation_hard_breaks(self, tmp_path: Path) -> None:
+        text = "    " + "z" * 100
+        project, _ = self.build(tmp_path, ["a", text], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert [len(b) for b in blocks] == [72, 32]
+        assert "".join(blocks) == text
+
+    def test_a_continuation_does_not_gain_indentation(self, tmp_path: Path) -> None:
+        project, _ = self.build(tmp_path, ["a", self.INDENTED], [1, 2])
+        blocks = wrap_blocks(composition(project, "s1"))[2]
+        assert len(blocks) == 2
+        assert blocks[0].startswith("        ")
+        assert not blocks[1].startswith(" ")
+        assert "".join(blocks) == self.INDENTED
+
+    def test_check_still_compares_whole_lines(self, tmp_path: Path) -> None:
+        project, _ = self.build(tmp_path, ["a", self.COMMENT, self.LONG], [1, 2, 3])
+        code, out, err = run("check", project)
+        assert code == 0, err
+        assert out["checked"] == 3
+        assert out["mismatches"] == []
+
+    def test_the_row_count_and_beat_height_match_the_rendered_blocks(self, tmp_path: Path) -> None:
+        lines = ["a", self.COMMENT, self.LONG, "    " + "z" * 100, "b"]
+        project, out = self.build(tmp_path, lines, [1, 2, 3, 4, 5])
+        rendered = wrap_blocks(composition(project, "s1"))
+        assert out["stops"][0]["rows"] == sum(len(b) for b in rendered.values())
+        beats = {b["id"]: b for b in json.loads((project / "beats.json").read_text())}
+        assert beats["s1-l01"]["region"][3] == ROW_H * len(rendered[5])
+        assert beats["s1-l01"]["region"][1] == FIRST_ROW_Y + ROW_H * sum(len(rendered[n]) for n in (1, 2, 3, 4))
+
+
 class TestRowLimit:
     def stop(self, rows: list[Any], label: Optional[str] = None) -> list[dict[str, Any]]:
         first = next(r for r in rows if isinstance(r, int))
@@ -455,14 +569,14 @@ class TestRowLimit:
         assert "13" in err
 
     def test_a_long_line_wraps_into_extra_rows_that_count(self, tmp_path: Path, repo: tuple[Path, str]) -> None:
-        # line 20 is 100 characters, so it takes two rows
-        fits = make_project(tmp_path, repo[1], repo[0], self.stop(list(range(8, 21))))
+        # line 20 breaks after 'const wide = ' and its 103-character string hard-breaks, so it takes three rows
+        fits = make_project(tmp_path, repo[1], repo[0], self.stop(list(range(9, 21))))
         code, out, _ = run("build", fits)
         assert code == 0
         assert out["stops"][0]["rows"] == 14
         over = tmp_path / "over"
         over.mkdir()
-        project = make_project(over, repo[1], repo[0], self.stop(list(range(7, 21))))
+        project = make_project(over, repo[1], repo[0], self.stop(list(range(8, 21))))
         code, _, err = run("build", project)
         assert code == 1
         assert "15" in err
@@ -591,6 +705,10 @@ class TestBuild:
         for text in ("Plugin", "app.tsx", "Big file", "big.ts", "Styles", "x.css"):
             assert text in markup
 
+    def test_the_title_balances_its_lines_so_no_word_is_left_alone(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+        css = re.search(r"\.title \{([^}]*)\}", composition(shared, "s1"))
+        assert css and "text-wrap: balance" in css.group(1)
+
     def test_a_rebuild_is_identical_and_drops_scenes_the_tour_no_longer_has(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = clone(shared, tmp_path)
         first = {p.name: p.read_bytes() for p in (project / "scenes" / "compositions").glob("*.html")}
@@ -666,7 +784,7 @@ class TestTiming:
         assert [c["start_s"] for c in clips] == sorted(c["start_s"] for c in clips)
         assert {s: v[0] for s, v in self.starts(project).items()} == {c["id"]: c["start_s"] for c in clips}
 
-    def test_each_highlight_tween_starts_one_frame_before_its_clip(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
+    def test_each_highlight_tween_starts_on_its_clips_start_frame(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
         project = shared
         clips = {c["id"]: c["start_s"] for c in json.loads((project / "assets" / "lines.json").read_text())}
         scene_start = {name: start for name, start, _ in self.hosts(project)}
@@ -676,7 +794,7 @@ class TestTiming:
             for clip, selector in expected:
                 match = re.search(r'tl\.fromTo\("%s",.*?\}, ([\d.]+)\);' % re.escape(selector), markup)
                 assert match, selector
-                assert float(match.group(1)) == pytest.approx(clips[clip] - scene_start[scene] - FRAME, abs=1e-5)
+                assert float(match.group(1)) == pytest.approx(clips[clip] - scene_start[scene], abs=1e-5)
                 assert on_frame(float(match.group(1)))
 
     def test_highlight_is_a_band_on_the_row_and_the_rest_dim(self, tmp_path: Path, repo: tuple[Path, str], shared: Path) -> None:
@@ -694,7 +812,7 @@ class TestTiming:
         scene_start = {name: start for name, start, _ in self.hosts(project)}
         match = re.search(r'tl\.fromTo\("#s2-label",.*?power3\.out.*?\}, ([\d.]+)\);', composition(project, "s2"))
         assert match
-        assert float(match.group(1)) == pytest.approx(clips["l04"] - scene_start["s2"] - FRAME, abs=1e-5)
+        assert float(match.group(1)) == pytest.approx(clips["l04"] - scene_start["s2"], abs=1e-5)
 
 
 class TestBeats:
@@ -923,3 +1041,5 @@ class TestWrittenNotes:
         text = (shared / "kit" / "kit.md").read_text()
         for token in ("#101114", "#9aa6ff", "Inter", "JetBrains Mono", "0.2 s", "power2.out"):
             assert token in text
+        assert "frame before" not in text
+        assert "starting on the frame of its narration line" in text
