@@ -199,7 +199,7 @@ def test_every_script_named_in_the_skill_exists() -> None:
         named.update(SCRIPT_REF.findall(doc.read_text()))
     assert {"verify_outcome.py", "code_tour.py", "leftovers.py"} <= named
     assert "fit_video.py" not in named
-    for name in named - {"code_tour.py"}:
+    for name in named:
         assert (SKILL_DIR / "scripts" / name).is_file(), name
     assert not (SKILL_DIR / "scripts" / "fit_video.py").exists()
 
