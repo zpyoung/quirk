@@ -20,17 +20,19 @@ video, drive apps or build pages itself.
 |---|---|---|
 | Evidence ledger | `~/Studio/explainers/<date>-<slug>/` | One row per behavior: the claim, the result, how it was checked, where the proof is |
 | Film | `~/Studio/videos/<date>-<slug>/`, through `making-videos` | One narrated MP4, when the behavior moves |
+| Code tour | `~/Studio/videos/<date>-<slug>-code-tour/`, through `making-videos` | An optional second narrated MP4 of the real code at the page's commit, when the change crosses several source files |
 | Page | `<project>/.quirk/html/`, through `writing-html-artifacts` | One self-contained HTML file with everything inline |
 | Page source and scripts | the same explainer folder as the ledger | What rebuilds the page if the worktree goes, and how the footage was made |
 
 The ledger is the new idea, and everything else comes from it. The film shows only behavior with a
 result in the ledger. The page's results table is the ledger. "What's still open" is the unproven rows
-plus anything cut.
+plus anything cut. The code tour is about how the code is shaped, not whether it works, so it cites code,
+commits and specs instead of ledger rows.
 
 ## Data flow
 
-1. **Plan.** The skill states the feature, reader, commit, and film or no film in one line, and doesn't
-   wait for a reply. If the film needs an install, it asks now, because `making-videos` never installs
+1. **Plan.** The skill states the feature, reader, commit, film or no film, and code tour or no code tour
+   in one line, and doesn't wait for a reply. If the film needs an install, it asks now, because `making-videos` never installs
    unasked.
 2. **Evidence.** It reads the spec, existing app runs and tests into the ledger. If the main behavior
    was never run for real, it verifies it with `using-apps-like-a-user`, or runs the real command or
@@ -39,9 +41,9 @@ plus anything cut.
    and builds the parent commit for "before".
 4. **Capture.** It takes screenshots and footage, then reads the screenshots and sampled frames looking
    for real data.
-5. **Film.** It runs `making-videos` with no stops, then sorts any `verify` failures.
-6. **Page.** It builds the page with `writing-html-artifacts`, compressing the video so everything fits
-   in one file, then has a fresh agent read the top of the page cold.
+5. **Film.** It runs `making-videos` with no stops, then sorts any `verify` failures. A code tour follows
+   the same path, from stops and line ranges the agent lists.
+6. **Page.** It builds the page with `writing-html-artifacts`, with films as rendered in one file, then has a fresh agent read the top of the page cold.
 7. **Hand over.** It gives the path, the `verify` result and what was cut, and warns that the page
    disappears with the worktree.
 
@@ -69,9 +71,18 @@ at all, or real data shows on screen.
   which is a second test harness nobody owns. To update an explainer, run the skill again.
 - **The page doesn't say "I".** It gets forwarded without its sender, and the example's "I didn't want a
   second instance interfering" would read as the user speaking.
-- **Video length aims under 90 s partly because of file size.** At the example's bitrate, 90 s plus its
-  screenshots comes to about 9.6 MB (a 6.2 MB video is 8.3 MB as base64, plus 1.3 MB of page and images),
-  right at the page's 10 MB limit.
+- **Each film stays under 90 s, but file size no longer sets that.** An explainer has no page size limit,
+  so two 90 s films inline and uncompressed. At the prototype's bitrate that's a page of about 15 to 17 MB,
+  which may open slowly, so the hand-over note states the size.
+- **The code tour adds to the written notes and never replaces them.** Code in a video can't be searched or
+  copied, and in the studies below people preferred text for looking things up. The notes under "How it's
+  built" stay.
+- **The tour's code comes from git, not from the agent.** A prototype's first accuracy check passed `turn (`
+  in place of `return (`, because it compared text after removing the same indentation. A code tour is only
+  worth trusting if the code on screen can't differ from the commit.
+- **One highlight per narration line, moving as the line starts.** Word-level timing used all three `verify`
+  attempts on the prototype and needed manual frame shifts. A sentence starts after a silence, which is easy
+  to measure.
 
 ## Behavior and scenarios
 
@@ -92,7 +103,7 @@ at all, or real data shows on screen.
      4. It captures footage and screenshots, and reads the frames for real data.
      5. `making-videos` renders the film with no stops, and `verify` comes back clean.
      6. `writing-html-artifacts` builds the page.
-   - **Data after:** **Ledger**: ✓ one row per behavior; **Film**: ✓ 58 s*; **Page**: ✓ one file under 10 MB; ✓ nothing shared
+   - **Data after:** **Ledger**: ✓ one row per behavior; **Film**: ✓ 58 s*; **Page**: ✓ one file; ✓ nothing shared
 
 2. **SC-2 A shipped feature with no evidence**
    - **Given** a feature on the main branch that nobody verified in the app
@@ -170,7 +181,7 @@ at all, or real data shows on screen.
 13. **SC-13 Too much for 90 seconds**
     - **Given** work whose behaviors won't fit in a 90 s film
     - **When** the skill plans
-    - **Then** it makes a short clip per behavior, each beside its section, sharing the 10 MB budget. A
+    - **Then** it makes a short clip per behavior, each beside its section. A
       single feature that fits still gets one film.
 
 14. **SC-14 A film needs an install**
@@ -289,7 +300,77 @@ the new option.
     - **When** the page builds
     - **Then** they end up inline in the one file, with captions on, and no hand-written base64. Figures in a
       `q-grid` don't collapse to a quarter-width column by surprise. The 10 MB limit still fails the build,
-      and the 2 MB warning stays in the note.
+      unless the page's source opts out as in SC-37, and the 2 MB warning stays in the note.
+
+### The code tour
+
+29. **SC-29 When a tour is proposed**
+    - **Given** a change across 3 or more source files, not counting tests, docs, lockfiles and generated
+      files, and a technical reader
+    - **When** the skill plans
+    - **Then** the plan line says "code tour, because it crosses N source files", and the user can override it.
+      A smaller change gets no tour unless the user asks.
+
+30. **SC-30 A reader who isn't technical**
+    - **Given** an explainer for customers, where "How it's built" comes out
+    - **When** the skill plans
+    - **Then** there's no tour, however many source files the change crosses.
+
+31. **SC-31 Making a tour**
+    - **Given** the Add project change at its commit
+    - **When** the agent writes the stops, the line ranges and one narration line per highlight
+    - **Then** a shared tool reads the code from git and writes the scenes and timing, and `making-videos`
+      renders and verifies the film with no stops. The agent writes no scene generator. The film sits at the
+      top of "How it's built", under 90 s, with no limit on stops, and the written notes stay below it.
+    - **Walkthrough:**
+      1. A map names the files involved.
+      2. Each stop shows its file, the commit and real lines, with skipped lines marked on screen.
+      3. The highlight moves as each narration line starts.
+      4. The last stop says where to change it and the main trap.
+
+32. **SC-32 Code that doesn't match the commit**
+    - **Given** a line range that doesn't exist at the commit, or a scene whose text differs from it
+    - **When** the tool builds or checks the tour
+    - **Then** it refuses and names the line. No tour ships with code that differs from the commit, including
+      a difference only in what indentation removal cut off.
+
+33. **SC-33 A stop too big for the frame**
+    - **Given** a stop that won't fit on screen, about 14 rows after long lines wrap
+    - **When** the tool builds it
+    - **Then** it refuses and names the stop. The agent picks fewer lines or marks some as skipped. It never
+      shrinks the code or cuts it off.
+
+34. **SC-34 What the narration can claim**
+    - **Given** a tour script
+    - **When** it's written
+    - **Then** each line cites a file and line, a commit or a spec, kept in the tour's `sources.md`. A conclusion
+      drawn from those is allowed, and the caption under the tour names it as one. A claim that the feature
+      behaves a certain way still needs a ledger result. The behavior film's rule that every line cites a
+      ledger row doesn't change.
+    - **Copy example:** "A new header control means new numbers" stays, and the caption says it's a reading of
+      the comment at `components.css:802`, not a tested result.
+
+35. **SC-35 A tour that fails `verify`**
+    - **Given** a tour that hit 3 failed `verify` attempts
+    - **When** the skill reads the result
+    - **Then** the table in SC-17 applies to the tour alone. If it's left out, the page says why and keeps the
+      written notes. The behavior film is unaffected, except that `outside_calls` still stops the run.
+
+36. **SC-36 The behavior film's rules stay with it**
+    - **Given** a page with both films
+    - **When** it's built
+    - **Then** the poster rule and the cold read use the behavior film only, and the behavior film stays at the
+      top of the page. The tour's poster is a plain frame of the tour, and the tour's caption names what's drawn
+      and generated.
+
+### The page's size
+
+37. **SC-37 No size limit on an explainer**
+    - **Given** an explainer page over 10 MiB
+    - **When** it builds
+    - **Then** it builds and every film goes in as rendered, with nothing dropped for size. The "may be slow to
+      open" warning stays, and the hand-over note states the size. Screenshots and posters are still
+      compressed. Every other page from `writing-html-artifacts` still fails over 10 MiB.
 
 ## Scope and non-goals
 
@@ -303,6 +384,7 @@ Out of scope:
 - Whole-release or epic roundups
 - Recording native macOS apps
 - Adding a fixture to the user's repo
+- Code tours outside `explaining-features`, animated code changes, and light-theme tours
 - Offering an explainer when a branch finishes
 - Linux and Windows
 - The broken Homebrew node on this Mac (`libllhttp.9.3.dylib` missing). That's a machine fix, and doesn't
@@ -326,8 +408,11 @@ No decision here was fast-tracked. Each was answered by the user during drill-in
 
 **The video**
 - A film when the behavior moves. The plan says which and can be overridden.
-- One narrated film at the top of the page.
+- One narrated behavior film at the top of the page.
 - Aim under 90 s.
+- An optional code tour under "How it's built", proposed for 3 or more source files and a technical reader.
+  Under 90 s, with no limit on stops. It's dark whatever the page's theme.
+- One highlight per narration line, moving as the line starts.
 - The film doesn't state what wasn't proven; the page does. The user chose this against the recommended
   end-card line, knowing an MP4 shared alone looks fully proven.
 
@@ -340,11 +425,15 @@ No decision here was fast-tracked. Each was answered by the user during drill-in
 - The film shows only behavior with a result on the page.
 - All staging goes in the video caption.
 - Reasoning stays if it names the code or spec it came from.
+- Each tour line cites a source, and the caption names any conclusion drawn from one.
+- Code on screen always matches the commit.
 
 **Where it lives and how it ages**
 - The page lands in the project's `.quirk/html`. The user chose this against the recommended `~/Studio`,
   knowing it disappears with the worktree. Its source and the MP4 stay in `~/Studio`.
-- Always one file, with the video compressed to fit.
+- Always one file, with films as rendered. An explainer has no page size limit, by the user's choice, and
+  `fit_video.py` goes away. The user chose "the behavior film comes first" as well, but with no limit nothing
+  is ever dropped for size, so that never comes into play.
 - The skill gives the path and shares only if asked.
 - A dated record of one build.
 - Scripts stay in the project folder as a starting point for the next explainer, labeled as not guaranteed
@@ -362,6 +451,7 @@ No decision here was fast-tracked. Each was answered by the user during drill-in
 **Approach and acceptance**
 - A new thin skill plus fixes to the three it uses.
 - Done means remaking the add-project explainer and comparing it, as described below.
+- The code tour has the same kind of acceptance, with a fresh agent making the Add project tour.
 
 ## Done when
 
@@ -372,6 +462,12 @@ No decision here was fast-tracked. Each was answered by the user during drill-in
 - A fresh agent remakes the add-project explainer **without access to the old `harness/` folder or the old
   report**, since copying would only prove it can copy. None of the scripts it writes redoes what the skills
   now cover: hover, 2x capture, the pointer or page embedding. The user compares the two and signs off.
+- SC-29 to SC-37 have their own tests, and the tool's accuracy check is shown failing on a changed line and on
+  an indentation removal that cuts code.
+- SC-34 has a pressure scenario, because a good-sounding unsourced line is what an agent is tempted to keep.
+- A fresh agent makes the Add project code tour using only the skill, without seeing the prototype in
+  `~/Studio/videos/2026-10-31-add-project-code-tour`, and writes no scene generator. The user compares the two
+  and signs off.
 
 The verify-first, no-UI, native-app and failure paths get no end-to-end run under this acceptance, by the
 user's choice. They go into `TEST_BACKLOG.md` when the skill is built.
@@ -407,6 +503,21 @@ measured what makes a walkthrough get watched, or how parent and child skill con
   ([DemoVexa](https://dev.to/demovexa/treat-your-demo-environment-like-a-test-fixture-45dj), vendor post;
   [Justin Abrahms](https://justin.abrah.ms/blog/2026-02-12-generating-demo-videos-with-playwright.html))
 
+Added for the code tour, also research-agent summaries not re-read at the source. Nothing found tests code
+legibility or learning from a short rendered code tour.
+
+- Text-only learners finished a tutorial faster, video-only learners applied it faster, final performance was
+  about the same, and people preferred text for lookup. 42 students, one tool.
+  ([Programming Journal 2017](https://programming-journal.org/2017/1/17/))
+- In a survey of 268, mostly students, video ranked first for learning new skills and last for fixing issues.
+  ([arXiv 2410.08411](https://arxiv.org/html/2410.08411))
+- Screencasts are raw pixels, with no way to interact with the code inside them. ([Khandwala and Guo, L@S
+  2018](https://dl.acm.org/doi/10.1145/3231644.3231652), read from a search snippet)
+- One vendor says at most 15 to 20 lines per screen. At 36 to 40 px, 12 to 16 lines is what fits, which is our
+  arithmetic. ([X-Pilot](https://www.x-pilot.ai/blog/software-developer-training-video-production-guide-2026))
+- Other tools change the highlight when a step's audio starts, with no word timing.
+  ([socra #42](https://github.com/teofurlan/socra/issues/42))
+
 ## Deferred Ideas
 
 - A paste-ready PR summary written from the page.
@@ -414,10 +525,12 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 - An end-card line in the film stating what wasn't proven, if MP4s start travelling alone.
 - Whole-release explainers, and native app recording (already deferred in the `making-videos` spec).
 - Offering a fixture to the repo when the skill had to build one.
+- Code tours for any repo through `making-videos` directly, animated code changes, and a light-theme tour.
+- `[tech-spec]` How the per-page size opt-out is declared so that only this skill uses it, and how the tour's
+  stops, line ranges and narration are written down.
 - `[tech-spec]` Where the ledger lives and its format, including how it relates to the `sources.md` that
   `making-videos` already keeps.
 - `[tech-spec]` The folder layout for a run with no film.
-- `[tech-spec]` The compression floor, and what gives first when video and screenshots won't fit in 10 MB.
 - `[tech-spec]` How often to sample frames for the real-data check, and how to include alt text and metadata.
 - `[tech-spec]` How clips per behavior go through `verify`, which refuses several MP4s unless each is named.
 - `[tech-spec]` Labeling sync when real footage is timed to narration, and whether a crash in the agent's own
@@ -428,7 +541,9 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 ## Glossary
 
 - **Explainer**: the page this skill makes, with or without a film.
-- **Film**: the narrated MP4 on the page.
+- **Film**: the narrated MP4 of the feature's behavior on the page.
+- **Code tour**: the optional second narrated MP4, showing the real code at the page's commit.
+- **Tour stop**: one file's lines on screen in a code tour.
 - **Evidence ledger**: one row per behavior, holding its claim, result, how it was checked and where the proof
   is.
 - **Staging**: anything arranged for the camera: seeded data, a drawn pointer, added labels and rings, sped-up
@@ -444,3 +559,5 @@ measured what makes a walkthrough get watched, or how parent and child skill con
 - 2026-10-30: The ledger, page source and scripts live in `~/Studio/explainers/<date>-<slug>/`, not the video project folder. `studio.py project new` refuses a folder that already exists, and a run with no film has no video project. The film project stays in `~/Studio/videos/`. This settles the folder-layout item deferred to the tech spec.
 - 2026-10-31: The acceptance standard for scripts changes from "the only script is the project-specific fixture" to "no script redoes what the skills now cover". The blind remake wrote seven scripts (393 lines, against the original's 621), all specific to one feature or app, and the user chose this standard over building more shared tooling. The user compared the remake with the original and signed off the same day. The remake's film and page predate the last doc and `leftovers.py` fixes and weren't rebuilt.
 - 2026-10-31: The page gains three rules, because nothing tested whether a reader understands it. "What it does" opens with a problem sentence from a named source, or says no source gives one. The poster is a real film frame of the main behavior's result. A fresh agent then reads the poster, the first frame, the summary and that sentence, and says what the feature does, why it was made and what wasn't proven. This isn't a fourth stop: a miss gets one fix and one more read, then goes in the hand-over note. A weak first frame is only reported, because a re-render spends a `verify` attempt. On the remake, the read answered "can't tell" for why the feature was made, and answered correctly once the spec's reason was added. The remake's page wasn't rebuilt. The idea comes from the still-frame test in [shouvik12/living-canvas](https://github.com/shouvik12/living-canvas), which has the author ask the question; this uses a fresh agent because the author already knows the answer.
+- 2026-10-31: The skill gains an optional code tour (SC-29 to SC-36), after the user watched a 58 s prototype in a copy of the remake page and chose to build it. This changes "one narrated film" to one behavior film plus an optional tour. The behavior film's sourcing rule, poster rule and cold read don't change. The tour's own rule is that each line cites a source and the caption names any conclusion.
+- 2026-10-31: An explainer has no page size limit (SC-37), by the user's note on the design questions. This replaces "the video compressed to fit": films go in as rendered, `fit_video.py` is removed, and the size budget steps go. Screenshots and posters stay compressed. Other pages from `writing-html-artifacts` keep the 10 MiB failure.
