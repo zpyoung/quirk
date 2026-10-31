@@ -2,24 +2,24 @@
 
 The page is one file that a reader can forward without you, so it says what was shown, how it was staged and what is still open. `$E` is the explainer folder. The page source is `$E/<slug>.src.html`, built by `quirk:writing-html-artifacts` into `<repo>/.quirk/html/<slug>.html`.
 
-Contents: [Outline](#the-outline) · [Readers](#readers) · [No "I"](#no-i) · [Poster](#the-poster) · [Staging caption](#the-staging-caption) · [Problem sentence](#the-problem-sentence) · [Reasoning](#reasoning-in-how-its-built) · [Dated record](#the-dated-record) · [Media markup](#media-markup) · [Size budget](#the-size-budget) · [Cold read](#the-cold-read)
+Contents: [Outline](#the-outline) · [Readers](#readers) · [No "I"](#no-i) · [Poster](#the-poster) · [Staging caption](#the-staging-caption) · [Problem sentence](#the-problem-sentence) · [Reasoning](#reasoning-in-how-its-built) · [Code tour](#the-code-tour-on-the-page) · [Dated record](#the-dated-record) · [Media markup](#media-markup) · [Compressing images](#compressing-images) · [Cold read](#the-cold-read)
 
 ## The outline
 
 For a teammate or reviewer, in this order:
 
 1. **Title and summary.** The summary says what the feature does in a sentence, how many ledger rows passed, and the biggest gap in one sentence, for example "Tested in the browser engines but not in the desktop window." The film can't carry that gap, so the summary does. Directly under it, the [dated record](#the-dated-record).
-2. **The film.** One narrated film at the top, with [the poster](#the-poster) on it and the staging caption under it. With a clip per behavior, each clip sits beside its own section instead. With no film, the page opens on its first screenshot, and the summary says "no film, because" plus the reason.
+2. **The behavior film.** One narrated film at the top, with [the poster](#the-poster) on it and the staging caption under it. With a clip per behavior, each clip sits beside its own section instead. With no film, the page opens on its first screenshot, and the summary says "no film, because" plus the reason.
 3. **What it does.** [The problem sentence](#the-problem-sentence), then screenshots and text for each behavior, before and after. Where "before" has no footage, describe it in words and say no footage was captured.
-4. **How it's built.** The code path and the design reasons, with their sources ([below](#reasoning-in-how-its-built)).
+4. **How it's built.** The [code tour](#the-code-tour-on-the-page) first, when there is one, then the written notes: the code path and the design reasons, with their sources ([below](#reasoning-in-how-its-built)). The notes stay with or without a tour.
 5. **What was checked.** The results table: the ledger, with Behavior, Claim, Result, How checked and Proof.
-6. **What's still open.** Every ledger row that isn't Pass, and everything cut: a skipped install, a native app with no film, a screenshot dropped for size, a film left out for a failed check, a polish failure such as "Three labels land 35 to 87 ms from their spoken words".
+6. **What's still open.** Every ledger row that isn't Pass, and everything cut: a skipped install, a native app with no film, a film or a code tour left out for a failed check, a polish failure such as "Three labels land 35 to 87 ms from their spoken words".
 
 ## Readers
 
 Another named reader changes both the sections and the wording. For a customer:
 
-- "How it's built", scenario IDs, branch names and commit hashes come out.
+- "How it's built" and its code tour, scenario IDs, branch names and commit hashes come out.
 - Everything else is rewritten in the reader's terms, and "What's still open" stays, in those terms too.
 - The problem sentence drops its source, which stays in `evidence.md`. If no source gives a reason, it comes out.
 - The dated record keeps the date and drops the branch and commit: "This shows the app as of 2026-10-30."
@@ -40,13 +40,13 @@ The page doesn't say "I", "we" or "my". It states what was measured and how, bec
 
 ## The poster
 
-The poster is what a reader sees before pressing play, so it shows the main behavior's result with its label on screen.
+The poster is what a reader sees before pressing play, so it shows the main behavior's result with its label on screen. This rule is for the behavior film only; [the tour's poster](#the-code-tour-on-the-page) is a plain frame.
 
 ```bash
-ffmpeg -v error -ss <seconds> -i "$E/media/film-raw.mp4" -frames:v 1 "$E/frames/poster.png"
+ffmpeg -v error -ss <seconds> -i "$E/media/film.mp4" -frames:v 1 "$E/frames/poster.png"
 ```
 
-- Pick a real frame from the rendered film, at a moment after the label has landed, then compress it to `$E/media/poster.jpg` as [the size budget](#the-size-budget) says.
+- Pick a real frame from the rendered film, at a moment after the label has landed, then compress it to `$E/media/poster.jpg` as [compressing images](#compressing-images) says.
 - Never composite, draw or mock up a poster. It's a frame of the film, so it shows nothing the film doesn't.
 - Read it the way the [frame check](capture.md#the-frame-check) reads a screenshot before it goes in, because it comes from the rendered film, after step 4's check.
 - With a clip per behavior, each clip's poster shows that clip's result. With no film there's no poster, and the page's first screenshot shows the main behavior's result instead.
@@ -79,6 +79,24 @@ A design reason stays only if it names the code or spec it came from. A behavior
 - Fix or cut: "A pill reads as lighter than a bordered button." Name the spec or code that says so, or delete it.
 - Needs a result: "The button never shifts the layout." That is a behavior claim. Add a ledger row with proof, or cut the sentence.
 
+## The code tour on the page
+
+The tour sits at the top of "How it's built", above the written notes. The behavior film's rules stay with the behavior film.
+
+- **The poster rule and the cold read use the behavior film only.** The behavior film stays at the top of the page. The cold read reads its poster and the first frame of `$E/media/film.mp4`, never `$E/media/tour.mp4`. With a tour and no behavior film, the cold read takes the first screenshot, as it does with no film.
+- **The tour's poster is a plain frame of the tour,** such as the map scene a second in, taken the same way as the film's poster and compressed to `$E/media/tour-poster.jpg`. It needs no label on screen and shows no result.
+- **The tour's caption names what's drawn and generated** ([contents and an example](code-tour.md#the-caption)), and it names each line that is a conclusion and not a tested result.
+- **If the tour is left out,** "What's still open" says why, and the written notes stay.
+
+```html
+<figure>
+  <video controls preload="metadata" data-inline src="media/tour.mp4" poster="media/tour-poster.jpg">
+    <track data-inline kind="captions" src="media/tour.srt" srclang="en" label="English">
+  </video>
+  <figcaption>Generated from the code at commit 3f2a9c1: ...</figcaption>
+</figure>
+```
+
 ## The dated record
 
 Near the top, directly under the summary, one line: the date, the branch, the commit, and what that means.
@@ -105,33 +123,18 @@ Put `data-inline` on each `<img>`, `<video>`, `<source>` or `<track>`, with `src
 - A `figure` directly inside a `q-grid` needs a `data-span`. If the build warns about one, add the `data-span` it names, so it doesn't collapse to a quarter-width column.
 - A missing file, a type that isn't allowed, or a path outside `$E` and the project fails the build with exit 2 and names the path.
 
-## The size budget
+## Compressing images
 
-The page is one file under 10 MiB (10,485,760 bytes), and base64 makes everything inlined 4/3 larger. The build fails over the limit and warns over 2 MB, and a film always crosses 2 MB, so keep the warning in the hand-over note. Never raise either limit.
+An explainer has no size limit, so every film goes in as rendered and nothing is dropped for size. The page source's header comment sets `"size_limit": "none"` beside `layout`. Screenshots and posters are still compressed, because base64 makes everything inlined 4/3 larger.
 
-1. **Compress the images first.** For each screenshot, for example `sips -Z 1600 --setProperty format jpeg --setProperty formatOptions 80 IN.png --out OUT.jpg`, and a JPEG poster the same way.
-2. **Measure everything but the film.** Build the page with the poster and captions but no video, and read its size in bytes as `B`.
-3. **Work out the film's budget.** The film's bytes are the space left, less 256 KiB of headroom, divided by 4/3:
-
-   `budget = floor((10,485,760 - B - 262,144) * 3 / 4)`
-
-   With a clip per behavior, share that budget between the clips in proportion to their seconds.
-4. **Fit the film.**
-
-   ```bash
-   python3 "$SKILL_DIR/scripts/fit_video.py" --in "$E/media/film-raw.mp4" --budget-bytes <budget> --out "$E/media/film.mp4"
-   ```
-
-   It copies a film that already fits. Otherwise it re-encodes H.264 yuv420p with AAC at 96 kbps, and never lets video go under 300 kbps. Exit 1 means the film can't fit above that floor: compress the images harder, then drop a screenshot, then shorten the film. If a screenshot was dropped, "What's still open" says which one.
-5. **Rebuild, then read frames from the fitted file when `fit_video.py` reported `reencoded: true`.** A re-encoded file is the one readers see and differs from the raw one, so run the frame check on it ([capture.md](capture.md#the-frame-check)). A copied film is the raw film, already checked.
-
-Worked example: with `B` at 1,363,149 bytes (1.3 MB), the budget is 6,645,350 bytes. For a 90 s film that is about 570 kbps in total after the script's 4% margin and about 470 kbps for video, above the 300 kbps floor.
+- **Compress each screenshot,** for example `sips -Z 1600 --setProperty format jpeg --setProperty formatOptions 80 IN.png --out OUT.jpg`, and a JPEG poster the same way.
+- **The build still warns over 2 MB,** and a film always crosses it. The hand-over note states the page's size and warns that it may open slowly.
 
 ## The cold read
 
 Run this last, on the built page, because you know the feature and can't tell whether the top of the page explains it. It's not a stop: a miss gets fixed or reported, and the run carries on. It finds what's missing from the top of the page. It doesn't prove a person would understand it.
 
-1. **Take the film's first frame** from the file readers get:
+1. **Take the behavior film's first frame** from the file readers get:
 
    ```bash
    ffmpeg -v error -i "$E/media/film.mp4" -frames:v 1 "$E/frames/first.png"

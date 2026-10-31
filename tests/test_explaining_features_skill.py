@@ -44,7 +44,11 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "seeded data",
         "frame check",
         "verify_outcome.py",
-        "fit_video.py",
+        "code_tour.py",
+        "code tour",
+        "crosses",
+        "references/code-tour.md",
+        "size_limit",
         "ship_disclosed",
         "outside_calls",
         "not proven",
@@ -56,7 +60,6 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         ".quirk/html",
         "Never",
         "self-ignoring",
-        "reencoded: true",
         "This skill's own scripts",
     ),
     "references/evidence.md": (
@@ -85,10 +88,32 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "captions",
         "beats.json",
         "copy",
-        "fitted",
-        "reencoded: true",
         "fresh home",
         "fixture's repo path",
+    ),
+    "references/code-tour.md": (
+        "code tour",
+        "source files",
+        "tests, docs, lockfiles and generated files",
+        "tour.json",
+        "code_tour.py",
+        "studio.py project new",
+        "voice.py say",
+        "voice.py align",
+        "voice.py captions",
+        "hf.py",
+        "verify.py",
+        "verify_outcome.py",
+        "sources.md",
+        "stops: none",
+        "cloud_allow",
+        "highlight",
+        "skip",
+        "no scene generator",
+        "reading of",
+        "ledger",
+        "tour.mp4",
+        "media/",
     ),
     "references/page.md": (
         "Staged for the camera",
@@ -101,7 +126,8 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
         "customer",
         "How it's built",
         "What's still open",
-        "10 MiB",
+        "size_limit",
+        "compressing images",
         "base64",
         "data-inline",
         "names the code or spec",
@@ -171,9 +197,11 @@ def test_every_script_named_in_the_skill_exists() -> None:
     named: set[str] = set()
     for doc in _markdown_files():
         named.update(SCRIPT_REF.findall(doc.read_text()))
-    assert {"verify_outcome.py", "fit_video.py", "leftovers.py"} <= named
-    for name in named:
+    assert {"verify_outcome.py", "code_tour.py", "leftovers.py"} <= named
+    assert "fit_video.py" not in named
+    for name in named - {"code_tour.py"}:
         assert (SKILL_DIR / "scripts" / name).is_file(), name
+    assert not (SKILL_DIR / "scripts" / "fit_video.py").exists()
 
 
 def test_skill_does_not_use_plugin_root_variable() -> None:
@@ -231,12 +259,12 @@ def test_skill_points_at_every_reference() -> None:
     body = SKILL_PATH.read_text()
     for ref in sorted(REFERENCES_DIR.glob("*.md")):
         assert f"references/{ref.name}" in body, ref.name
-    assert {p.name for p in REFERENCES_DIR.glob("*.md")} == {"evidence.md", "capture.md", "page.md"}
+    assert {p.name for p in REFERENCES_DIR.glob("*.md")} == {"evidence.md", "capture.md", "page.md", "code-tour.md"}
 
 
 def test_skill_points_at_every_pressure_scenario() -> None:
     body = SKILL_PATH.read_text()
-    for n in (1, 2, 3, 4, 5):
+    for n in (1, 2, 3, 4, 5, 6):
         assert f"test-pressure-{n}.md" in body
 
 
@@ -247,7 +275,7 @@ def test_required_strings_are_present(rel: str) -> None:
         assert needle.lower() in text, f"{rel} is missing {needle!r}"
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 6])
 def test_pressure_scenario_follows_the_house_layout(n: int) -> None:
     text = (SKILL_DIR / f"test-pressure-{n}.md").read_text()
     assert text.startswith(f"# Pressure Test {n}:")
@@ -322,6 +350,107 @@ def test_pressure_scenario_5_covers_the_invented_reason_and_the_skipped_cold_rea
     assert re.search(r"## correct choice\n\n\*\*b\.\*\*", text)
 
 
+def test_pressure_scenario_6_covers_the_unsourced_tour_line() -> None:
+    text = (SKILL_DIR / "test-pressure-6.md").read_text().lower()
+    for needle in ("code tour", "sources.md", "conclusion", "caption", "ledger", "cut"):
+        assert needle in text, needle
+    assert re.search(r"## correct choice\n\n\*\*b\.\*\*", text)
+
+
+def _code_tour() -> str:
+    return (REFERENCES_DIR / "code-tour.md").read_text()
+
+
+def test_plan_step_states_when_a_tour_is_proposed_and_when_it_is_not() -> None:
+    plan = SKILL_PATH.read_text().split("### 1. Plan, and don't wait", 1)[1].split("\n### 2.", 1)[0]
+    for needle in ("code tour, because it crosses", "3 or more source files", "technical reader", "override", "customer"):
+        assert needle in plan, needle
+    reference = _code_tour()
+    for needle in ("3 or more source files", "unless the user asks", "customer", "however many source files"):
+        assert needle in reference, needle
+
+
+def test_tour_step_follows_the_film_step_and_points_at_the_reference() -> None:
+    skill = SKILL_PATH.read_text()
+    film = skill.index("### 5. Film")
+    tour = skill.index("### 5b. Code tour")
+    page = skill.index("### 6. Page")
+    assert film < tour < page
+    step = skill[tour:page]
+    assert "references/code-tour.md" in step
+    assert "code_tour.py" in step
+    assert "no scene generator" in step
+
+
+def test_tour_sourcing_rule_is_stated_once_and_keeps_the_ledger_rule_for_the_behavior_film() -> None:
+    reference = _code_tour()
+    for needle in ("a file and line, a commit or a spec", "names it as a conclusion", "reading of", "doesn't loosen", "every line cites a ledger row"):
+        assert needle in reference, needle
+    assert "ledger result" in reference
+    table = SKILL_PATH.read_text().split("## When you're tempted to skip a rule", 1)[1].split("Pressure scenarios", 1)[0]
+    assert "in the tour" in table and "sources.md" in table
+
+
+def test_tour_commands_run_in_the_documented_order() -> None:
+    commands = [
+        "studio.py project new",
+        "code_tour.py lines",
+        "voice.py say",
+        "voice.py align",
+        "hf.py",
+        "code_tour.py build",
+        "voice.py captions",
+        "code_tour.py check",
+        "studio.py version new",
+        "verify.py",
+        "verify_outcome.py",
+    ]
+    reference = _code_tour().replace('"', "")
+    positions = [reference.find(c) for c in commands]
+    assert all(p >= 0 for p in positions), dict(zip(commands, positions))
+    assert positions == sorted(positions)
+    assert "CLAUDE.md" in reference and "AGENTS.md" in reference
+    assert "$E/media/" in reference
+
+
+def test_tour_failing_verify_leaves_the_behavior_film_alone() -> None:
+    reference = _code_tour()
+    for needle in ("tour alone", "written notes", "outside_calls", "behavior film"):
+        assert needle in reference, needle
+
+
+def test_behavior_film_rules_stay_with_it_on_a_page_with_both() -> None:
+    section = _page_section("The code tour on the page")
+    for needle in ("behavior film only", "poster rule", "cold read", "$E/media/film.mp4", "plain frame", "caption", "drawn", "generated", "What's still open"):
+        assert needle in section, needle
+    assert "film at the top" in _page_section("The outline") or "behavior film" in _page_section("The outline")
+    assert "$E/media/tour.mp4" in section or "tour.mp4" in section
+
+
+def test_no_size_limit_on_an_explainer_page() -> None:
+    skill = SKILL_PATH.read_text()
+    page = (REFERENCES_DIR / "page.md").read_text()
+    for text in (skill, page):
+        assert '"size_limit": "none"' in text
+        assert "10 MiB" not in text
+        assert "budget" not in text.lower()
+    assert "## Compressing images" in page
+    assert "sips" in _page_section("Compressing images")
+    assert "#the-size-budget" not in page and "#the-size-budget" not in (REFERENCES_DIR / "capture.md").read_text()
+    assert "2 MB" in skill.split("### 7. Hand over", 1)[1].split("\n## ", 1)[0]
+    assert "film.mp4" in skill and "as rendered" in skill
+
+
+def test_no_doc_mentions_the_fit_script_or_the_raw_film() -> None:
+    for path in _skill_files():
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            continue
+        for gone in ("fit_video", "film-raw"):
+            assert gone not in text, f"{path.relative_to(SKILL_DIR)} mentions {gone}"
+
+
 def test_trigger_evals_are_balanced() -> None:
     data = json.loads(EVALS_PATH.read_text())
     assert data["skill_name"] == "explaining-features"
@@ -340,6 +469,12 @@ def test_trigger_evals_cover_the_routing_table() -> None:
     assert queries["Make a 30 second video announcing our release"] is False
     assert queries["Build a dashboard page for these numbers"] is False
     assert queries["Try this flow in the app"] is False
+
+
+def test_trigger_evals_cover_a_code_walkthrough_of_a_features_change() -> None:
+    queries = [q["query"] for q in json.loads(EVALS_PATH.read_text())["queries"] if q["should_trigger"]]
+    walkthroughs = [q for q in queries if "code" in q.lower() and ("walk" in q.lower() or "tour" in q.lower())]
+    assert len(walkthroughs) >= 2
 
 
 def test_making_videos_evals_carry_near_misses_for_this_skill() -> None:
