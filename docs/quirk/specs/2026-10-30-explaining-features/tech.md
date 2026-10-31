@@ -28,9 +28,10 @@ Resolves the logic spec's deferred layout question; recorded in its [amendments]
 ~/Studio/explainers/<date>-<slug>/
   evidence.md            the ledger
   <slug>.src.html        page source; media paths are relative to it
-  media/                 screenshots, poster, and the fitted MP4 and captions the page inlines
+  media/                 screenshots, posters, and the MP4s and captions the page inlines, as rendered
   harness/               project-specific scripts, plus a README saying they aren't guaranteed to run
 ~/Studio/videos/<date>-<slug>/   the film project, owned by making-videos; absent when there's no film
+~/Studio/videos/<date>-<slug>-code-tour/   the code-tour project, with tour.json; absent when there's no tour
 <repo>/.quirk/html/<slug>.html   the built page
 ```
 
@@ -176,15 +177,6 @@ verify_outcome.py --verify FILE [--mp4 NAME]
     4. omit:           any failed check other than sync and loudness, an unknown check name included,
                        or no failed check named at all
     5. ship_disclosed: only sync or loudness failed
-
-fit_video.py --in MP4 --budget-bytes N --out MP4
-  stdout: {"out", "bytes", "reencoded": bool, "video_kbps"}
-  FLOOR_KBPS = 300 for video; audio is AAC at 96 kbps
-  copies when the input already fits; otherwise re-encodes H.264 yuv420p with AAC to fit the budget
-  exit: 0 ok; 1 an encode at the floor still overshoots (names the budget and the floor); 2 usage;
-        3 ffmpeg missing
-  the floor is always tried before exit 1, because the nominal bitrate isn't a lower bound on real size
-  encodes to a unique temp file next to --out and removes only that file on failure
 ```
 
 `CONTRACT:`
@@ -196,12 +188,6 @@ leftovers.py --explainer DIR
   exit: 0 the scan ran, whatever it found; 2 usage or DIR missing; 3 ps or lsof missing or failed
 ```
 
-The example ran about 550 kbps in total for 58 s, so a 90 s film under the page limit is near 570 kbps, comfortably above the floor.
-
-The budget is the whole page limit minus everything else, with base64 growth accounted for: `references/page.md` gives the arithmetic against the 10 MiB limit. When it won't fit, images get compressed first, then `fit_video.py` runs, and the page says if a screenshot was dropped.
-
-After re-encoding, the skill reads frames from the fitted file, because that's the one readers see.
-
 `references/capture.md` holds: the private-instance and seeded-data rules, theme and persisted-state resets between takes, the parent-commit build, the frame-sampling command (one frame every 3 s plus every screenshot), the search of page source, alt text and captions for the home directory and username, and label timing. Label timing uses the existing `making-videos` beat flow with no new tool, and any correction script gets run on a copy first, since a bad render costs a `verify` attempt. `references/page.md` holds: the section outline, reader variants, no "I", the staging caption with a worked example, reasoning that names its source, the dated-record line, and the budget arithmetic.
 
 Pressure scenarios follow the layout in `skills/using-apps-like-a-user/test-pressure-1.md`:
@@ -211,12 +197,74 @@ Pressure scenarios follow the layout in `skills/using-apps-like-a-user/test-pres
 - `test-pressure-3.md`: the user said to just finish, and one frame shows a real path (SC-18), plus a broken main behavior late in a run (SC-3).
 - `test-pressure-4.md`: verification is blocked on the main behavior while the code reading looks conclusive (SC-12), plus a design reason with no source (SC-22).
 
+### Page size opt-out (`writing-html-artifacts`)
+
+`CONTRACT:` a tier-1 source header may carry `"size_limit": "none"`. It's the only accepted value, and any other value is a `SourceError` (exit 2). The build records it in the built file's `quirk-html-artifact` header, and `run_checks` in `htmlkit/checks.py` reads it from there, so `quirk_html.py check FILE` and a rebuild agree. With it set, a page over `SIZE_FAIL` gets no `size` failure and still gets the `SIZE_WARN` warning. Without it, behavior is unchanged byte for byte. The data-sidecar rule at `assemble.py:651` doesn't change, and inlined media still never becomes a sidecar. `build-app` (tier 2) doesn't take it.
+
+### Code tour (`explaining-features`)
+
+`scripts/code_tour.py` is stdlib-only and runs on Python 3.9, because `pygments` and the video venv aren't promised. Its tokenizer colours comments, strings and keywords and can never change the text. It prints one JSON object on stdout, with diagnostics on stderr, and never prompts.
+
+`SCHEMA:` `$P/tour.json`, written by the agent:
+```
+{"repo": "<absolute repo path>", "commit": "<sha or ref>", "title": "<first-frame title>",
+ "scenes": [
+   {"map": [{"name": "Worktrees plugin", "file": "WorktreesSection.tsx"}, ...],     // 2 to 4 nodes
+    "lines": [{"text": "<narration>", "source": "<file:line, commit or spec>", "lit": [1, 2]}],   // lit: node indexes, optional
+    "label": "<optional bottom label>"},
+   {"stop": "PLUGIN", "path": "plugins/x/WorktreesSection.tsx",
+    "rows": [528, 529, {"skip": "folder-plus icon", "from": 530, "to": 533}, 534, 535],
+    "lines": [{"text": "<narration>", "source": "<...>", "highlight": [529]}],
+    "label": "<optional bottom label>"}
+ ]}
+```
+
+`CONTRACT:`
+```
+code_tour.py lines --project P
+  writes P/assets/lines.json, one clip per narration line, ids l01, l02, ... in order, with start_s 0
+  validates tour.json first; never touches git
+  stdout: {"lines": N}
+code_tour.py build --project P
+  needs P/scenes/index.html (hf.py init) and P/assets/voice/<id>.wav for every line
+  reads code with `git show <commit>:<path>` and resolves the commit with `git rev-parse --verify --end-of-options`
+  times scenes from measured wav lengths: 0.3 s lead, 0.35 s between lines, 0.8 s between scenes,
+  2.5 s hold at the end, every clip start and scene boundary on a 1/30 s frame
+  rewrites lines.json with real start_s, writes scenes/compositions/*.html, scenes/index.html body,
+  copies wavs to scenes/assets/voice/, writes P/beats.json, P/sources.md, P/storyboard.md, P/kit/kit.md,
+  then runs the same comparison as check before it exits
+  stdout: {"scenes": N, "beats": N, "film_s": X, "stops": [{"stop", "rows"}]}
+code_tour.py check --project P
+  compares every code line on screen in scenes/compositions/*.html with `git show <commit>:<path>`
+  stdout: {"commit", "checked": N, "mismatches": [{"scene", "line", "screen", "source"}]}
+exit: 0 ok; 1 a tour that can't ship, naming what and where (below); 2 usage, bad tour.json, or a missing
+      input, with the command that makes it; 3 git missing
+exit 1 cases:
+  a commit that doesn't resolve, or a path or line that doesn't exist at it
+  a mismatch, or a checked count of 0, because a check that saw nothing proves nothing
+  characters removed by dedent that aren't whitespace
+  a stop over MAX_ROWS rows after wrapping: 14, or 13 with a label
+  a film of 90 s or more
+  a narration line with no source, or a highlight naming a line the stop doesn't show
+```
+
+Details that the prototype paid for, at `~/Studio/videos/2026-10-31-add-project-code-tour/harness/build_scenes.py`:
+
+- **Layout:** 1920x1080, code at 36 px on 52 px rows, 72 characters per row, longer lines soft-wrapped and counted as extra rows. Tabs are expanded to 4 spaces, in `build` and `check` alike. Dedent is the common leading whitespace of the rows the stop shows. Every text box stays inside x 96..1824 and y 54..1026.
+- **Comments on screen:** hyperframes lint reads a literal `/*` in markup as a stray CSS comment, so comment delimiters are written with `&#47;`, which the check's HTML parser reads back as `/`.
+- **Highlight:** a band with an accent bar on each highlighted row and the other rows dimmed to 0.72, as a 0.2 s `power2.out` tween that starts one frame before its line's clip. Each `beats.json` entry's region is the accent bar, `[98, y, 8, height]`, because the band alone stays under the detector's 24-level change threshold. Its `word` is the line's first word, `baseline_s` is the later of 0.5 s before the beat and 0.05 s after the scene starts, and `detector` is `changed`.
+- **Tokens:** ground #101114, surface #16171b, selected #2c3050, border #24262c, text #eceef2, muted #9aa0ab, accent #9aa6ff, string #c6cbe8, Inter and JetBrains Mono, inlined in every composition. Longhand `font-family` only.
+- **Seek-safe GSAP:** `fromTo` with `immediateRender: false` on stacked tweens, `gsap.set` for start states, positions relative to the scene, and hosts, roots and timeline keys all named by scene id. `index.html` keeps the scaffold's head, which loads GSAP.
+- **`storyboard.md`:** a header, a numbered Script with one item per scene, and a Scenes table whose Time cell opens with the start second, so `verify.py` and `review_page.py` find the scenes.
+
+`references/code-tour.md` holds when to propose a tour, what counts as a source file, how to pick stops and lines, the sourcing rule, the run's commands in order, and the caption. The tour project is `<date>-<slug>-code-tour`, with the same product as the film, `stops: none`, `narration: true` and `cloud_allow: []`.
+
 ## DO-NOT-CHANGE fences
 
 - **`skills/making-videos/scripts/verify.py`:** the 3-attempt rule and the sync threshold are the skill's honesty. A crash in an agent's own script isn't a reason to relax them.
 - **`skills/writing-html-artifacts/vendor/kit/1.0.0/**` and `vendor/libraries.json`:** checksummed and pinned; old pages rebuild against them.
 - **The `SCREEN_HASH_THRESHOLD` path in `_effects.py` for existing actions:** tuning it changes what every existing `OBSERVED` means.
-- **The `SIZE_FAIL` and `SIZE_WARN` constants:** SC-28 keeps both limits, and raising one to fit video would change what every other page is allowed to be.
+- **The `SIZE_FAIL` and `SIZE_WARN` constants:** every page that doesn't opt out keeps both limits, so a page opts out through its source header (SC-37) and the constants never move. `SIZE_WARN` applies to every page, opted out or not.
 
 ## Always / Ask / Never
 
