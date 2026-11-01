@@ -46,7 +46,7 @@ Follow the steps in order. Each one leads with its rule.
    python3 "$SKILL_DIR/scripts/quirk_html.py" verify FILE [--out-dir DIR]
    ```
 
-   It writes screenshots and `report.json` to `<file stem>.verify/`. Open the screenshots and judge them against the checklist in [design reference](references/design-reference.md) section 14, because verify proves the page loads and is legible, not that it is good. Never install or download a browser: when none is found, verify exits 0 with `status: "not-browser-verified"`, and you say so in the delivery note.
+   It writes screenshots and `report.json` to `<file stem>.verify/`. A page with a `<video>` or `<img>` also gets a `media` check that the video decodes and the image has pixels; a browser that cannot play H.264 skips the MP4 and the note lists it as not checked, so do not say the video plays. Open the screenshots and judge them against the checklist in [design reference](references/design-reference.md) section 14, because verify proves the page loads and is legible, not that it is good. Never install or download a browser: when none is found, verify exits 0 with `status: "not-browser-verified"`, and you say so in the delivery note.
 9. **Write the note.**
 
    ```
@@ -79,6 +79,8 @@ python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--layou
 ### Data and modes
 
 - **Sidecar data.** A `data` file named in the source header is embedded. When it is too large to embed, the build moves it to a sidecar file next to the page, and the page asks the reader to pick that file. The note names the sidecar; keep the two files together when delivering.
+- **Inline media.** Add `data-inline` to an `<img>`, `<video>`, `<source>` or `<track>` and put the file's path, relative to the source file, in `src` (or a video's `poster`). The build replaces the path with a `data:` URI and removes the attribute, so the page stays one file and you never write base64 by hand. It takes `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.mp4`, `.vtt` and `.srt`; an `.srt` is converted to WebVTT. The first inlined `<track>` in a `<video>` gets `default` when none has it, so captions are on. A missing file, another file type, or a path outside the source folder and the project directory fails the build (exit 2) and names the path. Media never becomes a sidecar, so a page over 10 MB fails the `size` check, and the note explains the 2 MB warning when embedded media is part of it. A page whose film size is the point, such as an explainer, can add `"size_limit": "none"` to the source header to drop the 10 MB failure; the 2 MB warning stays, `"none"` is the only accepted value, and no other page should use it.
+- **Figures in a `q-grid`.** A `figure` that is a direct child of a `q-grid` takes one column, a quarter of the row on a wide screen. Give it `data-span="full"` (or 2 to 6) or the build warns.
 - **Offline is the default.** An offline page makes no network requests: the static check rejects external references and verify fails on any request.
 - **Connected** (`"mode": "connected"` in the header, or `--mode connected`) is for pages that fetch live data. Requests go through instead of failing, and verify records every URL in the report's `requests`. Use it only when the user wants live data, and name the hosts the page calls in the note.
 

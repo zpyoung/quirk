@@ -120,6 +120,50 @@
     {
       "query": "Summarize this YouTube video for me",
       "should_trigger": false
+    },
+    {
+      "query": "Make a walkthrough of this feature",
+      "should_trigger": false
+    },
+    {
+      "query": "Explain what this PR does, with screenshots",
+      "should_trigger": false
+    },
+    {
+      "query": "I just finished the add-project button. Can you make a feature explainer for the team?",
+      "should_trigger": false
+    },
+    {
+      "query": "Show what this PR does so a reviewer can follow it without reading the diff",
+      "should_trigger": false
+    },
+    {
+      "query": "Walk me through the new CLI flag as a page with real output and test results",
+      "should_trigger": false
+    },
+    {
+      "query": "Explain this feature to a customer: a one-page walkthrough with screenshots and what we tested",
+      "should_trigger": false
+    },
+    {
+      "query": "Write up a walkthrough of the search filter we shipped last week, with proof it works in the app",
+      "should_trigger": false
+    },
+    {
+      "query": "Create a walkthrough of what changed in PR 482 with before and after screenshots",
+      "should_trigger": false
+    },
+    {
+      "query": "Explain the new sidebar feature as a page I can send to my manager, even though nobody has tried it in the app yet",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a feature explainer for the export button, written for a non-technical reader",
+      "should_trigger": false
+    },
+    {
+      "query": "Walk the team through the settings change we merged, as one offline page we can forward",
+      "should_trigger": false
     }
   ]
 }

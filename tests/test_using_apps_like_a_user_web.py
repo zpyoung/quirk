@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,7 @@ for _entry in (str(SCRIPTS), str(FAKES)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
+import _effects  # noqa: E402
 import _web  # noqa: E402
 import harness  # noqa: E402
 from _types import Action, DriverError  # noqa: E402
@@ -442,6 +444,8 @@ class TestActMapping:
             (Action(kind="double-click", x=1, y=2),
              ["mousemove", "mousedown", "mouseup", "mousedown", "mouseup"],
              [["mousemove", "1", "2"], ["mousedown"], ["mouseup"], ["mousedown"], ["mouseup"]]),
+            (Action(kind="hover", ref="e4"), ["hover"], [["hover", "e4"]]),
+            (Action(kind="hover", x=10.5, y=20), ["mousemove"], [["mousemove", "10.5", "20"]]),
             (Action(kind="drag", x=1, y=2, to_x=30, to_y=40),
              ["mousemove", "mousedown", "mousemove", "mouseup"],
              [["mousemove", "1", "2"], ["mousedown"], ["mousemove", "30", "40"], ["mouseup"]]),
@@ -489,7 +493,7 @@ class TestActMapping:
         f = fake([])
         for action in (Action(kind="fill", ref="e1"), Action(kind="press"),
                        Action(kind="select", ref="e1"), Action(kind="scroll", amount=1),
-                       Action(kind="drag", ref="e1")):
+                       Action(kind="drag", ref="e1"), Action(kind="hover")):
             with pytest.raises(DriverError):
                 f.driver.act(action)
         assert f.argvs == []
@@ -501,7 +505,8 @@ class TestActMapping:
             Action(kind="type", text="a"), Action(kind="press", key="Tab"),
             Action(kind="hotkey", key="cmd+s"), Action(kind="select", ref="e10", value="v"),
             Action(kind="dismiss", ref="e4"), Action(kind="drag", ref="e4", to_ref="e7"),
-            Action(kind="click", x=1, y=2),
+            Action(kind="click", x=1, y=2), Action(kind="hover", ref="e4"),
+            Action(kind="hover", x=1, y=2),
         ]
         f = fake(["click"] * 40)
         for action in kinds:
@@ -829,6 +834,75 @@ class TestLive:
         target = tmp_path / "state.json"
         driver.state_save(target)
         assert "cookies" in json.loads(target.read_text())
+
+
+REST_COLOR = (28, 79, 215)
+HOVER_COLOR = (232, 89, 12)
+
+
+def _pixel(shot: str, x: int, y: int):
+    _, _, rows = _effects.decode_png(Path(shot).read_bytes())
+    return tuple(rows[y][x * 3:x * 3 + 3])
+
+
+@needs_live
+class TestLiveHover:
+    """Hover through the real `act` path against real playwright-cli and the hover fixture page."""
+
+    @pytest.fixture
+    def run(self, tmp_path, server):
+        real = shutil.which("playwright-cli")
+        sb = harness.Sandbox(tmp_path, {"LIKEUSER_PLAYWRIGHT_BIN": real,
+                                        "PATH": os.environ["PATH"]})
+        goals = tmp_path / "goals.json"
+        goals.write_text(json.dumps([{"id": "g1", "title": "hover the swatches"}]))
+        begun = sb.begin("web", server + "/hover", "yours", True, "--goals-file", str(goals))
+        assert begun.code == 0, begun.stdout + begun.stderr
+        run_id = begun["run_id"]
+        seen = sb.run("observe", "--run", run_id, "--goal", "g1")
+        assert seen.code == 0, seen.stdout + seen.stderr
+        tree = Path(seen["observation"]["tree_path"]).read_text()
+        refs = {name: ref for ref, name in
+                ((m.group(2), m.group(1)) for m in _REF_LINE.finditer(tree))}
+        yield sb, run_id, seen["observation"], refs
+        sb.run("end", "--run", run_id)
+        sb.kill_launched()
+
+    @staticmethod
+    def _hover(sb, run_id, obs, *target, expect="screen"):
+        return sb.run("act", "--run", run_id, "--obs", str(obs["observation_id"]),
+                      "--action", "hover", *target, "--expect", expect)
+
+    def test_a_css_only_hover_on_a_26px_button_is_observed_and_still_showing(self, run):
+        sb, run_id, obs, refs = run
+        assert _pixel(obs["screenshot_path"], 50, 113) == REST_COLOR
+        result = self._hover(sb, run_id, obs, "--ref", refs["Hover swatch"])
+        assert result.status == "OBSERVED" and result["signals"] == ["screen"], result.out
+        shot = result["observation"]["screenshot_path"]
+        assert _pixel(shot, 50, 113) == HOVER_COLOR
+        assert _pixel(shot, 70, 113) == HOVER_COLOR
+
+    def test_a_coordinate_hover_gets_the_same_result(self, run):
+        sb, run_id, obs, _ = run
+        result = self._hover(sb, run_id, obs, "--x", "50", "--y", "113",
+                             "--target-name", "Hover swatch")
+        assert result.status == "OBSERVED", result.out
+        assert _pixel(result["observation"]["screenshot_path"], 70, 113) == HOVER_COLOR
+
+    def test_a_control_with_no_hover_style_is_no_effect(self, run):
+        sb, run_id, obs, refs = run
+        result = self._hover(sb, run_id, obs, "--ref", refs["Plain swatch"])
+        assert result.status == "NO_EFFECT" and result["signals"] == [], result.out
+        assert _pixel(result["observation"]["screenshot_path"], 50, 173) == REST_COLOR
+
+    def test_a_caret_sized_hover_change_is_no_effect(self, run):
+        sb, run_id, obs, refs = run
+        result = self._hover(sb, run_id, obs, "--ref", refs["Caret-sized tick"])
+        assert result.status == "NO_EFFECT", result.out
+        assert _pixel(result["observation"]["screenshot_path"], 41, 228) == (214, 0, 42)
+
+
+_REF_LINE = re.compile(r'button "([^"]+)" \[ref=([^\]]+)\]')
 
 
 class TestSelectValueSignal:

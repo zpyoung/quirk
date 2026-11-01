@@ -21,6 +21,8 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 SCREEN_HASH_THRESHOLD = 2
+FINE_LUMA_DELTA = 16
+FINE_SCREEN_THRESHOLD = 0.0001
 SETTLE_POLL_S = 0.25
 SETTLE_CAP_S = 2.0
 SIGNALS = ("url", "title", "tree", "focus", "value", "screen")
@@ -164,6 +166,33 @@ def average_hash(path: Path) -> int:
     return bits
 
 
+def pixels_changed(before: Path, after: Path) -> float:
+    """Fraction of pixels whose luma differs by more than FINE_LUMA_DELTA between two PNGs.
+
+    The 8x8 average hash cannot see a control-sized change; this can, at the cost of decoding
+    both images in full. Raises ValueError when either image cannot be decoded or the two
+    differ in width or height.
+    """
+    width, height, rows_a = decode_png(Path(before).read_bytes())
+    width_b, height_b, rows_b = decode_png(Path(after).read_bytes())
+    if (width, height) != (width_b, height_b):
+        raise ValueError(
+            "screenshots differ in size: %dx%d vs %dx%d" % (width, height, width_b, height_b))
+    if width == 0 or height == 0:
+        raise ValueError("empty image")
+    limit = FINE_LUMA_DELTA * 1000
+    changed = 0
+    for row_a, row_b in zip(rows_a, rows_b):
+        if row_a == row_b:
+            continue
+        for i in range(0, width * 3, 3):
+            delta = (299 * (row_a[i] - row_b[i]) + 587 * (row_a[i + 1] - row_b[i + 1])
+                     + 114 * (row_a[i + 2] - row_b[i + 2]))
+            if delta > limit or -delta > limit:
+                changed += 1
+    return changed / float(width * height)
+
+
 def hamming(a: int, b: int) -> int:
     """Number of differing bits between two integers."""
     return bin(a ^ b).count("1")
@@ -226,18 +255,22 @@ def diff(before: Signals, after: Signals, threshold: int = SCREEN_HASH_THRESHOLD
 
 
 def classify(
-    before: Signals, after: Signals, expect: str, settled: bool
+    before: Signals, after: Signals, expect: str, settled: bool,
+    fine_changed: Optional[bool] = None,
 ) -> Tuple[str, List[str], List[str]]:
     """Classify an action's effect as (status, signals, other_changes).
 
     `signals` is every changed signal. `UNSETTLED` when the observation never settled;
     otherwise `OBSERVED` when `expect` ("any" or a SIGNALS name) changed, else `NO_EFFECT`.
     `other_changes` is the changed signals other than `expect` (always empty for "any").
+    A `fine_changed` that is not None replaces the screen-hash verdict for `screen`.
     Raises ValueError for an unknown `expect`.
     """
     if expect != "any" and expect not in SIGNALS:
         raise ValueError("unknown expect signal: %r" % (expect,))
     changed = diff(before, after)
+    if fine_changed is not None:
+        changed = [s for s in changed if s != "screen"] + (["screen"] if fine_changed else [])
     other = [] if expect == "any" else [s for s in changed if s != expect]
     if not settled:
         return "UNSETTLED", changed, other

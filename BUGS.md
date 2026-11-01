@@ -341,3 +341,42 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
 - **Severity**: low
 - **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+
+## BUG-42: using-apps act reports NO_EFFECT on a drag that visibly resizes a panel
+- **Observed**: 2026-10-30
+- **File**: skills/using-apps-like-a-user/scripts/_effects.py:23
+- **Description**: The 8x8 screen hash can't see a panel resize, so a real drag came back NO_EFFECT during an explaining-features run, and the agent had to rest the goal's pass on a later action. hover got a pixel comparison; drag still uses the hash.
+- **Introduced by**: unknown
+- **Severity**: medium
+- **Proposed fix**: Decide whether drag should use the same pixel comparison as hover, then reproduce with a live test.
+- **Blocker for**: Verifying resize behavior through the guard
+
+## BUG-43: making-videos' one-frame-early tween advice can fail sync on its first render
+- **Observed**: 2026-10-30
+- **File**: skills/making-videos/references/audio.md
+- **Description**: Following the advice to start tweens one frame before the word, a first render failed the sync check with beats 55 to 62 ms early. Observed once. In the same run, hf.py snapshot reported an end-of-timeline frame at 40.74 s for a 42 s film; unclear whether that's related.
+- **Introduced by**: unknown
+- **Severity**: low
+- **Proposed fix**: Measure the offset on a few renders and correct the guidance if it holds.
+- **Blocker for**: First-render sync
+
+## BUG-44: Three html kit element tests race animation under load
+- **Observed**: 2026-10-31
+- **File**: tests/test_html_kit_elements.py:6398
+- **Description**: test_flow_trace_pans_an_off_screen_current_node_into_view_at_the_same_zoom reads the zoom right after clicking with no settle wait, so it reads a tween mid-flight (2.9903 vs 2.9879): failed 3 of 4 runs at commit fd1296b under load average about 260, and passed 4 of 4 with a 3000 ms wait before the first read. test_seq_declined_trace_marks_each_step_and_returns_to_message_three_on_the_retry failed in 2 of 4 runs (dotsOf empty at step 1, tests/test_html_kit_elements.py:10806), passed the other 2; cause not investigated. Neither file changed in this branch's code tour work. At the origin/main fork point 9ffa792, before this branch, the first failed 4 of 6 runs and the second 5 of 6 at load average 145 to 181, so neither comes from this branch. test_seq_step_through_shows_only_with_traces_and_opens_on_step_one_clearing_focus shows the same empty dotsOf (tests/test_html_kit_elements.py:10750): it failed once in the whole suite at 058fa6f at load average about 20, then 0 of 6 reruns at that commit and 1 of 6 at 9ffa792. A test-only flake that fails the skill gate on a busy machine.
+- **Severity**: low
+
+## BUG-45: Live hover test can return UNSETTLED on a very busy machine
+- **Observed**: 2026-10-31
+- **File**: tests/test_using_apps_like_a_user_web.py:880
+- **Description**: TestLiveHover::test_a_css_only_hover_on_a_26px_button_is_observed_and_still_showing failed once in the full skill gate at commit af56d7f (load average about 300) because the observation never settled, so the status was UNSETTLED rather than OBSERVED; it passed 4 of 4 reruns on the same commit at load 208 to 300. This branch added the test and the hover pixel comparison. Cause not investigated beyond the status. A test-only flake seen once, and UNSETTLED is an honest result rather than a false pass.
+- **Severity**: low
+
+## BUG-50: CI pytest matrix can't run on ubuntu-latest because Python 3.9 is gone
+- **Observed**: 2026-11-01
+- **File**: .github/workflows/test.yml:70
+- **Description**: On PR 59 (run 41307606063, 2026-11-01), actions/setup-python failed with "The version '3.9' with architecture 'x64' was not found for Ubuntu 26.04", and the matrix's default fail-fast cancelled the 3.12 job, so no test ran. Rerunning the 3.12 job alone was cancelled in the same second. The last green test.yml run was 2026-10-26 and this branch does not change the workflow, so every new run will likely hit the same failure.
+- **Severity**: high
+- **Proposed fix**: Pin runs-on to an image that still has 3.9 or drop 3.9 from the matrix, and set fail-fast to false so one setup failure can't cancel the other job.
+- **Blocker for**: Test results on every pull request.
+

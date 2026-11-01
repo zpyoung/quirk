@@ -91,6 +91,7 @@ LOG_LINES_SHOWN = 10
 _FONT_USE = re.compile(r"var\(\s*(--font-[A-Za-z0-9_-]*)")
 _FONT_DEF = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:")
 _STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.S | re.I)
+_SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script>", re.S | re.I)
 _STYLE_ATTR = re.compile(r"""\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 _LINK_TAG = re.compile(r"<link\b[^>]*>", re.I)
 _REL_STYLESHEET = re.compile(r"""\brel\s*=\s*["']?[^"'>]*\bstylesheet\b""", re.I)
@@ -98,6 +99,10 @@ _HREF = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
 _INJECTED = re.compile(r"Injected deterministic @font-face rules for (\d+) requested font famil", re.I)
 _FONT_VALUE = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:\s*([^;}]*)")
 _FONT_NAMED = re.compile(r"""Fetched\s+\d+\s+font face\(s\) for ["']([^"']+)["']""", re.I)
+_FONT_EMBEDDED = re.compile(r"Embedded local font file:\s*(.+?)(?:\s+\(\d[\d.,]*\s*[KMGT]?i?B\b.*)?$", re.I | re.M)
+_FONT_FACE = re.compile(r"@font-face\s*\{([^}]*)\}", re.I)
+_FACE_FAMILY = re.compile(r"""font-family\s*:\s*(?:"([^"]*)"|'([^']*)'|([^;}"']+))""", re.I)
+_FACE_URL = re.compile(r"""url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)""", re.I)
 _STILL_NAME = re.compile(r"^still-\d+-\d+(?:\.\d+)?s\.png$")
 _RATIO = re.compile(r"Contrast is ([0-9.]+):1")
 _LOUDNESS_I = re.compile(r"^\s*I:\s+(-?[0-9.]+|-inf)\s+LUFS", re.M)
@@ -278,6 +283,22 @@ def brand_families(project: Path, brief: dict) -> "tuple[list[str], int, bool]":
     return names, (len(names) or len(fonts) or 1), True
 
 
+def embedded_families(scenes: Path, log_text: str) -> "set[str]":
+    """Lowercase family names whose ``@font-face`` in ``scenes`` maps to a file the render log says was embedded."""
+    def key(path: str) -> str:
+        return re.sub(r"^(?:\.{1,2}/)+", "", path.strip().replace("\\", "/"))
+
+    files = {key(f) for f in _FONT_EMBEDDED.findall(log_text)}
+    found: "set[str]" = set()
+    for page in _html_files(scenes):
+        text = _SCRIPT_BLOCK.sub("", _COMMENTS.sub("", page.read_text(encoding="utf-8", errors="replace")))
+        for body in (b for css in _STYLE_BLOCK.findall(text) for b in _FONT_FACE.findall(css)):
+            family, url = _FACE_FAMILY.search(body), _FACE_URL.search(body)
+            if family and url and key(next(g for g in url.groups() if g is not None)) in files:
+                found.add(next(g for g in family.groups() if g is not None).strip().lower())
+    return found
+
+
 def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4: Path) -> dict:
     names, required, _ = brand_families(project, brief)
     wanted = {n.lower() for n in names}
@@ -292,8 +313,9 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
         log_text = render_log.read_text(encoding="utf-8", errors="replace")
         counts = [int(n) for n in _INJECTED.findall(log_text)]
         logged = {n.strip().lower() for n in _FONT_NAMED.findall(log_text)}
-        injected = max(counts) if counts else 0
-        if not counts:
+        embedded = embedded_families(scenes, log_text) & wanted
+        injected = (max(counts) if counts else 0) + len(embedded - logged)
+        if not counts and not embedded:
             problems.append(
                 "%s has no 'Injected deterministic @font-face rules' line, so the MP4 may use fallback fonts"
                 % render_log
@@ -303,12 +325,12 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
                 "render log injected %d font famil%s but the brand has %d"
                 % (injected, "y" if injected == 1 else "ies", required)
             )
-        elif wanted and logged:
-            absent = [n for n in names if n.lower() not in logged]
+        elif wanted and (logged or embedded or not counts):
+            absent = [n for n in names if n.lower() not in logged | embedded]
             if absent:
                 problems.append(
                     "render log does not show brand font famil%s %s being injected (it names: %s)"
-                    % ("y" if len(absent) == 1 else "ies", ", ".join(absent), ", ".join(sorted(logged)))
+                    % ("y" if len(absent) == 1 else "ies", ", ".join(absent), ", ".join(sorted(logged | embedded)))
                 )
         elif wanted:
             problems += [p for p in scan_fonts(project, wanted) if "not a brand font family" in p]

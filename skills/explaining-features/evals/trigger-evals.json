@@ -1,0 +1,125 @@
+{
+  "skill_name": "explaining-features",
+  "queries": [
+    {
+      "query": "Make a walkthrough of this feature",
+      "should_trigger": true
+    },
+    {
+      "query": "Explain what this PR does, with screenshots",
+      "should_trigger": true
+    },
+    {
+      "query": "I just finished the add-project button. Can you make a feature explainer for the team?",
+      "should_trigger": true
+    },
+    {
+      "query": "Show what this PR does so a reviewer can follow it without reading the diff",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a feature explainer page for the dark mode toggle, with a short narrated video if it moves",
+      "should_trigger": true
+    },
+    {
+      "query": "Walk me through the new CLI flag as a page with real output and test results",
+      "should_trigger": true
+    },
+    {
+      "query": "Explain this feature to a customer: a one-page walkthrough with screenshots and what we tested",
+      "should_trigger": true
+    },
+    {
+      "query": "Write up a walkthrough of the search filter we shipped last week, with proof it works in the app",
+      "should_trigger": true
+    },
+    {
+      "query": "Create a walkthrough of what changed in PR 482 with before and after screenshots",
+      "should_trigger": true
+    },
+    {
+      "query": "Explain the new sidebar feature as a page I can send to my manager, even though nobody has tried it in the app yet",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a feature explainer for the export button, written for a non-technical reader",
+      "should_trigger": true
+    },
+    {
+      "query": "Show what this PR does with a short clip of the hover and a table of what was verified",
+      "should_trigger": true
+    },
+    {
+      "query": "Walk the team through the settings change we merged, as one offline page we can forward",
+      "should_trigger": true
+    },
+    {
+      "query": "Walk me through the code changes behind the Add project button, file by file, as a narrated tour on a page",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a code walkthrough of the PR that added the search filter so a reviewer can follow the change across its files",
+      "should_trigger": true
+    },
+    {
+      "query": "Make a 30 second video announcing our release",
+      "should_trigger": false
+    },
+    {
+      "query": "Build a dashboard page for these numbers",
+      "should_trigger": false
+    },
+    {
+      "query": "Try this flow in the app",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a 2 minute narrated explainer video about our product for the website homepage",
+      "should_trigger": false
+    },
+    {
+      "query": "Review this PR for bugs and style problems",
+      "should_trigger": false
+    },
+    {
+      "query": "Write the README section documenting the new --dry-run flag",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a slide deck introducing this feature to the sales team",
+      "should_trigger": false
+    },
+    {
+      "query": "Dogfood the signup flow and tell me what breaks",
+      "should_trigger": false
+    },
+    {
+      "query": "Create an animated motion graphics piece for the plugin launch",
+      "should_trigger": false
+    },
+    {
+      "query": "Write release notes for version 2026.10.26 from the changelog",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a blog post about why we built the project header button",
+      "should_trigger": false
+    },
+    {
+      "query": "Explain how this function works",
+      "should_trigger": false
+    },
+    {
+      "query": "We're done with this branch. Finish it up and open the PR",
+      "should_trigger": false
+    },
+    {
+      "query": "Summarize this PR in a commit message",
+      "should_trigger": false
+    },
+    {
+      "query": "Record my screen while I use the app and cut out the pauses",
+      "should_trigger": false
+    }
+  ]
+}

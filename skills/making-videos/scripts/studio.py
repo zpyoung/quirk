@@ -28,6 +28,7 @@ from _mv_common import (  # noqa: E402
 )
 
 MAX_LENGTH_S = 180
+STOPS_VALUES = ("both", "none")
 NARRATION_THRESHOLD_S = 20
 DEFAULT_LENGTH_S = 30
 SLUG_RE = re.compile(r"^[a-z0-9-]+$")
@@ -94,6 +95,9 @@ def _build_brief(args: argparse.Namespace, today: str) -> dict:
         if provider not in PROVIDER_KEY_ENV:
             known = ", ".join(sorted(PROVIDER_KEY_ENV))
             _fail(f"unknown cloud provider {provider!r} in cloud_allow (known: {known})")
+    stops = given.get("stops", "both")
+    if not isinstance(stops, str) or stops not in STOPS_VALUES:
+        _fail(f"stops must be one of {', '.join(STOPS_VALUES)}, got {stops!r}")
     music = given.get("music") or {}
     return {
         "slug": args.slug,
@@ -103,6 +107,7 @@ def _build_brief(args: argparse.Namespace, today: str) -> dict:
         "aspects": given.get("aspects", ["16:9"]),
         "narration": given.get("narration", length_s > NARRATION_THRESHOLD_S),
         "cloud_allow": cloud_allow,
+        "stops": stops,
         "music": {"source": music.get("source", "none"), "path": music.get("path")},
         "created": today,
     }

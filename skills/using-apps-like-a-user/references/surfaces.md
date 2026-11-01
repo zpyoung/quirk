@@ -104,3 +104,6 @@ that app's frontmost window.
   signal you mean. It misses small changes such as a label or a toast, so `NO_EFFECT` on `--expect
   screen` is weak evidence: compare the before and after screenshots yourself before reporting a
   dead control.
+  A hover is the exception: its `screen` signal compares the before and after screenshots pixel by
+  pixel, so a 26px button changing color counts and a 2x16px text caret does not. A hover with no
+  before screenshot can return `NO_EFFECT` but never `OBSERVED`.

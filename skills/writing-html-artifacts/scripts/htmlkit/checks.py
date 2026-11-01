@@ -30,6 +30,7 @@ from .vendor import VendorError, VendorStore, escape_inline, sha256_text
 MODES = ("offline", "connected", "companion")
 SIZE_FAIL = 10 * 1024 * 1024
 SIZE_WARN = 2 * 1024 * 1024
+SIZE_LIMIT_NONE = "none"
 
 _FONT_FACE = re.compile(r"@font-face\s*\{[^}]*\}", re.IGNORECASE)
 _CSS_URL = re.compile(r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\s]*))\s*\)", re.IGNORECASE)
@@ -422,6 +423,9 @@ def run_checks(
 
     For ``tier == 1`` the ``layout`` check flags page geometry written inside the ``q-page``
     wrapper; tier 2 apps run ``layoutcheck.check_app_sources`` from their build instead.
+
+    A header carrying ``"size_limit": "none"`` (a tier-1 source opt-out) drops the ``size`` failure
+    over ``SIZE_FAIL``; the ``SIZE_WARN`` warning stays.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, got {mode!r}")
@@ -455,7 +459,8 @@ def run_checks(
         failures.extend(layoutcheck.check_html(html, label="page"))
 
     size = len(html.encode("utf-8"))
-    if size > SIZE_FAIL:
+    size_limited = not (meta is not None and meta.get("size_limit") == SIZE_LIMIT_NONE)
+    if size_limited and size > SIZE_FAIL:
         failures.append({"check": "size", "detail": f"{size} bytes exceeds the {SIZE_FAIL} byte limit"})
     if size > SIZE_WARN:
         warnings.append({"check": "size", "detail": f"{size} bytes is over {SIZE_WARN}; the file may be slow to open"})

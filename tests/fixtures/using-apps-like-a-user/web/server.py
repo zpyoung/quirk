@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 USERNAME = "tester"
 PASSWORD = "fixture-pass"
 COUNTERS = ("working", "dead", "hidden", "verify", "delete", "save")
-STATIC = {"/": "index.html", "/index.html": "index.html"}
+STATIC = {"/": "index.html", "/index.html": "index.html", "/hover": "hover.html"}
 BEACONS = ("working", "dead", "hidden", "delete")
 
 _lock = threading.Lock()

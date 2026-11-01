@@ -13,6 +13,7 @@ touches the network.
 """
 from __future__ import annotations
 
+import base64
 import csv
 import html as html_lib
 import io
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import SKILL_DIR, kitcheck
-from .checks import MODES, SIZE_FAIL, SIZE_WARN, default_shells, run_checks
+from .checks import MODES, SIZE_FAIL, SIZE_LIMIT_NONE, SIZE_WARN, default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import read_header, render_header
 from .layouts import DEFAULT_LAYOUT, LAYOUTS, NAV_MODES, build_nav, collect_ids, render_regions, summary_hint, validate_layout
@@ -70,6 +71,7 @@ class Source:
     slots: dict[str, str] = field(default_factory=dict)
     layout: Optional[str] = None
     nav: str = "auto"
+    size_limit: Optional[str] = None
 
 
 def _string_list(meta: dict, key: str) -> list[str]:
@@ -114,6 +116,11 @@ def parse_source(path: Path) -> Source:
     reason = meta.get("tier_reason")
     if reason is not None and not isinstance(reason, str):
         raise SourceError("header field 'tier_reason' must be a string")
+    size_limit = None
+    if "size_limit" in meta:
+        size_limit = meta["size_limit"]
+        if size_limit != SIZE_LIMIT_NONE:
+            raise SourceError(f"header field 'size_limit' must be \"{SIZE_LIMIT_NONE}\" or absent, got {size_limit!r}")
 
     marks = list(_SLOT_LINE.finditer(rest))
     if not marks:
@@ -140,6 +147,7 @@ def parse_source(path: Path) -> Source:
         slots=slots,
         layout=layout,
         nav=nav,
+        size_limit=size_limit,
     )
 
 
@@ -183,6 +191,15 @@ def _reject_constant(name: str) -> None:
     raise ValueError(f"the constant {name} is not allowed in JSON")
 
 
+def _contained_path(source: Source, name: str, label: str, project_dir: Path) -> Path:
+    """Resolve ``name`` against the source file's directory; it must sit under that directory or ``project_dir``."""
+    path = (source.path.parent / name).resolve()
+    allowed = (source.path.resolve().parent, Path(project_dir).resolve())
+    if not any(path == base or base in path.parents for base in allowed):
+        raise SourceError(f"{label} {name!r} is outside the project directory and the source file's directory")
+    return path
+
+
 def _load_data(source: Source, project_dir: Path) -> Optional[_Data]:
     """Read and serialise the source's data file for embedding.
 
@@ -192,12 +209,7 @@ def _load_data(source: Source, project_dir: Path) -> Optional[_Data]:
     """
     if source.data is None:
         return None
-    path = (source.path.parent / source.data).resolve()
-    allowed = (source.path.resolve().parent, Path(project_dir).resolve())
-    if not any(path == base or base in path.parents for base in allowed):
-        raise SourceError(
-            f"data file {source.data!r} is outside the project directory and the source file's directory"
-        )
+    path = _contained_path(source, source.data, "data file", project_dir)
     suffix = path.suffix.lower()
     if suffix not in (".json", ".csv"):
         raise SourceError(f"data file {source.data!r} must be .json or .csv")
@@ -216,6 +228,110 @@ def _load_data(source: Source, project_dir: Path) -> Optional[_Data]:
     except (ValueError, csv.Error) as exc:
         raise SourceError(f"data file {source.data!r} is not valid {suffix[1:].upper()}: {exc}") from exc
     return _Data(path, suffix, payload.replace("<", "\\u003c"))
+
+
+MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".vtt": "text/vtt",
+    ".srt": "text/vtt",
+}
+_MEDIA_TAG = re.compile(r"<!--.*?-->|<(img|video|source|track)\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.S | re.I)
+_MEDIA_ATTR = re.compile(r"""(\s+)([^\s"'<>/=]+)(?:(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?""")
+_VIDEO_BLOCK = re.compile(r"<!--.*?-->|<video\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>.*?</video\s*>", re.S | re.I)
+_SRT_TIME = re.compile(r"(\d{2}:\d{2}:\d{2}),(\d{3})")
+
+
+def _srt_to_vtt(text: str) -> str:
+    body = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    body = re.sub(r"^(.*-->.*)$", lambda m: _SRT_TIME.sub(r"\1.\2", m.group(1)), body, flags=re.M)
+    return "WEBVTT\n\n" + body.lstrip("\n")
+
+
+def _media_uri(source: Source, name: str, project_dir: Path, cache: dict[Path, str]) -> str:
+    path = _contained_path(source, name, "media file", project_dir)
+    suffix = path.suffix.lower()
+    if suffix not in MEDIA_TYPES:
+        raise SourceError(f"media file {name!r} must be one of {', '.join(sorted(MEDIA_TYPES))}")
+    if path in cache:
+        return cache[path]
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SourceError(f"media file {name!r} cannot be read: {exc.strerror or exc}") from exc
+    if suffix == ".srt":
+        try:
+            raw = _srt_to_vtt(raw.decode("utf-8")).encode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SourceError(f"media file {name!r} is not valid UTF-8") from exc
+    cache[path] = f"data:{MEDIA_TYPES[suffix]};base64,{base64.b64encode(raw).decode('ascii')}"
+    return cache[path]
+
+
+def _tag_attr_names(attrs: str) -> set[str]:
+    return {m.group(2).lower() for m in _MEDIA_ATTR.finditer(attrs)}
+
+
+def _rewrite_media_tags(html: str, source: Source, project_dir: Path, cache: dict[Path, str]) -> str:
+    def rewrite(match: "re.Match[str]") -> str:
+        name, attrs = match.group(1), match.group(2)
+        if name is None or "data-inline" not in _tag_attr_names(attrs):
+            return match.group(0)
+        targets = ("src", "poster") if name.lower() == "video" else ("src",)
+        inlined = False
+
+        def swap(m: "re.Match[str]") -> str:
+            nonlocal inlined
+            attr = m.group(2).lower()
+            if attr == "data-inline":
+                return ""
+            if attr not in targets:
+                return m.group(0)
+            inlined = True
+            value = html_lib.unescape(next((g for g in m.group(4, 5, 6) if g is not None), ""))
+            return f'{m.group(1)}{m.group(2)}="{_media_uri(source, value, project_dir, cache)}"'
+
+        rewritten = _MEDIA_ATTR.sub(swap, attrs)
+        if not inlined:
+            raise SourceError(f"<{name.lower()} data-inline> has no {' or '.join(targets)} to inline")
+        return f"<{name}{rewritten}>"
+
+    return _MEDIA_TAG.sub(rewrite, html)
+
+
+def _inline_media(html: str, source: Source, project_dir: Path, cache: dict[Path, str]) -> str:
+    """Replace each ``data-inline`` media path in ``html`` with a ``data:`` URI and drop the attribute.
+
+    Applies to ``<img>``, ``<video>``, ``<source>`` and ``<track>`` (and a video's ``poster``). A
+    ``.srt`` file becomes WebVTT. The first inlined ``<track>`` of a ``<video>`` gets ``default``
+    when none of its tracks has it, so captions are on. Markup without ``data-inline`` is returned
+    unchanged. Raises SourceError naming the path for a missing file, a type outside
+    ``MEDIA_TYPES``, or a path outside the source file's directory and the project directory.
+    """
+    if "data-inline" not in html:
+        return html
+
+    def video(match: "re.Match[str]") -> str:
+        text = match.group(0)
+        if text.startswith("<!--"):
+            return text
+        flags = [
+            "data-inline" in _tag_attr_names(m.group(2))
+            for m in _MEDIA_TAG.finditer(text)
+            if m.group(1) and m.group(1).lower() == "track"
+        ]
+        rewritten = _rewrite_media_tags(text, source, project_dir, cache)
+        tracks = [m for m in _MEDIA_TAG.finditer(rewritten) if m.group(1) and m.group(1).lower() == "track"]
+        if not any(flags) or any("default" in _tag_attr_names(t.group(2)) for t in tracks):
+            return rewritten
+        at = tracks[flags.index(True)].start() + len("<track")
+        return rewritten[:at] + " default" + rewritten[at:]
+
+    return _rewrite_media_tags(_VIDEO_BLOCK.sub(video, html), source, project_dir, cache)
 
 
 def _picker(sidecar: str) -> str:
@@ -489,6 +605,14 @@ def build_tier1(
     plan = _plan_regions(source, skeleton, _existing_header(out_path))
     signal = f"judgment: {source.tier_reason}" if source.tier_reason else None
     built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    media_cache: dict[Path, str] = {}
+
+    def prepare(markup: str) -> str:
+        return kitcheck.inject_sequence_fallbacks(
+            kitcheck.inject_schema_fallbacks(
+                kitcheck.inject_flow_fallbacks(_inline_media(markup, source, project_dir, media_cache))
+            )
+        )
 
     def render(sidecar: Optional[str]) -> str:
         meta = {
@@ -503,6 +627,8 @@ def build_tier1(
             "built_at": built_at,
             "quirk_version": _quirk_version(skill),
         }
+        if source.size_limit:
+            meta["size_limit"] = source.size_limit
         if plan.layout:
             meta["layout"] = plan.layout
         if plan.defaulted:
@@ -520,20 +646,11 @@ def build_tier1(
             "data": embedded,
             "body_end": body_end,
         }
-        values.update(
-            {
-                f"slot:{name}": kitcheck.inject_sequence_fallbacks(
-                    kitcheck.inject_schema_fallbacks(kitcheck.inject_flow_fallbacks(source.slots.get(name, "")))
-                )
-                for name in template.slots
-            }
-        )
+        values.update({f"slot:{name}": prepare(source.slots.get(name, "")) for name in template.slots})
         values["layout"] = plan.layout
         values["regions"] = ""
         if plan.region_bearing:
-            values["slot:main" if plan.legacy_skeleton else "regions"] = kitcheck.inject_sequence_fallbacks(
-                kitcheck.inject_schema_fallbacks(kitcheck.inject_flow_fallbacks(plan.html))
-            )
+            values["slot:main" if plan.legacy_skeleton else "regions"] = prepare(plan.html)
         return _substitute(skeleton, values)
 
     sidecar_name: Optional[str] = None
@@ -649,6 +766,16 @@ def check_artifact(
     )
 
 
+_EMBEDDED_MEDIA = re.compile(r"""\b(?:src|poster)\s*=\s*["']?data:(?:image|video)/""", re.I)
+
+
+def _has_embedded_media(path: Path) -> bool:
+    try:
+        return _EMBEDDED_MEDIA.search(path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _verify_line(report_path: Path, stale: bool) -> list[str]:
     try:
         report = json.loads(report_path.read_text())
@@ -667,7 +794,7 @@ def _verify_line(report_path: Path, stale: bool) -> list[str]:
     lines = [f"{label}: {status} in {report.get('browser') or 'a browser'}."]
     checks = report.get("checks") or {}
     for name, result in checks.items():
-        if isinstance(result, dict) and not result.get("passed", True):
+        if isinstance(result, dict) and (not result.get("passed", True) or name == "media"):
             for detail in result.get("details", [])[:5]:
                 lines.append(f"  - {name}: {detail}")
     shots = report.get("screenshots") or []
@@ -731,6 +858,8 @@ def delivery_note(
             why = " The flow layout engine is about 1.5 MB, so this is expected."
         else:
             why = ""
+        if _has_embedded_media(path):
+            why += " Embedded media adds to it." if why else " Embedded media adds to it, so this is expected."
         lines.append(f"- Size: over 2 MB, so the file may be slow to open.{why}")
     lines.extend(f"- {line}" if not line.startswith("  ") else line for line in _verify_line(report_path, stale))
     lines.append("")

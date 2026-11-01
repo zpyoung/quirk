@@ -1,6 +1,6 @@
 # Brand: studio layout, extraction, reuse
 
-Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
+With `stops: none` in the brief, never confirm a brand, and reuse an existing unconfirmed draft as is without saving over it: see [First video](#first-video-extract-and-save). Reuse a product's saved brand when it is confirmed. Extract a draft on its first video, show it beside the
 storyboard at stop 1, and confirm it only when the user approves that storyboard. Commands are
 `python3 "$SKILL_DIR/scripts/studio.py" ...`.
 
@@ -72,6 +72,8 @@ Do this when `studio.py brand show --product P` prints `"brand": null`, or a bra
 (a draft whose storyboard was never approved). If the brand is already confirmed, reuse it and skip steps 6 and 8: there
 is no draft file to save, and studio folders are shared across runs, so another run may have confirmed it since you looked.
 
+With `stops: none` and an unconfirmed draft already in `~/Studio/brands/<product>`, reuse the draft as is and do not save over it: it may belong to another run. Extract and save only when no draft exists, and skip the rest of this list.
+
 1. **Colors.** If the product has no site, CSS or design system, skip the search: propose a palette (ground, ink, accent) and a display and mono type pair that suit it, write them into the draft, and mark them as proposed in what you show. Ask at stop 1 whether to keep them. Otherwise find CSS custom properties first: grep `--[a-z-]+:` in `:root` blocks of `site.css`,
    `tokens.css`, `globals.css`, and theme or Tailwind config files. Keep the product's own token names and
    map them to roles: ground (background), ink (text), muted, rule, accent. Use a color from a screenshot
@@ -94,7 +96,8 @@ is no draft file to save, and studio folders are shared across runs, so another 
 7. Show the draft beside the storyboard at stop 1: swatches with names and hex values (labelled "proposed" where you chose them), font families and
    whether files were found, the logo or its absence, and the voice. Apply the user's edits to the
    draft and save it again (still unconfirmed).
-8. When the user approves the storyboard, save with confirmation:
+8. With `stops: none` in the brief, skip this step: nobody approved the storyboard, so the brand stays
+   unconfirmed, and the storyboard says so. Otherwise, when the user approves the storyboard, save with confirmation:
    `studio.py brand save --product P --file "$PROJECT/brand.draft.json" --confirm`. If the storyboard is not
    approved, the brand stays unconfirmed and the next video starts from the draft again.
 

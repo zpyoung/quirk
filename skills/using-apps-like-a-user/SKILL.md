@@ -127,6 +127,10 @@ Per goal, repeat until the goal is done or stuck:
 4. **Act.** `likeuser.py act --run "$RUN" --obs <latest id> --action click --ref e7 --expect url`.
    Use `--ref` from the tree. Use `--x --y` (pixels of the latest screenshot) only when
    `tree_sparse` is true or the tree cannot see the target, and add `--target-name "<visible label>"`.
+   To check a control that changes only on hover, use `--action hover --expect screen` with the
+   same targets. Hover works on the web and in Electron renderers. On a native app it returns
+   `ERROR` (`unsupported_action`). A hover is never gated, and the pointer stays on the target, so
+   the new screenshot shows the hover state.
 5. **Read the status.** Then compare the new observation with the effect you intended. `OBSERVED`
    means something changed, not that the right thing changed. Look at the new screenshot.
 6. **Close the goal.** `likeuser.py verdict --run "$RUN" --goal g1 --status pass --summary-stdin`.

@@ -13,6 +13,11 @@
  * lets them through and only reports the URLs. In connected mode a navigation that fails or times
  * out is recorded as a network failure and the report is still written.
  *
+ * A page with a `<video>` or `<img>` also gets a `media` check, run once in the first context: every
+ * video must reach `loadedmetadata` within 15s with a non-zero `videoWidth`, every image a non-zero
+ * `naturalWidth`. A browser that cannot play H.264 does not fail an MP4 video; the check's `details`
+ * says it was not checked. The key is absent for a page with neither element.
+ *
  * A --no-js report carries `no_js: true`; a normal report has no such key.
  *
  * Writes OUT_DIR/report.json and four full-page screenshots, prints the report to stdout.
@@ -31,6 +36,7 @@ const SCHEMES = ["light", "dark"];
 const HEIGHT = 800;
 const MAX_DETAILS = 20;
 const NAV_TIMEOUT_MS = Number(process.env.QUIRK_VERIFY_NAV_TIMEOUT_MS) || 30000;
+const MEDIA_WAIT_MS = 15000;
 const LOCAL_SCHEMES = ["file:", "data:", "blob:", "about:"];
 
 const [, , fileArg, outArg, mode, flag, ...extra] = process.argv;
@@ -170,6 +176,56 @@ function sampleFallback() {
   return findings;
 }
 
+/**
+ * Runs inside the page. Returns null when the page has no `<video>` or `<img>`; otherwise
+ * `{failures, notes}`: a failure per video that errors, times out or has no picture and per image
+ * with no pixels, and a note per MP4 video skipped because this browser cannot play H.264.
+ */
+async function sampleMedia(waitMs) {
+  const videos = [...document.querySelectorAll("video")];
+  const images = [...document.querySelectorAll("img")];
+  if (videos.length === 0 && images.length === 0) return null;
+  const failures = [];
+  const notes = [];
+  const canPlayH264 = document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E"') !== "";
+  const isMp4 = (el) =>
+    [el.getAttribute("src"), ...[...el.querySelectorAll("source")].map((s) => s.getAttribute("src"))].some(
+      (src) => src && /^data:video\/mp4|\.mp4(?:[?#]|$)/i.test(src),
+    );
+  const settled = (el, events, ready) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("timeout"), waitMs);
+      const done = (outcome) => () => {
+        clearTimeout(timer);
+        resolve(outcome);
+      };
+      if (ready()) return done("ready")();
+      for (const name of events) el.addEventListener(name, done(name), { capture: true, once: true });
+    });
+
+  for (const [i, video] of videos.entries()) {
+    const label = `video ${i + 1}`;
+    if (!canPlayH264 && isMp4(video)) {
+      notes.push(`${label} was not checked: this browser cannot play H.264`);
+      continue;
+    }
+    if (video.preload === "none") {
+      video.preload = "metadata";
+      video.load();
+    }
+    const outcome = await settled(video, ["loadedmetadata", "error"], () => video.readyState >= 1 || video.error);
+    if (video.error || outcome === "error") failures.push(`${label}: failed to load (media error ${video.error ? video.error.code : "on a source"})`);
+    else if (video.readyState < 1) failures.push(`${label}: no metadata within ${waitMs / 1000}s`);
+    else if (!(video.videoWidth > 0)) failures.push(`${label}: loaded with videoWidth 0`);
+  }
+  for (const [i, img] of images.entries()) {
+    if (img.loading === "lazy") img.loading = "eager";
+    await settled(img, ["load", "error"], () => img.complete);
+    if (!(img.naturalWidth > 0)) failures.push(`image ${i + 1}: naturalWidth 0${img.complete ? "" : " (still loading)"}`);
+  }
+  return { failures, notes };
+}
+
 function check(details) {
   return { passed: details.length === 0, details };
 }
@@ -180,6 +236,7 @@ async function verify(browser, label, sha) {
   const themeDetails = [];
   const navigationDetails = [];
   const fallbackDetails = [];
+  let media = null;
   const requests = new Set();
   const screenshots = [];
   let skippedBackgrounds = 0;
@@ -245,6 +302,13 @@ async function verify(browser, label, sha) {
           consoleDetails.push(`${run}: ${pending.length ? pending.join(" and ") : "q-flow, q-schema or q-sequence"} did not finish laying out within 10s`);
         }
       }
+      if (scheme === SCHEMES[0] && width === WIDTHS[0]) {
+        const sampled = await page.evaluate(sampleMedia, MEDIA_WAIT_MS);
+        if (sampled) {
+          const details = [...sampled.failures.map((f) => `${run}: ${f}`), ...sampled.notes];
+          media = { passed: sampled.failures.length === 0, details: details.slice(0, MAX_DETAILS) };
+        }
+      }
       await page.waitForTimeout(150);
 
       const shot = path.join(outDir, `${width}-${scheme}${noJs ? "-nojs" : ""}.png`);
@@ -291,6 +355,7 @@ async function verify(browser, label, sha) {
     network,
   };
   if (noJs) checks.fallback = check(fallbackDetails.slice(0, MAX_DETAILS));
+  if (media) checks.media = media;
   const status = Object.values(checks).every((c) => c.passed) ? "passed" : "failed";
   return { status, file_sha256: sha, browser: label, checks, screenshots, requests: requestList, ...(noJs && { no_js: true }) };
 }

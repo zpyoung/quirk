@@ -249,6 +249,21 @@ def test_a_project_at_the_storyboard_stop_shows_the_plan_and_style_frames(tmp_pa
     assert "nothing to review" not in page and "data-seek" not in page
 
 
+def _build_warnings(proj: Path, env: dict) -> "list[str]":
+    proc = build(proj, env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return [w["detail"] for w in json.loads(proc.stdout)["checks"]["warnings"]]
+
+
+def test_a_built_review_page_has_no_figure_in_a_grid_without_a_span(project: Path, env: dict, tmp_path: Path) -> None:
+    storyboard_only = make_project(tmp_path, "2026-10-22-plan")
+    (storyboard_only / "storyboard.md").write_text(STORYBOARD)
+    (storyboard_only / "frames-storyboard").mkdir()
+    (storyboard_only / "frames-storyboard" / "hook-3s.png").write_bytes(b"png")
+    for proj in (project, storyboard_only):
+        assert not [w for w in _build_warnings(proj, env) if "q-grid" in w]
+
+
 def test_a_storyboard_without_style_frames_says_so(tmp_path: Path, env: dict) -> None:
     proj = make_project(tmp_path)
     (proj / "storyboard.md").write_text(STORYBOARD)
