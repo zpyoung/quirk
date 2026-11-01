@@ -235,3 +235,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-29: Code tour gaps the blind run noted and this branch did not fix
+- **Deferred**: 2026-11-01
+- **Why deferred**: Acceptance was signed off without them and none blocks a tour. Items, mostly in skills/explaining-features/references/code-tour.md and scripts/code_tour.py: the reference says about 14 rows but an author only finds the real limit by building; lit that covers every row highlights nothing; short stops leave the lower third of the frame empty; wrapped code lines have no hanging indent; a stop's narration can move ahead of its highlight (BUTTON stop in the blind tour); verify numbers passing re-runs as attempts though only failed runs count; doctor and studio usage are missing from the reference; the blind tour gave three of 5 stops to one CSS file though the reference says one stop per file.
+- **Estimated effort**: M
+- **Priority**: P3
+
