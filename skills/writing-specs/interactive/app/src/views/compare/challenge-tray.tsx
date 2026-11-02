@@ -7,6 +7,7 @@ import { Token } from '@astryxdesign/core/Token'
 import { COMPARE_EXPORT_KIND, allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, partitionStars, targetHash } from '../../compare-state'
 import type { Comparison, CompareExport, CompareState, Draft } from '../../compare-types'
 import { EXPORT_KIND, localStamp, readPayload } from '../../review-state'
+import { deliverExport } from '../../deliver-export'
 import { DraftCard, saveDraftEdit } from './score-drawer'
 
 interface ChallengeTrayProps {
@@ -46,15 +47,9 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
   const [status, setStatus] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const exportChallenges = () => {
+  const exportChallenges = async () => {
     const data = createCompareExport(slug, renderId, comparisonId, comparison, state)
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${slug}-challenges-${localStamp(new Date())}.json`
-    anchor.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    const result = await deliverExport(data, `${slug}-challenges-${localStamp(new Date())}.json`)
     update((draft) => {
       draft.lastExport = {
         at: data.exportedAt,
@@ -63,7 +58,7 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
         historyCounts: allHistoryCounts(comparison),
       }
     })
-    setStatus(`Exported ${data.challenges.length} challenge${data.challenges.length === 1 ? '' : 's'} and ${data.stars.length} must-have${data.stars.length === 1 ? '' : 's'}.`)
+    setStatus(result === 'posted' ? 'Sent to the agent' : `Exported ${data.challenges.length} challenge${data.challenges.length === 1 ? '' : 's'} and ${data.stars.length} must-have${data.stars.length === 1 ? '' : 's'}.`)
   }
 
   const importFile = (file: File) => {
