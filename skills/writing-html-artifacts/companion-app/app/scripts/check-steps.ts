@@ -12,6 +12,9 @@ const fixtureDir = resolve(appRoot, '../fixtures/steps/valid')
 
 const failures: string[] = []
 const fail = (where: string, message: string) => failures.push(`${where}: ${message}`)
+const same = (actual: unknown[], expected: unknown[], what: string) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail('design paragraphs', `${what}: got ${JSON.stringify(actual)}`)
+}
 
 const actions: Actions = {
   submit: async () => 'ok',
@@ -156,6 +159,33 @@ for (const file of files) {
       }
     }
   }
+}
+
+// design paragraphs carry `section:<id>/p<n>`, 0-based in document order, from markdown, agent HTML and the diagram alike
+{
+  const section = (sections: unknown[], changed?: { summary: string; blocks: string[] }) =>
+    render(snapshot({ id: 'sd', nonce: 'n', v: 1, kind: 'design-section', stage: 'design', title: 'T', index: 1, total: 1, sections, ...(changed ? { changed } : {}) } as unknown as Step))
+  const ids = (html: string) => [...html.matchAll(/data-block-id="(section:[^"]*\/p\d+)"/g)].map((m) => m[1])
+  const md = ['First paragraph.', '- a\n- b', '1. one\n2. two', '```\ncode\n```', '> quoted', '| h |\n|---|\n| c |', '## Heading', 'Last **one**.'].join('\n\n')
+  const mdHtml = section([{ id: 'arch', title: 'Arch', body_md: md }])
+  same(ids(mdHtml), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'].map((p) => `section:arch/${p}`), 'markdown block ids')
+  if (!/<p data-block-id="section:arch\/p0">First paragraph\.<\/p>/.test(mdHtml)) fail('design paragraphs', 'p0 is not the first paragraph')
+  if (!/<li>a<\/li>/.test(mdHtml)) fail('design paragraphs', 'list items must not take block ids')
+  same(ids(section([{ id: 'arch', title: 'Arch', body_md: md }])), ids(mdHtml), 'ids are not stable across renders')
+
+  const agentHtml = '<p>One</p>\n<!-- note -->\n<ul><li><p>nested</p></li></ul><div class="a>b" data-x="1"><p>inner</p></div><q-flow summary="s"><span data-q-flow-node="a">A</span></q-flow><script>if (a < b) {}</script><img src="x"><table><tr><td>c</td></tr></table>'
+  const htmlOnly = section([{ id: 'data', title: 'Data', body_html: agentHtml }])
+  same(ids(htmlOnly), ['p0', 'p1', 'p2', 'p3', 'p4'].map((p) => `section:data/${p}`), 'agent HTML block ids')
+  if (!/<q-flow data-block-id="section:data\/p3" summary="s">/.test(htmlOnly)) fail('design paragraphs', 'the q-flow container is not numbered')
+  if (!/<div data-block-id="section:data\/p2" class="a>b" data-x="1">/.test(htmlOnly)) fail('design paragraphs', 'a div with ">" in an attribute is not numbered whole')
+
+  const mixed = section([{ id: 'x', title: 'X', body_md: 'a\n\nb', body_html: '<p>c</p><p data-commentable="own">d</p>', diagram: 'graph LR; A-->B' }])
+  same(ids(mixed), ['p0', 'p1', 'p2', 'p4'].map((p) => `section:x/${p}`), 'markdown, agent HTML and diagram numbering')
+  if (!/data-commentable="own"/.test(mixed) || /data-block-id="section:x\/p3"/.test(mixed)) fail('design paragraphs', 'an agent-marked block must keep its own id')
+
+  const marked = section([{ id: 'arch', title: 'Arch', body_md: 'a\n\nb' }], { summary: 's', blocks: ['section:arch/p1'] })
+  if (!/data-block-id="section:arch\/p1" data-changed="true"/.test(marked)) fail('design paragraphs', 'a changed paragraph is not highlighted')
+  if (/data-block-id="section:arch\/p0" data-changed/.test(marked)) fail('design paragraphs', 'an unchanged paragraph is highlighted')
 }
 
 const waitingStatus: Status = { text: 'Checking approaches', progress: '2/3', interruptible: true, started_at: new Date().toISOString() }
