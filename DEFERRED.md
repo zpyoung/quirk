@@ -235,3 +235,12 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-29: SDD Step 5 must pass each plan task's effort hint to the implementer dispatch
+- **Deferred**: 2026-11-02
+- **Session context**: plans-dag-shape: writing-plans task-sizing and effort rules
+- **Why deferred**: writing-plans now requires effort: lower | default | higher on every task, relative to the executor's implementer default. SDD Step 5 pins effort: "high" for every implementer and the Roles table lists Implementer effort as high, so the hint is dropped. SDD is owned by the zpyoung/sdd-dag-dispatch branch, so the plans-dag-shape branch does not edit it. Map the hint absolutely, because the Agent tool's relative lower/higher steps from the session effort, not from SDD's pinned high: lower -> medium, default -> high, higher -> xhigh. The pi binding maps to the matching --thinking level, capped by model.json. Fixers stay high. tests/test_adversarial_review_skill.py asserts 'effort: "high"' in sdd_step(5) and needs updating with it.
+- **Estimated effort**: S
+- **Priority**: P2
+- **Proposed owner**: zpyoung/sdd-dag-dispatch
+

@@ -39,9 +39,51 @@ def test_shaping_section_states_the_four_rules_and_the_size_ceiling() -> None:
                  "3. **Split long tasks along disjoint file scopes.**",
                  "4. **Put cross-cutting test harnesses in one late task.**"):
         assert rule in shaping
-    assert "**size ceiling** is about 2,000 hand-written lines or 20 hand-written" in shaping
-    assert "200 hand-written lines a minute" in shaping
+    assert "the size ceiling** is about 2,000 hand-written lines or 20 hand-written files" in shaping
     assert "not lockfiles, build output, or other generated files" in shaping
+
+
+def test_time_estimate_separates_dividing_model_time_from_non_dividing_tool_time() -> None:
+    shaping = _flat(_section(SKILL.read_text(), SHAPING, "## Bite-Sized Task Granularity"))
+    sizing = shaping[shaping.index("**Size and time.**"):shaping.index("1. **Pin shared shapes")]
+    for term in ("**Floor:** about 1–2 minutes", "**Model time:** expected output tokens divided by about 170 tokens a second",
+                 "Model time divides when a task splits", "**Tool time:**", "It does not divide"):
+        assert term in sizing, term
+    assert "share one machine" in sizing
+
+
+def test_critical_path_target_and_ceiling_are_reconciled() -> None:
+    shaping = _flat(_section(SKILL.read_text(), SHAPING, "## Bite-Sized Task Granularity"))
+    sizing = shaping[shaping.index("**Size and time.**"):shaping.index("1. **Pin shared shapes")]
+    assert "**On the critical path, aim for 3–6 minute tasks.**" in sizing
+    assert "expected model time is over about 5 minutes" in sizing
+    assert "Off the critical path a bigger task costs no run time" in sizing
+    split = shaping[shaping.index("3. **Split long tasks"):shaping.index("4. **Put cross-cutting")]
+    assert "expected model time is over about 5 minutes" in split
+    assert "Pieces that would run one after another never shorten the path" in split
+    assert "Never split along a contract boundary the spec doesn't pin" in split
+
+
+def test_task_count_cap_states_its_reason_and_when_it_rises() -> None:
+    shaping = _flat(_section(SKILL.read_text(), SHAPING, "## Bite-Sized Task Granularity"))
+    count = shaping[shaping.index("**Task count.**"):shaping.index("**Effort.**")]
+    assert "critical-path estimate in minutes divided by 1.5" in count
+    assert "orchestrator's serial work fits inside the run" in count
+    assert "would rise if acceptance moved into the implementer" in count
+
+
+def test_every_task_carries_an_effort_hint() -> None:
+    body = SKILL.read_text()
+    shaping = _flat(_section(body, SHAPING, "## Bite-Sized Task Granularity"))
+    effort = shaping[shaping.index("**Effort.**"):shaping.index("**Trade-offs.**")]
+    assert "`lower`: mechanical work, such as fixtures, docs and skill text, and test wiring" in effort
+    assert "`higher`: a task that owns a seam" in effort
+    assert "Fixers" in effort and "`default` or `higher`" in effort
+    independence = _section(body, "## Task Independence", "## Plan Document Header")
+    assert "`scope.files` and `effort` are **required on every task**" in independence
+    assert re.search(r"^effort: default +# lower \| default \| higher", independence, re.MULTILINE)
+    template = _section(body, "## Task Structure", "## No Vagueness")
+    assert "\neffort: default\n" in template
 
 
 def test_splits_and_merges_keep_sdd_rules() -> None:
@@ -71,9 +113,12 @@ def test_shape_report_names_depth_critical_path_and_edge_kinds() -> None:
     assert lines[0].startswith("**DAG shape:** depth ")
     assert "critical path ≈" in lines[0]
     kinds = "(code|same-file|contract|harness)"
-    kept = [line for line in lines[1:] if not line.startswith("- removed:")]
+    assert re.search(r"· \d+ tasks \(cap \d+\) ·", lines[0])
+    kept = [line for line in lines[1:] if line.startswith("- T")]
     removed = [line for line in lines[1:] if line.startswith("- removed:")]
-    assert kept and removed, "the example shows kept and removed edges"
+    over = [line for line in lines[1:] if line.startswith("- over target:")]
+    assert kept and removed and over, "the example shows kept, removed, and over-target lines"
+    assert len(kept) + len(removed) + len(over) == len(lines) - 1
     for edge in kept:
         assert re.match(rf"- T[\d, T]+ ← T[\d, T]+ · {kinds}: \S", edge), edge
     for edge in removed:
@@ -96,12 +141,14 @@ def test_self_review_audits_the_shape_inside_item_eight() -> None:
     item = _flat(_section(review, "**8.", "If you find issues"))
     assert "Shaping the DAG for wall-clock time" in item
     assert "size ceiling" in item and "`DAG shape` block" in item
+    assert "3–6 minutes" in item and "under its cap" in item and "`effort` hint" in item
     assert "**9." not in review
 
 
 def test_plan_reviewer_checks_the_shape() -> None:
     row = next(line for line in REVIEWER.read_text().splitlines() if "| DAG Shape |" in line)
     for token in (*EDGE_KINDS, "depth", "critical path", "2,000 hand-written lines or 20 hand-written files",
-                  "single owner"):
+                  "single owner", "3–6 minutes", "divided by 1.5", "`effort` hint",
+                  "contract the spec doesn't pin"):
         assert token in row
 
