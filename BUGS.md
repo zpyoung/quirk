@@ -348,3 +348,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: test_post_json_inline_and_from_file fails deterministically with KeyError: 'Content-Type'; the POST sent with --json reaches the stub server without a Content-Type header. Reproduces at eb13d77, before the companion-first work, on macOS with python3. Found during the SDD wave gate for companion-first brainstorming; unrelated to that change. Two more tests in the same file also fail at eb13d77 and likely share the cause: test_total_timeout_covers_every_phase_and_spares_an_existing_out_file[/stall-error-500] and test_connection_failure_is_logged_with_status_zero.
 - **Severity**: medium
 
+## BUG-43: Companion design paragraphs wrapped in a link get no comment block ids
+- **Observed**: 2026-11-02
+- **File**: skills/writing-html-artifacts/companion-app/app/src/section-blocks.ts:127
+- **Description**: annotateSectionHtml only numbers a paragraph-like element when every open ancestor is a container tag, so agent HTML like <div><a href="#x"><p>One</p><p>Two</p></a></div> puts one section:<id>/p0 id on the div and none on the paragraphs; those paragraphs can't take comment pins and a changed-block highlight lands on the next paragraph. Found in the final review loop of the companion-first brainstorming run (third numbering defect in a row in this scanner); the user chose to ship and log it. Likely fix: treat every non-paragraph-like tag as transparent, or number in the live DOM.
+- **Introduced by**: companion-first brainstorming SDD run (FR1-O1 fix)
+- **Severity**: low
+
