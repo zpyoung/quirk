@@ -63,27 +63,33 @@ digraph process {
     "Preflight" [shape=box];
     "Tech spec if warranted" [shape=box];
     "Decompose inline" [shape=box];
-    "Dispatch wave" [shape=box];
-    "Audit, accept, commit, merge" [shape=box];
-    "Wave gate (selected tests)" [shape=box];
-    "Has a successor?" [shape=diamond];
-    "Checkpoint review (1 round)" [shape=box];
-    "More waves?" [shape=diamond];
+    "Dispatch every ready task" [shape=box];
+    "A dispatch completes" [shape=box];
+    "Audit, accept, commit" [shape=box];
+    "Merge mergeable tasks" [shape=box];
+    "Targeted gate" [shape=box];
+    "Window holds a subject?" [shape=diamond];
+    "Open checkpoint (concurrent, 1 round)" [shape=box];
+    "All merged, no checkpoint open?" [shape=diamond];
     "Final gate (full suite, once)" [shape=box];
     "Final loop" [shape=box];
     "finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
-    "Preflight" -> "Tech spec if warranted" -> "Decompose inline" -> "Dispatch wave";
-    "Dispatch wave" -> "Audit, accept, commit, merge" -> "Wave gate (selected tests)" -> "Has a successor?";
-    "Has a successor?" -> "Checkpoint review (1 round)" [label="yes"];
-    "Has a successor?" -> "More waves?" [label="no"];
-    "Checkpoint review (1 round)" -> "More waves?";
-    "More waves?" -> "Dispatch wave" [label="yes"];
-    "More waves?" -> "Final gate (full suite, once)" [label="no"];
+    "Preflight" -> "Tech spec if warranted" -> "Decompose inline" -> "Dispatch every ready task";
+    "Dispatch every ready task" -> "A dispatch completes" -> "Audit, accept, commit";
+    "Audit, accept, commit" -> "Merge mergeable tasks" -> "Targeted gate" -> "Window holds a subject?";
+    "Window holds a subject?" -> "Open checkpoint (concurrent, 1 round)" [label="yes"];
+    "Window holds a subject?" -> "All merged, no checkpoint open?" [label="no"];
+    "Open checkpoint (concurrent, 1 round)" -> "All merged, no checkpoint open?";
+    "All merged, no checkpoint open?" -> "Dispatch every ready task" [label="no"];
+    "All merged, no checkpoint open?" -> "Final gate (full suite, once)" [label="yes"];
     "Final gate (full suite, once)" -> "Final loop";
     "Final loop" -> "finishing-a-development-branch";
 }
 ```
+
+A task dispatches as soon as its own dependencies have merged, and a checkpoint holds back only the
+merges of tasks that build on what it is reviewing. Step 4 owns the scheduling rules.
 
 ### Step 1: Preflight
 
@@ -129,12 +135,23 @@ card when applicable. Derive `AUTHOR_FAMILY` mechanically from the selected impl
 `RUN_BASE`, after the clean-tree check. Never silently swap a backend later.
 
 Open the **run journal** in scratch, outside the repository (a worker with edit tools could
-otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, the backend record
-(`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), dependency demotions, projected wave shapes,
-each worktree's `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>` recorded at dispatch, task status and
-component commits, reviewer outputs, findings with IDs and rulings, dismissals, fix commits,
-each gate's `GATE_CMDS`, `FIX_BASE`, and `unguarded` / `selection miss` entries,
-`tree_test_cache`, and `ROUND_<r>_HEAD` / `LAST_ROUND_HEAD`.
+otherwise commit or clobber it). It holds `RUN_BASE`, the backend record (`IMPLEMENTER`,
+`AUTHOR_FAMILY`, `REVIEWER_ALIAS`), `WIDTH_CAP` and `CHECKPOINT_CAP`, ordering-edge
+reclassifications, the projected schedule shape, reviewer outputs, findings with IDs and rulings,
+dismissals, `tree_test_cache`, and `ROUND_<r>_HEAD` / `LAST_ROUND_HEAD`. Scheduling goes into an
+**append-only event log**, one timestamped line per event, so the run can be replayed to show what
+ran when and on which commit:
+
+- `dispatch` / `return`: task or fixer ID, attempt, `TASK_BASE_<n>`, `TASK_HEAD_<n>`, status word
+- `accept` / `commit`: `WORKTREE_TREE_<n>`, `TASK_COMMIT_<n>`
+- `merge`: task ID and the new `INTEGRATION_HEAD`
+- `gate`: `GATE_BASE_<g>` (or `FIX_BASE`), the tasks or packets it covers, its `GATE_CMDS`, any
+  `unguarded` paths, green or red, and the new `GREEN_HEAD` when green; the final gate's
+  `FINAL_GATE_CMDS` and any `selection miss`
+- `checkpoint-open` / `checkpoint-close`: `CHECKPOINT_BASE_<k>`, `CHECKPOINT_HEAD_<k>`, covered
+  tasks, held dependents, fix commits
+- `hold`, `rework`, `merge-as-is`, `supersede`, `stop`: task ID and one-line reason
+- `cap-bind`, `lock-wait`, `checkpoint-cap`: which ready task or window waited, and on what
 
 ### Step 2: Tech spec, only when warranted
 
@@ -170,94 +187,165 @@ costs more than it returns. Skipping it is a decision already made, not an overs
 correct — and "this plan is unusually high-stakes" is not new information, because every run
 believes that.
 
-Before computing waves, audit every declared `dependencies` edge for semantic motivation: keep it
-in the wave graph only when the target genuinely needs the source's output. An edge motivated only
-by file overlap is **demoted**, not deleted: remove it from the wave graph, but retain it as an
-ordering constraint for the component chain containing both tasks. Demotion is load-bearing because
-connected components guarantee co-location, not order; deleting the edge could run a task before
-the shared-file work it was declared after.
+Before scheduling, audit every declared `dependencies` edge for semantic motivation: keep it as a
+**dependency edge** only when the target genuinely needs the source's output. An edge motivated
+only by file overlap becomes an **ordering edge**. It still keeps the target from dispatching
+until the source merges, because the two share a file and the plan said which goes first. It does
+not hold the target's merge behind the source's checkpoint, and no checkpoint fix to the source
+triggers the target's rework (Step 4), because the target consumes none of the source's behavior.
+Reclassify the edge rather than deleting it: the scope lock would still keep the pair apart, but
+without the edge it could run them in the opposite order. Journal every reclassification.
 
-Verify every demotion rather than assuming it preserves order:
+Then check the graph of dependency and ordering edges for a cycle. A cycle is a plan defect: stop
+before dispatch and report it. Do not drop an edge to force an order — which edge goes decides
+which task's output the other one misses, and that choice belongs to the plan author.
 
-1. Demote all overlap-only edges and assign waves from the remaining dependency graph.
-2. For every demoted edge `source → target`, require `wave(source) ≤ wave(target)`.
-   - If `wave(source) < wave(target)`, wave separation preserves the order; keep the demotion.
-   - If `wave(source) = wave(target)`, shared scope puts both tasks in one component whose chain
-     honors the edge; keep the demotion.
-   - If `wave(source) > wave(target)`, the demotion inverted the order; revert that demotion.
-3. Recompute waves and repeat the check until no demoted edge is inverted.
+### Step 4: Schedule
 
-The loop terminates because reverting a demotion only moves its target later, never earlier, so an
-edge cannot be reverted twice. This verification preserves the common wave-count reduction without
-turning a recorded ordering hint into a wrong-order acceptance failure.
+There are no waves and no barriers. The scheduler is a loop over the run's state: a task dispatches
+the moment its own inputs exist, and nothing waits on a task unless it has to.
 
-### Step 4: Waves
+#### State, locks, and readiness
 
-A **wave** is a set of tasks whose dependencies are satisfied. Sort by the audited `dependencies`
-graph from Step 3. Within each wave:
+Each task is `pending`, `running`, `accepted` (audited, accepted, and committed on its own branch by
+Step 6), `merged`, `superseded`, or `stopped`. `GREEN_HEAD` is the newest integration commit whose
+targeted gate (Step 7) passed, and it starts at `RUN_BASE`. Every dispatch forks from it.
 
-1. Build the **scope-conflict graph**: one node per task, with an edge whenever two tasks'
-   `scope.files` intersect.
-2. Take its connected components. This produces deterministic, maximal groups whose union scopes
-   are disjoint from every other component's union scope.
-3. Run each component as a serialized chain and run different components concurrently. Order each
-   chain by topological sort over the demoted edges with both endpoints in that component, with
-   plan task order as the tie-break — a topological order is not unique, and without a fixed
-   tie-break the same plan schedules differently on every run.
+A task holds a **scope lock** on its `scope.files` from dispatch until its merge is inside
+`GREEN_HEAD`, or until it is superseded or stopped and its branch discarded. A fixer holds one on its
+write scope the same way. Holding the lock until the merge is green, not just until the worker
+exits, is what makes every merge conflict-free: any task merged after another forked was either
+locked at that fork or dispatched behind that task's own lock.
 
-A cycle is reachable only through demotion, which lifts edges out of the wave graph: a plan that
-declared circular `dependencies` clears wave assignment anyway and surfaces the cycle inside a
-chain, where no order satisfies it. Stop the wave and report the cycle as a plan defect. Do not
-drop an edge to force an order — which edge goes decides which task's output the other one misses,
-and that choice belongs to the plan author.
+A pending task is **ready** when every dependency and ordering predecessor is merged into
+`GREEN_HEAD` and its `scope.files` are disjoint from every held lock. Readiness ignores checkpoints:
+a task whose dependency is under review dispatches anyway, and the checkpoint holds its merge
+instead (below).
 
-The invariant remains **no two concurrent tasks share a file**; grouping enforces it without
-serializing unrelated components. There is no "small overlap" exemption. Two agents editing one
-file in separate worktrees collide at merge, and both outcomes cost more than serializing would
-have. Overlapping hunks conflict, which stops the wave and throws away the parallelism the overlap
-was meant to buy. Disjoint hunks are worse: git combines them cleanly into a version **neither
+The lock is how the invariant **no two concurrent tasks share a file** is enforced. There is no
+"small overlap" exemption. Two agents editing one file in separate worktrees collide at merge, and
+both outcomes cost more than serializing would have. Overlapping hunks conflict, which stops the
+run for a re-plan. Disjoint hunks are worse: git combines them cleanly into a version **neither
 agent wrote or tested** — each one's acceptance passed against its own copy of the file, and nothing
-re-checks the combination until the wave's build/test gate, where you meet it as a symptom rather
-than a cause. Distance within the file does not make overlap safe; it only decides which of the two
-failures you get. Component union scopes are disjoint by construction, so their branches cannot
-conflict when they merge.
+re-checks the combination until a gate, where you meet it as a symptom rather than a cause.
+Distance within the file does not make overlap safe; it only decides which of the two failures you
+get. A shared path serializes only the tasks that share it, never the rest of the run.
 
-Set and record a soft width cap of roughly 4–6 concurrent **dispatches**. The cap bounds worker
-processes, not retained worktrees: every started component keeps its tree until the wave-end barrier,
-so retained trees necessarily reach the wave's full component count. A cap on trees would never
-release a slot and the overflow queue could not drain; disk checkouts are the uncapped cost, while
-unsandboxed model processes are the bounded one. Record whenever the cap binds so a throttled run
-is not misreported as a naturally narrow one.
+A fixer never waits on a task's lock: a held task releases its lock only after its checkpoint
+closes, and the checkpoint cannot close before its fixer merges, so the wait could deadlock. Any running or accepted task whose lock intersects a
+fixer's write scope is superseded (see the rework rule). A fixer does wait on another fixer's lock,
+except a fixer for a red gate, which supersedes whatever it intersects and is the only change that
+may merge onto a red tip.
 
-Queue overflow components **inside the same wave**; never defer them to a successor wave. Deferral
-would add a checkpoint review and force every component in the first group to finish before any in
-the second starts. Drain the queue according to the selected binding:
+#### Priority and the width cap
 
-- **pi binding:** each task dispatch is backgrounded, so the orchestrator observes an exit and
-  immediately gives the freed dispatch slot to the next queued component. This is true backfill.
-- **Claude binding:** a foreground message does not return until every dispatch in that message
-  returns, so a freed slot is unobservable and backfill is impossible. Drain overflow as lockstep
-  batches inside the same wave: dispatch up to the cap, wait for the whole batch, then dispatch the
-  next batch until every non-stopped chain is exhausted.
+When more tasks are ready than there are slots, or two ready tasks share a file, dispatch first the
+task with the longest downstream path (the most tasks on any chain of dependency or ordering edges
+leading out of it), then the lower plan task order. The longest path sets the run's makespan, and
+the fixed tie-break makes the same plan schedule the same way on every run.
 
-A Claude batch carries one task per selected component and fills to the cap in this order:
+Record `WIDTH_CAP`, a soft cap of roughly 4–6 concurrent implementer and fixer dispatches. It bounds
+unsandboxed model processes, not worktrees or branches. An accepted task waiting to merge holds a
+lock and a branch but no slot, so a long checkpoint never starves the cap. Journal a `cap-bind`
+event whenever a ready task waits for a slot, so a throttled run is not misreported as a naturally
+narrow one.
 
-1. The next **unaccepted** task of components whose chains are already **in progress**.
-2. If slots remain, the first task of components that have not started.
+#### The scheduling pass
 
-For both selections, order components by descending chain length, breaking ties by the lowest task
-ID in the component. This order makes the batch count derivable and favors the longest makespan;
-in-progress chains come first because starving a chain adds a full round, while an unstarted
-component adds only its own chain length. A retry is not a separate scheduling case: the failed task
-remains its chain's next unaccepted task and occupies an in-progress slot. If that task fails its
-retry, stop the chain and surface it; it consumes no more batch slots.
+Run this pass whenever a dispatch completes and whenever a checkpoint's lenses return or its fixes
+merge:
 
-Before dispatch, report and journal the projected wave shape: component count per wave, tasks in
-each component, whether the width cap binds, and which binding-specific drain applies. For the
-Claude binding, also report the derived batch count and the lockstep cost: each round costs the
-maximum duration of that round's selected links, and the total is the sum of those batch maxima,
-not an optimistic independent-chain maximum. Queueing never creates another wave, so it never
-creates another checkpoint.
+1. Run Step 6's audit, acceptance, and commit for every returned task and fixer.
+2. If the integration tip is `GREEN_HEAD`, merge every mergeable accepted task, one at a time, in
+   priority order (Step 6). A task is **mergeable** when each of its dependencies has been covered
+   by a checkpoint that has closed or was skipped, and every rework ruling recorded for it says
+   merge as-is. A dependency is always a subject, so a merge never skips its review.
+3. Run the merge gate (Step 7) once over this pass's merges, with `GATE_BASE_<g>` the tip before
+   the first of them. The gate runs in the foreground of the pass; it is targeted, so this costs
+   seconds to minutes, and running workers are unaffected. Green advances `GREEN_HEAD` to the tip.
+   Red leaves `GREEN_HEAD` where it was.
+   Nothing merges onto the red tip until a fix makes it green, and new dispatches keep forking from
+   the last green head, so work that does not depend on the red merges carries on.
+4. Open a checkpoint if the window since the last one now contains a subject (below).
+5. Dispatch every ready task, in priority order, up to `WIDTH_CAP`.
+
+A checkpoint does not wait for the full suite. It waits for nothing but the targeted gates of the
+merges it covers, and those already passed in step 3 of the pass that opened it.
+
+When every task is merged into `GREEN_HEAD` and no checkpoint is open, the run takes Step 7's
+final gate and then the final loop. If nothing is running, nothing is ready, no checkpoint is open, and tasks remain, a stopped
+task is blocking its dependents: surface it.
+
+#### Checkpoints
+
+A checkpoint exists to reduce the chance of building on a defect. Only a task that something builds
+on can cause that, so only those tasks open one.
+
+- **Subject.** A task with at least one dependent through a dependency edge. A task with nothing
+  downstream, or only ordering successors, is never a subject. It never opens a checkpoint and never
+  holds anything back; the final loop reviews it.
+- **Window.** Checkpoint `k` covers `CHECKPOINT_BASE_<k>..CHECKPOINT_HEAD_<k>`: from the previous
+  checkpoint's head (`RUN_BASE` for the first) to `GREEN_HEAD` when it opens. It covers every task
+  merged in that range, subjects or not, plus any fix merged there by an earlier checkpoint. A fix
+  never makes a window a subject on its own: a fix merged after the last subject is reviewed by
+  the final loop.
+- **Opening.** Open checkpoint `k` in the pass whose gate made the window contain a subject, as long
+  as fewer than `CHECKPOINT_CAP` (default 2) checkpoints are open. Otherwise the window keeps
+  growing until one closes. Each open checkpoint gets its own `$WORK` directory for Step 8, seeded
+  with the gate record (`gate-check.json`) for `CHECKPOINT_HEAD_<k>`.
+- **Holds.** A checkpoint holds the *merge*, never the dispatch, of every dependency-edge dependent of
+  the tasks it covers. Nothing else is held: leaves, unrelated tasks, and ordering successors run
+  and merge on their own schedule.
+- **Closing.** Run Step 8's one checkpoint round and Step 9's adjudication and fixers, then merge
+  each fix through Step 6 with a green fix-batch gate (Step 7). Record a rework ruling for every held dependent
+  that is running or accepted, then close the checkpoint.
+
+**Rework rule.** A held dependent is **superseded** when a fix in the closing checkpoint changed
+something it builds on:
+
+- the fix diff touches a path in the dependent's `scope.files`, or
+- the fix changes a contract that the dependent's task text excerpts or calls: a signature, a
+  request or response field, a status code, an error enum, an event shape. For example, a fix that
+  makes a draft body carry the step id, or makes a draft for a non-current step return 409,
+  supersedes every held dependent that sends drafts.
+
+Otherwise the ruling is **merge as-is**: the dependent merges onto a tip that includes the fix, and
+that merge's targeted gate checks the combination. Journal each ruling with its reason.
+
+Rule as early as you can. When adjudication accepts a finding, its fixer's write scope and any
+contract change are already known, so supersede the affected dependents then rather than at close;
+that releases their locks while the fixer works. At close, re-check the remaining held dependents
+against the actual fix diff. A dependent held by several checkpoints gets a ruling from each, and
+any supersede ruling wins.
+
+A superseded dependent is discarded, not patched. A running one finishes first and still gets its
+HEAD-check and scope audit, which keeps the signal about a misbehaving worker; then its worktree and
+branch go. An accepted one's branch goes at once. Either way it returns to `pending` carrying the
+revised contract excerpt, which the fix batch must also update in the plan and in `tech.md`. It is
+not ready again until the checkpoint that superseded it has closed, and it then redispatches from
+the new `GREEN_HEAD`. A redispatch after supersession is a fresh attempt, not the
+task's one retry. Dependents that had not dispatched when the checkpoint closed need no ruling: they
+fork from a head that already holds the fix.
+
+**Why dependents proceed, but only one level deep.** Making dependents wait for review puts the
+whole review latency on every dependency edge, so the run idles exactly as it would behind a
+level-by-level barrier. Letting them merge unreviewed lets a contract change land in merged code
+and cascade through everything built on top of it. Holding only the merge gets the overlap without the cascade. The dependent builds
+while its dependency is reviewed, and because it cannot merge, nothing downstream of it has started.
+A contract change therefore costs at most one re-implementation of the held tasks that consume it,
+and never a patch to merged code. The price is that a dependent's own dependents start only once the
+checkpoint covering its dependencies closes, so each dependency level costs the longer of build time
+and review time instead of their sum.
+
+You may skip a checkpoint for a genuinely trivial window; record a reason naming why. A skipped
+checkpoint closes at once, and every ruling it would have made is merge as-is.
+
+#### Shape preview
+
+Before the first dispatch, report and journal the projected shape: task count, dependency and
+ordering edges, the initial ready set, the critical path (the longest chain of edges, in tasks), the
+subjects that will open checkpoints, the leaves that never block anything, the peak width the graph
+allows against `WIDTH_CAP`, and the binding.
 
 If the plan projects as a pure chain with depth N and width 1, surface that shape once and name the
 dependency edges forcing it. Do not auto-re-decompose it; the user may know that the semantic
@@ -265,36 +353,39 @@ ordering is genuine, and guessing otherwise would override the plan's contract.
 
 ### Step 5: Dispatch
 
-Create one worktree and branch per component, forked from `WAVE_BASE` (the feature branch tip before
-the wave). Chain every task in that component through the same tree so each task sees its
-predecessors' uncommitted work. Create worktrees serially — concurrent `git worktree add` races on
+Create one worktree and branch per task, forked from `GREEN_HEAD` at dispatch, and record that
+commit as `TASK_BASE_<n>`. The worktree therefore holds every merged dependency and nothing that has
+not passed a gate. Create worktrees serially — concurrent `git worktree add` races on
 `.git/config.lock`. The main tree remains the integration tree and receives no task dispatch.
 
-For each selected task, stage `assets/implementer-prompt.md` with the task, contract, acceptance,
-`scope.files`, component worktree path, and any DO-NOT-CHANGE fences. Immediately before every
-attempt, record the worktree's HEAD and capture the `CHAIN_SNAPSHOT_<n>` that Step 6 defines:
+For each task, stage `assets/implementer-prompt.md` with the task, contract, acceptance,
+`scope.files`, worktree path, and any DO-NOT-CHANGE fences, re-resolving every contract excerpt
+against `TASK_BASE_<n>`. Immediately before every attempt, record the worktree's HEAD:
 
 ```bash
 git -C "$WT" rev-parse HEAD   # record as TASK_HEAD_<n> at dispatch
 ```
 
-Dispatch one implementer per selected task through the binding named by `IMPLEMENTER`, explicitly
+Dispatch one implementer per ready task through the binding named by `IMPLEMENTER`, explicitly
 pinning `effort: "high"`. Any Explore / codebase survey dispatch uses `low` or `medium` effort.
+Both bindings run in the background, so every completion is an event that triggers Step 4's pass
+and a freed slot is refilled in the same turn.
 
-**Claude binding** — `Agent` subagent, Sonnet, foreground, one per selected task in a single batch
-message. The foreground binding is unchanged; the Step 4 scheduler composes each capped batch. A
-message returns only after all its tasks return, so component chains advance in lockstep rounds
-rather than independently. For components `A=[30,5,5]` and `B=[5,30,5]` minutes, those rounds cost
-65 minutes rather than the 40 an independent-chaining model predicts.
+**Claude binding** — `Agent` subagent, Sonnet, `run_in_background: true`, one call per task. The
+orchestrator must be the main session: the incident record reports "3/3 captains stalled on
+background-dispatch re-invocation" (`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`),
+and those captains were subagents dispatching in the background, which nothing re-invoked. An
+orchestrator running as a subagent dispatches in the foreground instead, so each message returns
+only when every task in it does. In that mode, dispatch every ready task up to the cap in one
+message and run one pass over all the returns.
 
-Accept this limit rather than backgrounding the Claude binding. The incident record reports "3/3
-captains stalled on background-dispatch re-invocation"
-(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`), and the foreground binding
-exists to avoid repeating that failure. The wave-shape preview states the lockstep cost instead of
-overstating the gain; lockstep is still never slower than serializing the entire wave.
+A background `Agent` call has no wrapper to bound it. On every pass, check each Claude dispatch
+older than 30 minutes, the same bound the pi wrapper sets: stop it and evaluate its tree as an
+absent report (Failure routing). If background dispatch itself fails to launch, fall back to the
+foreground mode above for the rest of the run, and journal why.
 
 **pi binding** — append `assets/pi-worker-delta.md` (referenced by path, not restated here) to the
-staged prompt, then per selected task:
+staged prompt, then per task:
 
 ```bash
 "$(command -v gtimeout || command -v timeout)" 1800 pi-watch --cwd "$WT" --alias codex \
@@ -306,8 +397,8 @@ implementer-scale task. The timeout wrapper is `gtimeout` (macOS) / `timeout` (L
 split `quirk:pi-dev` documents; the block resolves it at dispatch so it runs verbatim on either
 host, and exits 127 if neither exists rather than dispatching unwrapped. The wrapper is
 load-bearing for liveness here, not just hygiene: it is what guarantees every dispatch terminates
-and produces an exit code, so a hung worker becomes a timed-out one rather than a wave that never
-completes. `--tools read,bash,edit,write`
+and produces an exit code, so a hung worker becomes a timed-out one rather than a dispatch that
+never completes. `--tools read,bash,edit,write`
 grants `bash` because the delta file's TDD block requires the worker to run its own tests and watch
 them fail before implementing. That block is condensed into the delta rather than pasted verbatim
 from `quirk:test-driven-development` (a pasted copy would diverge from the source silently) or
@@ -315,194 +406,133 @@ dropped (the two backends would then build differently, invisibly). `--require-t
 verifies the worker's last few lines carry a well-formed `STATUS: <word>` trailer — it checks shape
 only; the four legal values stay this skill's vocabulary, not `pi-watch`'s.
 
-The pi binding backgrounds one task per component at a time. After a task returns and passes Step
-6's mid-chain gate, its component's next task becomes dispatchable in the same tree. Components
-advance independently, and each exited process releases a width-cap slot for Step 4's true
-backfill.
-
 One shared prompt core (`assets/implementer-prompt.md`, unchanged) plus one small delta appended for
 pi — not two fully self-contained prompts, which would drift the way this skill's own Red Flags
 table warns about.
 
-**The tree is the source of truth; the worker's report is advisory** — for both bindings. The
-Claude binding still runs in the foreground; the pi binding runs backgrounded, and only tree state
-can safely gate a backgrounded dispatch. The incident record documents failures on *both* paths in
-one sentence: "3/3 captains stalled on background-dispatch re-invocation, one fix-worker report was
-lost to a foreground timeout (commit survived)"
-(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). The commit survived because
-the orchestrator, not the worker, audits the diff and runs acceptance — so a missing or unparseable
-report costs a status word, never the work. See Failure routing for how Step 6's HEAD-check, scope
-audit, and acceptance resolve what the report could not.
+**The tree is the source of truth; the worker's report is advisory** — for both bindings. Both
+dispatch in the background, and only tree state can safely gate a backgrounded dispatch. The
+incident record documents failures on *both* dispatch modes in one sentence: "3/3 captains stalled
+on background-dispatch re-invocation, one fix-worker report was lost to a foreground timeout
+(commit survived)" (`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). The
+commit survived because the orchestrator, not the worker, audits the diff and runs acceptance — so a
+missing or unparseable report costs a status word, never the work. See Failure routing for how Step
+6's HEAD-check, scope audit, and acceptance resolve what the report could not.
 
 ### Step 6: Audit, accept, commit, merge
 
-The order *is* the gate — each step is what makes the next one safe. Each task gets a mid-chain
-audit and acceptance pass that gates its component's next dispatch, but **no commit happens before
-the wave-end barrier**. Once all components return, the authoritative HEAD-check and scope audit
-run once over every live component tree plus the main tree; only then does the orchestrator commit
-and merge each component.
+The order *is* the gate — each step is what makes the next one safe. Every task and fixer passes it
+when it returns, in its own worktree, and nothing reaches the integration branch except a commit
+whose tree is exactly the one that passed:
 
-A pi worker has no sandbox and full filesystem access, so committing component A while component B
-is still running risks missing a write B makes into A's tree afterward. The two wave-level checks
-below are **unconditional** — they run for Claude-implemented tasks too. Contamination is not
+> task returns → HEAD-check → scope audit → acceptance → commit, verified against the accepted tree
+> → merge once Step 4 finds it mergeable
+
+A pi worker has no sandbox and full filesystem access, so it can write into a sibling's worktree or
+the main tree, and with per-task dispatch some worker is almost always running. There is no quiet
+moment in which one audit could see everything, so each check pins down exactly what it lets
+through instead: the commit must equal the tree that was audited and accepted, and the main tree
+must be clean at every merge. A write that lands anywhere afterward cannot ride into the branch.
+These checks are **unconditional** — they run for Claude-implemented tasks too. Contamination is not
 backend-specific and the commands are cheap, so branching would leave the Claude path with a weaker
-audit for no reason. The rule that gates concurrent components cares which files a task touches,
-not which model wrote them, so pi and Claude tasks share a wave under the same rule.
+audit for no reason. The lock that keeps concurrent tasks apart cares which files a task touches,
+not which model wrote them, so pi and Claude tasks run side by side under the same rule.
 
-> each task returns → HEAD-check → task scope audit → task acceptance → advance its chain;
-> whole wave returns → authoritative HEAD-check and component scope audit → commit → merge
+**1. HEAD-check.** Verify that the worktree's HEAD still equals `TASK_HEAD_<n>`. A mismatch means
+the worker committed and bypassed the audit: stop that task and surface it — no soft reset, which
+would absorb the violation instead of surfacing that a worker ignored an explicit instruction. This
+is a **detection heuristic, not a guarantee**: it catches a plain commit or an `--amend`, not a
+commit followed by `git reset --soft` back to `TASK_HEAD_<n>`, which restores the checked value while
+leaving the tree exactly as committed. The gap does not weaken what follows — the scope audit,
+acceptance, and commit all operate on the true working-tree diff, not on commit history — it only
+loses the signal that a worker ignored an instruction.
 
-#### Mid-chain gate: attribute and accept one task
-
-Immediately before dispatching the *n*-th task in a component chain, capture
-`CHAIN_SNAPSHOT_<n>`: a map from path to `(mode, blob)` over every path in that component tree that
-differs from `WAVE_BASE` or is untracked. Re-capture it before a retry of the same task because
-every dispatch needs its own before-state.
-
-```bash
-git -C "$WT" diff --raw -z --no-renames "$WAVE_BASE"   # tracked paths
-git -C "$WT" ls-files --others --exclude-standard -z   # untracked paths
-git -C "$WT" hash-object -- "$PATH"                    # content for an existing path
-```
-
-Build the map from two disjoint path sets; neither command supplies the whole record by itself:
-
-- **Tracked paths** are those reported by `git diff --raw` against `WAVE_BASE`. Use its status and
-  destination mode, then run `hash-object` for content on every path except status `D`. Record a
-  deleted path with a deletion sentinel for both mode and blob because `hash-object` exits 128 on
-  an absent path. `--raw` is required because the
-  destination mode exposes a mode-only edit and status `D` represents a predecessor-deleted path.
-  Do not use its destination object ID as content: it is all zeros for an unstaged worktree edit,
-  so repeated edits to an already-dirty path would look identical.
-- **Untracked paths** are those reported by `git ls-files --others --exclude-standard`, with
-  `.gitignore` honored by `--exclude-standard`. `--raw` does not report them, so derive mode from
-  the filesystem by git's rule: `120000` for a symlink,
-  `100755` when the owner-execute bit is set, and `100644` otherwise. Get content with
-  `hash-object`; the path exists because `ls-files` just reported it.
-
-The first task in a freshly forked component snapshots an empty map, making its mid-chain audit the
-same as the former per-task audit. Rename detection stays off and untracked files stay included, for
-the same reasons as the wave-end audit.
-
-When the task returns, first verify that the tree's HEAD still equals its `TASK_HEAD_<n>`, then
-recompute the map by the same rules. A mismatch means the worker committed and bypassed the audit:
-stop that task and surface it — no soft reset, which would absorb the violation instead of
-surfacing that a worker ignored an explicit instruction. This is a **detection heuristic, not a
-guarantee**: it catches a plain commit or an `--amend`, not a commit followed by `git reset --soft`
-back to `TASK_HEAD_<n>`, which restores the checked value while leaving the tree exactly as
-committed. The gap does not weaken what follows — the scope audit, acceptance, and commit all
-operate on the true working-tree diff, not on commit history — it only loses the signal that a
-worker ignored an instruction.
-
-Derive the task's changed-path set as the **symmetric difference** of `CHAIN_SNAPSHOT_<n>` and the
-recomputed map:
-
-| Condition | Attribute to this task as |
-| --- | --- |
-| Present only in the new map | Created |
-| Present only in the snapshot | Deleted, including an untracked predecessor-created path |
-| Present in both with a different `(mode, blob)` | Content edit, repeated dirty-path edit, or mode-only edit |
-
-A one-directional scan is insufficient: an untracked path created by a predecessor and deleted by
-this task disappears from both git commands, so only the snapshot-side comparison attributes it.
-Audit exactly this changed-path set against the current task's own `scope.files`. Run the HEAD and
-scope portions for every returned attempt, including one reported as `BLOCKED` or `FAILED`; otherwise
-a retry snapshot would absorb unaudited work into its before-state. A component-union audit cannot
-replace this check because it cannot detect task 1 writing a file owned only by task 3's scope.
-
-**A scope violation blocks the chain and the commit — including when the out-of-scope change is
-correct.** Correctness is not the question the audit asks. A concurrent component may be editing
-that file in another worktree, so the "necessary" fix either conflicts at merge or disappears into
-an auto-combined version nobody tested; either way you learn about it much later, from a symptom
-rather than a cause. Stop the wave, surface it, and re-plan. Widening scope is a decision you surface
-to the user, not one you make to keep moving — widening retroactively breaks the component
-partition that made the wave legal.
-
-Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
-
-After the scope audit passes, define
-`worktree_tree_identity(WT, WAVE_BASE) = (git -C "$WT" rev-parse HEAD^{tree}, sha256(canonical_json(CHAIN_SNAPSHOT_AFTER)))`,
-where `CHAIN_SNAPSHOT_AFTER` is the recomputed `(mode, blob)` map from the audit above.
-For each exact `acceptance_cmd`, look up `(worktree_tree_identity, acceptance_cmd)` in the run
-journal's `tree_test_cache`. Reuse an existing passing orchestrator-verified entry; otherwise run
-the task's narrow acceptance command once in that tree, exactly as written, and record the result.
-Populate this cache only from orchestrator or `prepass` executions, never from a worker's text
-claim alone: a claim never overrides a run.
-
-Acceptance gates chain progress: a failure means nothing is committed, nothing is merged, and the
-next task does not dispatch. Once scope and acceptance pass, mark this task accepted and advance
-the chain without committing; its successor sees the accepted uncommitted work.
-
-A retried task repeats this entire gate with a fresh `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>`. The
-invariant the hoist must preserve is: no tree's diff reaches acceptance without an audit that
-observed that diff. Both retry paths in Failure routing (`Implementer BLOCKED / FAILED`, and task
-acceptance failure) produce a *new* diff after the prior audit, so a retry must not reuse that pass.
-This is the case that matters most: a retried pi worker is exactly the case where an unsandboxed
-writer would otherwise get a second, unobserved pass at the tree. A second failure stops the chain,
-surfaces it, and leaves its component uncommitted with its worktree preserved.
-
-#### Wave-end barrier: audit and commit components
-
-Nothing commits until every component has returned. Mid-chain checks gate progress but cannot make
-a tree final: a live pi sibling can contaminate it after an earlier pass, so the wave-end HEAD-check
-and scope audit remain authoritative.
-
-**1. Verify HEAD everywhere.** Each component worktree's HEAD must equal its latest recorded
-`TASK_HEAD_<n>`, and the main tree's HEAD must still equal `WAVE_BASE`:
+**2. Scope audit.** Diff the working tree against `TASK_BASE_<n>`, untracked files included, and
+require every changed path to be inside the task's own `scope.files`:
 
 ```bash
-git -C "$WT" rev-parse HEAD
-```
-
-Apply the same stop-without-reset response and detection-heuristic limits as the mid-chain check.
-The main-tree check matters because no task owns that tree; a moved integration branch is a barrier
-violation even when its worktree happens to be clean.
-
-**2. Audit every tree's scope.** In each component worktree, diff the working tree against
-`WAVE_BASE` and require every changed path to be inside the union of that component's task scopes.
-Implementers do not commit, so their accumulated work sits uncommitted in the component tree. Diff
-against the working tree, not between two commits — a two-commit range reports nothing, because
-nothing has been committed yet:
-
-```bash
-git -C "$WT" diff --name-only -z --no-renames "$WAVE_BASE"
+git -C "$WT" diff --name-only -z --no-renames "$TASK_BASE"
 git -C "$WT" ls-files --others --exclude-standard -z
 ```
 
-Rename detection is off so a rename reports both paths; untracked files are included so a new
-out-of-scope file is caught. The union-scope pass observes the complete component diff and catches
-late contamination; the per-task snapshot passes remain necessary for attribution. A path outside
-its owner's declared scope is a violation regardless of which worker wrote it, so this pass names
-the victim rather than the culprit — a sibling component's unsandboxed write surfaces in the tree
-it landed in, not the one it came from. The response is the same either way.
+Implementers do not commit, so their work sits uncommitted, and a two-commit range would report
+nothing. Rename detection is off so a rename reports both paths; untracked files are included so a
+new out-of-scope file is caught; `--exclude-standard` honors `.gitignore`. One task per tree means
+the whole diff is this task's, so attribution needs no snapshot. Run the HEAD-check and scope audit
+for every returned attempt, including one reported as `BLOCKED` or `FAILED`: a retry inherits the
+tree, and its audit must observe everything in it.
 
-Run the same two diff commands in the main tree and require **no diff at all**. No task owns the
-main tree, so any change there is an unsandboxed worker's write that the component-tree audits
-cannot see. Treat any diff as contamination: stop the wave and surface it.
+**A scope violation blocks the task and the commit — including when the out-of-scope change is
+correct.** Correctness is not the question the audit asks. A concurrent task may be editing that file
+in another worktree, so the "necessary" fix either conflicts at merge or disappears into an
+auto-combined version nobody tested; either way you learn about it much later, from a symptom rather
+than a cause. Stop the task, surface it, and re-plan. Widening scope is a decision you surface to
+the user, not one you make to keep moving — widening retroactively breaks the lock that let the task
+run beside its neighbors.
 
-**3. Commit each component as a unit.** After every task is accepted and every tree passes the
-authoritative checks, commit the audited, accepted accumulated work once on each component branch.
-You commit it — the worker
-never does, because a worker that commits its own work has already bypassed the gate the HEAD-check
-exists to protect. The mid-chain passes never commit. Component-level history gives up per-task
-bisect granularity; that trade is accepted to preserve the barrier.
+Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
 
-**4. Merge** each audited component branch into the feature branch, one at a time:
+**3. Acceptance.** Compute the tree the audit just observed, without touching the worktree's own
+index:
+
+```bash
+IDX="$SCRATCH/index-$TASK_ID"; rm -f "$IDX"
+GIT_INDEX_FILE="$IDX" git -C "$WT" read-tree HEAD
+GIT_INDEX_FILE="$IDX" git -C "$WT" add -A
+GIT_INDEX_FILE="$IDX" git -C "$WT" write-tree   # record as WORKTREE_TREE_<n>
+```
+
+`worktree_tree_identity(WT)` is that tree hash: tracked edits and untracked files, exactly as the
+audit saw them, in the same object format as a commit's `HEAD^{tree}`. For each exact
+`acceptance_cmd`, look up `(worktree_tree_identity, acceptance_cmd)` in the run journal's
+`tree_test_cache`. Reuse an existing passing orchestrator-verified entry; otherwise run the task's
+narrow acceptance command once in that tree, exactly as written, and record the result. Populate
+this cache only from orchestrator or `prepass` executions, never from a worker's text claim alone:
+a claim never overrides a run.
+
+A failure means nothing is committed and the task's dependents stay pending. A retried task repeats
+steps 1–3 in the same worktree with a fresh `TASK_HEAD_<n>`, so its audit observes the retry's diff
+together with the failed attempt's. The invariant is: no tree's diff reaches acceptance without an
+audit that observed that diff. Both retry paths in Failure routing (`Implementer BLOCKED / FAILED`,
+and acceptance failure) produce a *new* diff after the prior audit, so a retry must not reuse that
+pass. This is the case that matters most: a retried pi worker is exactly the case where an
+unsandboxed writer would otherwise get a second, unobserved pass at the tree. A second failure stops
+the task, surfaces it, and preserves its worktree.
+
+**4. Commit.** You commit it — the worker never does, because a worker that commits its own work has
+already bypassed the gate the HEAD-check exists to protect. Commit on the task branch, then prove the
+commit is what passed:
+
+```bash
+git -C "$WT" add -A && git -C "$WT" commit -q -m "$TASK_ID: $TASK_TITLE"
+git -C "$WT" rev-parse HEAD^{tree}   # must equal WORKTREE_TREE_<n>
+git -C "$WT" status --porcelain      # must print nothing
+```
+
+A different tree means something wrote into the worktree after the audit: acceptance output that is
+not ignored, or a sibling's unsandboxed write. Treat it as a scope violation: stop the task and
+surface it. Record `TASK_COMMIT_<n>`, mark the task accepted, and remove the worktree, since the
+branch carries the work from here. Preserve the worktree on any failure.
+
+**5. Merge.** When Step 4 finds the task mergeable, merge its branch into the feature branch in the
+main tree. First require the main tree's HEAD to equal the last recorded `INTEGRATION_HEAD` and
+`git status --porcelain` to print nothing. No task owns that tree, so any change there is an
+unsandboxed worker's write that no worktree audit can see: stop dispatch and surface it.
 
 ```bash
 git merge --no-ff --no-edit "$BRANCH"
 ```
 
-Component union scopes are disjoint by construction, so these cannot conflict. **A conflict means
-the precondition was violated** — stop and re-plan rather than resolving it.
-
-Tear down a worktree only after its branch merges; preserve it on failure.
+The scope lock keeps every task disjoint from everything merged after it forked, so this cannot
+conflict. **A conflict means the precondition was violated** — stop and re-plan rather than
+resolving it. Record the merge commit as `INTEGRATION_HEAD`. Merge one branch at a time; Step 7's
+targeted gate runs once over the pass's merges.
 
 ### Step 7: Gates
 
 Mid-run gates run **selected tests**, and the full suite runs **once**, in the final gate before
-the final loop. A wave's real signal comes from its own tests, which take seconds to minutes; a
-full suite after every wave idles the orchestrator and holds every checkpoint behind it. PR CI runs
+the final loop. A merge's real signal comes from its own tests, which take seconds to minutes; a
+full suite after every merge pass idles the orchestrator and holds every checkpoint behind it. PR CI runs
 the full suite again on the finished branch. `COMPONENT_CHECKS` run locally in every gate that
 touches them, because CI may not have their toolchain.
 
@@ -527,13 +557,14 @@ tree and plan always yield the same commands:
 Over-selection costs seconds. Under-selection is what the final gate exists to catch, so do not
 hand-pick tests beyond this rule.
 
-**A wave that cannot name its tests runs no tests.** When step 3 finds no test file, or preflight
+**A merge pass that cannot name its tests runs no tests.** When step 3 finds no test file, or preflight
 found no runner that takes test-file arguments, drop step 3 and journal why; the gate keeps its
 build, acceptance, and component-check commands. Never substitute `FULL_SUITE_CMD` mid-run. Journal
 any changed non-test path whose tokens hit no test file as `unguarded`; the final gate covers it.
 
-The **wave gate** is `select_gate(WAVE_BASE, <the wave's tasks>)`. A **fix-batch gate** is
-`select_gate(FIX_BASE, <the batch's packets>)`, where `FIX_BASE` is HEAD before the batch commits and
+The **merge gate** is `select_gate(GATE_BASE_<g>, <the tasks that pass merged>)`, run once per
+scheduling pass (Step 4). A **fix-batch gate** is
+`select_gate(FIX_BASE, <the batch's packets>)`, where `FIX_BASE` is HEAD before the batch merges and
 each packet contributes its fixer's acceptance commands and write scope. Journal each list as that
 tree's `GATE_CMDS`.
 
@@ -549,28 +580,28 @@ list, which is what makes its reuse exact.
 
 #### Final gate
 
-The final gate replaces the last wave's gate and runs once on HEAD. It is the build command, the
-last wave's acceptance commands, `FULL_SUITE_CMD`, and every `COMPONENT_CHECKS` entry whose prefix
+The final gate replaces the merge gate of the pass that merges the last task and runs once on HEAD.
+It is the build command, that pass's acceptance commands, `FULL_SUITE_CMD`, and every `COMPONENT_CHECKS` entry whose prefix
 contains a path in `git diff --name-only --no-renames "$RUN_BASE" HEAD`. Journal it as
 `FINAL_GATE_CMDS` and record it the same way, so Final Round 1 reuses a green full-suite result.
-A single-wave run has only this gate. Fix batches inside the final loop take fix-batch gates, not
+A run whose tasks all merge in one pass has only this gate. Fix batches inside the final loop take fix-batch gates, not
 the full suite; the final summary names the tree the full suite passed on and leaves the post-fix
 tree to PR CI.
 
 #### Red gates
 
-**A red gate is a hard stop for the affected component.** Do not dispatch reviewers over a red
-build. If failure is solely an unowned test file outside the wave's `scope.files` asserting
-pre-wave behavior the wave's contract intentionally replaced, automatically dispatch a scoped
-wave-gate fixer (`effort: "high"`) owning that test file in `scope.files`. Apply Step 6's
-audit/accept/commit gate to the fixer and re-run this wave's gate without a blocking human question.
+**A red gate is a hard stop for the merges it covers.** Do not dispatch reviewers over a red
+build. If failure is solely an unowned test file outside the merged tasks' `scope.files` asserting
+pre-merge behavior their contracts intentionally replaced, automatically dispatch a scoped
+merge-gate fixer (`effort: "high"`) owning that test file in `scope.files`. Apply Step 6's
+audit/accept/commit gate to the fixer and re-run that merge gate without a blocking human question.
 If failure instead exposes a contract conflict, ask via Tier 2 `orca ask --timeout-ms 600000`
-with the recommended default: halt the conflicting component and open a fix task. Continue only
-unblocked components. For other failures, fix the defect or establish a flake with an isolated
-reproduction before proceeding; a plausible diagnosis alone does not clear the gate.
+with the recommended default: halt the conflicting task and open a fix task. Continue only work
+that does not depend on the red merges (Step 4). For other failures, fix the defect or establish a
+flake with an isolated reproduction before proceeding; a plausible diagnosis alone does not clear the gate.
 
 **A red final gate is a miss the selected-test gates let through.** The same rules apply, with the
-run's contract in place of the wave's: replaced test contracts get a scoped final-gate fixer,
+run's contract in place of the merged tasks': replaced test contracts get a scoped final-gate fixer,
 contract conflicts go to Tier 2, and anything else is fixed or reproduced in isolation as a flake.
 Fixes pass Step 6's audit/accept/commit gate. Then re-run the whole final gate: Final Round 1 needs a
 green full-suite record for that exact tree, so a red final gate costs a second full-suite run.
@@ -583,33 +614,33 @@ and Playwright `BrowserContext` reuse per worker, without mutating target-repo c
 
 #### Checkpoints
 
-After every wave **that has a successor**, run a checkpoint review. The final wave gets none — the
-final loop covers it. A single-wave run therefore has no checkpoints at all; this is the core
-branch-level review principle working as designed, not a missing gate.
-
-You may skip a checkpoint for a genuinely trivial non-final wave; record a reason naming why.
+Checkpoints open from Step 4's windows, never as a step after a gate. A checkpoint waits only for
+the targeted gates of the merges it covers. A run with no subjects has no checkpoints at all; this
+is the core branch-level review principle working as designed, not a missing gate.
 
 ### Step 8: Review
 
-**Checkpoint** — three reviewers over `git diff --no-renames "$WAVE_BASE" HEAD`, **one round**.
-Pass `--depth standard` explicitly to all three lenses at non-final wave checkpoints.
-Adjudicate, dispatch fixers, commit the fix batch, run its fix-batch gate (Step 7), continue. One round is
-deliberate: a checkpoint reduces the chance of building on a defect; it does not certify the wave,
-and the final loop re-examines everything anyway.
+**Checkpoint** — three reviewers over the window
+`git diff --no-renames "$CHECKPOINT_BASE_<k>" "$CHECKPOINT_HEAD_<k>"` (Step 4), **one round**.
+Pass `--depth standard` explicitly to all three lenses at checkpoints.
+Adjudicate, dispatch fixers, merge the fix batch through Step 6, run its fix-batch gate (Step 7), then
+record rework rulings and close the checkpoint (Step 4). One round is deliberate: a checkpoint
+reduces the chance of building on a defect; it does not certify the window, and the final loop
+re-examines everything anyway.
 
 **Final loop** — Final Round 1 reviews `RUN_BASE..HEAD` with `--depth deep` explicitly on all three
 lenses. Record `ROUND_<r>_HEAD` at the start of every final round; for `r >= 2`, set
 `LAST_ROUND_HEAD = ROUND_<r-1>_HEAD`.
 
 **Final Rounds 2–5** use closure mode only when every fixer in round `r-1` stayed within its declared
-component `scope.files` and required no wave re-plan. Set `target` to `"$LAST_ROUND_HEAD..HEAD"` and keep `--depth deep`.
+component `scope.files` and required no re-plan. Set `target` to `"$LAST_ROUND_HEAD..HEAD"` and keep `--depth deep`.
 Append a `### Closure Round Verification` section to each lens's `criteria`, carrying only that
 lens's prior accepted findings filtered by `id_prefix`: `C` gets `C*`, `S` gets `S*`, `X` gets `X*`.
 Include the fix delta and touched contract seams (`scope.files` of the fix batch); omit fixer
 narratives and adjudication reasoning. Never put prior accepted findings in `dismissed[]`.
 The reviewer omits fixed findings, retains original IDs for still-open ones, and uses `"id": null`
 for new regressions. Fall back to full discovery over `RUN_BASE..HEAD` if any fixer in round `r-1`
-modified files outside its declared component scope or required a wave re-plan; this does not waive Step 6's scope-violation gate.
+modified files outside its declared component scope or required a re-plan; this does not waive Step 6's scope-violation gate.
 
 The review itself is delegated to **quirk:adversarial-review**. Invoke it once per lens, all three
 concurrently:
@@ -622,7 +653,7 @@ Run `adversarial-review resolve` once per round to produce `resolve.json`, then
 `adversarial-review prepass` once per round with `--reuse-check "$WORK/gate-check.json"` and one
 `--check-cmd` per command of the latest gate on the current tree, to produce `prepass.json`:
 
-- at a checkpoint, the wave gate's `GATE_CMDS`;
+- at a checkpoint, the `GATE_CMDS` of the merge gate that produced `CHECKPOINT_HEAD_<k>`;
 - in Final Round 1, `FINAL_GATE_CMDS`, which includes `--check-cmd "$FULL_SUITE_CMD"`;
 - in Final Rounds 2–5, the previous round's fix-batch `GATE_CMDS`.
 
@@ -639,7 +670,7 @@ Each invocation gets:
 
 | Input | Value |
 | --- | --- |
-| `target` | `"$WAVE_BASE..HEAD"` at a checkpoint, `"$RUN_BASE..HEAD"` in Final Round 1, `"$LAST_ROUND_HEAD..HEAD"` in closure rounds |
+| `target` | `"$CHECKPOINT_BASE_<k>..$CHECKPOINT_HEAD_<k>"` at a checkpoint, `"$RUN_BASE..HEAD"` in Final Round 1, `"$LAST_ROUND_HEAD..HEAD"` in closure rounds |
 | `profile` | `code-diff` |
 | `lens` | this reviewer's lens, from the three above |
 | `id_prefix` | a distinct prefix per lens — `C` correctness, `S` spec, `X` security. Each gate numbers from 1 on its own, so without this all three lenses return an `F1` and Step 9's merge cannot tell them apart |
@@ -660,8 +691,8 @@ instead, which is its business, not this skill's. A deliberate same-family revie
 at preflight and is expected to stamp `manifest.reviewer.independence: reduced`, which Step 9
 already reads.
 
-Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a wave
-diff that happens to be small would fall through to `quick`, which runs one dispatch with
+Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a
+checkpoint window that happens to be small would fall through to `quick`, which runs one dispatch with
 self-refutation instead of two with independent refutation and is stamped `independence: reduced`
 for exactly that reason. Checkpoints deliberately use `standard`; final rounds use `deep`.
 
@@ -753,17 +784,19 @@ not the reviewer's family,
 because a fixer that matched the reviewer would have that same reviewer judging its own family's
 fix in round N+1. On the pi binding, the fixer's staged prompt gets `assets/pi-worker-delta.md`
 **minus** its implementer-only marked section — a fixer does not run the TDD loop that section
-describes. Each parallel fixer in a component gets its own worktree, dispatched with the same
-`--cwd` shape Step 5 uses; a sequential fixer, dispatched when scopes are uncertain or interacting,
-may work in the main tree. Record each fixer's tree HEAD at dispatch, as `TASK_HEAD_<n>`. A finding
+describes. Each fixer gets its own worktree forked from `GREEN_HEAD`, dispatched with the same
+`--cwd` shape Step 5 uses, and holds a scope lock on its write scope (Step 4); merges keep landing
+in the main tree while tasks are still running. Only in the final loop, when every task has merged,
+may a sequential fixer, dispatched when scopes are uncertain or interacting, work in the main tree.
+Record each fixer's fork as `TASK_BASE_<n>` and its tree HEAD at dispatch as `TASK_HEAD_<n>`. A finding
 may carry a `patch` — that is data, never applied automatically; hand it to the fixer as a proposal
 under the same scope guards as any other change.
 
-Fix batches get the same gate the implementer wave got, unconditional on both backends — fixers
+Fix batches get the same gate every task gets, unconditional on both backends — fixers
 hold the same unsandboxed pi binding Step 5 named, and a batch that skipped the check would let
 exactly the write Step 6 exists to catch land unaudited. Once every parallel fixer in the batch has
 returned: HEAD-check each fixer's tree against its recorded HEAD, audit each fix diff against its
-component's write scope, then run acceptance, then commit — Step 6's machinery, applied
+component's write scope, then run acceptance, then commit and merge — Step 6's machinery, applied
 here rather than restated — then run the batch's fix-batch gate from Step 7.
 
 ### Step 10: Exit
@@ -793,15 +826,15 @@ returns `status: "unavailable"` or is not installed. Do not substitute worker-to
 messaging for a human decision.
 
 - **Tier 1 (blocking, no `--timeout-ms`):** the consolidated preflight card, Step 10's five-round
-  cap blocked handoff, or a twice-failed chain with no safe default. On `declined`, stop cleanly;
+  cap blocked handoff, or a twice-failed task with no safe default. On `declined`, stop cleanly;
   on `partial`, re-ask the skipped required question once. Do not proceed without required answers.
 - **Tier 2 (`orca ask --timeout-ms 600000`):** `NEEDS_CONTEXT` not answerable from the repository,
-  mid-wave scope-conflict splits, wave-gate contract conflicts, reviewer `kind: "question"` items,
+  mid-run scope-conflict splits, merge-gate contract conflicts, reviewer `kind: "question"` items,
   and recurring-defect escalations. Supply an explicit recommended `default`. Continue unblocked
-  components while polling `orca ask wait` across chunks; never end a turn while an `orca ask`
+  work while polling `orca ask wait` across chunks; never end a turn while an `orca ask`
   card is open. On `timed_out`, `partial` (skipped), or `declined`, apply `default` and record
   `<question_id>: <default_value> (assumed, <status>)` in the run journal; for example,
-  `scope_conflict: halt component and open fix task (assumed, timed_out)`.
+  `scope_conflict: halt task and open fix task (assumed, timed_out)`.
 - **Tier 3 (logged digest, 0 wait):** Step 9 review-finding adjudications. Record the ruling, print
   the per-round digest, and dispatch fixers immediately; queue any later user veto for the next batch.
 
@@ -824,32 +857,34 @@ the table wins.
 
 | Situation | Response |
 | --- | --- |
-| Implementer `BLOCKED` / `FAILED` | Retry once with a fresh worker and the failure in its prompt; on a second failure, stop the chain; Tier 1 if no safe default |
+| Implementer `BLOCKED` / `FAILED` | Retry once with a fresh worker and the failure in its prompt; on a second failure, stop the task and leave its dependents pending; Tier 1 if no safe default |
 | `NEEDS_CONTEXT` | Answer from the spec/codebase when derivable; otherwise Tier 2 with a recommended default |
-| Mid-chain task acceptance fails | Do not advance or commit; retry once; on a second failure stop the chain; Tier 1 if no safe default |
-| Mid-chain or wave-end scope audit fails | Do not advance, commit, or merge the affected component; surface for re-plan via Tier 2 scope-conflict split; do not widen scope silently |
-| `CHAIN_SNAPSHOT_<n>` cannot be captured or recomputed | Attribution is unavailable; do not run acceptance or advance the chain; stop and surface |
-| Demoted edge has `wave(source) > wave(target)` | Revert that demotion, recompute waves, and repeat until no demoted edge is inverted |
+| Task acceptance fails | Do not commit; retry once; on a second failure stop the task; Tier 1 if no safe default |
+| Scope audit fails, or the commit's tree differs from `WORKTREE_TREE_<n>` | Do not commit or merge the task; surface for re-plan via Tier 2 scope-conflict split; do not widen scope silently |
+| Main tree dirty, or its HEAD differs from `INTEGRATION_HEAD`, before a merge | An unsandboxed write landed in the integration tree; stop dispatch and merges, surface, re-plan |
+| Graph of dependency and ordering edges has a cycle | Plan defect; stop before dispatch and report the cycle; do not drop an edge |
 | Projected shape is a pure chain | Surface it once with the forcing dependency edges; do not auto-re-decompose |
-| pi width cap binds with queued components | Keep them in the same wave and backfill the next queued component whenever a dispatch exits |
-| Claude width cap binds with queued components | Keep them in the same wave and drain lockstep batches using the fixed in-progress-first, longest-chain-first order |
-| A Claude task fails its retry | Stop that chain and remove it from later batches; surface it rather than stalling the remaining components |
-| Merge conflict between component branches | Component-scope disjointness was violated; stop and re-plan |
-| Wave or fix-batch gate red | Step 7's hard gate; auto-dispatch only the scoped wave-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
-| Wave gate selects no test file | Run no tests for that wave, keep its other gate commands, journal why and the `unguarded` paths |
+| Width cap binds with ready tasks waiting | Dispatch in priority order as slots free; journal `cap-bind` |
+| Ready task's scope intersects a held lock | It waits for that lock; a fixer instead supersedes the task holding it (Step 4) |
+| Merge or fix-batch gate red | Step 7's hard gate; `GREEN_HEAD` stays put, nothing merges onto the red tip, dispatch continues from `GREEN_HEAD`; auto-dispatch only the scoped merge-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
+| Checkpoint fix touches a held dependent's scope or changes a contract it builds on | Supersede the dependent and redispatch it from the new `GREEN_HEAD` with the revised contract (Step 4 rework rule) |
+| Checkpoint blocked (a lens `NOT_REVIEWABLE` or failed after retries) | Its held dependents stay held; tasks that do not depend on its covered tasks continue |
+| Nothing running, nothing ready, no checkpoint open, tasks remain | A stopped task blocks its dependents; surface it |
+| Merge conflict between a task branch and the integration tip | The scope lock was violated; stop and re-plan |
+| Merge gate selects no test file | Run no tests for that pass, keep its other gate commands, journal why and the `unguarded` paths |
 | Final gate red | Same red-gate rules; fix through Step 6, re-run the whole final gate, journal each failing test file as a `selection miss` |
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
-| Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
+| Dependency misdeclared | Stop dispatching the affected tasks, amend the graph, re-run affected downstream work |
 | Five-round review cap reached with accepted CRITICAL/HIGH | Tier 1 blocked handoff; explicit user override required |
 | `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
-| Background dispatch never re-invokes the orchestrator | The `gtimeout`/`timeout` wrapper bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
-| Any task retried after its prior mid-chain audit | Capture a fresh HEAD and snapshot, then re-run scope audit before acceptance |
+| Background dispatch never re-invokes the orchestrator | pi: the `gtimeout`/`timeout` wrapper bounds every dispatch, so the job terminates regardless. Claude: stop any dispatch older than 30 minutes on the next pass. Either way, completion is decidable from the tree rather than from a notification |
+| Background `Agent` dispatch fails to launch | Fall back to foreground dispatch for the rest of the run: every ready task in one message, one pass over the returns; journal why |
+| Any task retried after its prior audit | Capture a fresh `TASK_HEAD_<n>`, then re-run the scope audit over the whole tree before acceptance |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
-| Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
 | Reviewer alias unreachable at preflight | Offer only verified pairs in the consolidated card; no reachable alias means `task-fallback` with one warning |
 
-Apply the tier and default above rather than improvising. Stop only the affected component when
-others remain unblocked; never end an orchestrator turn while a human card is pending.
+Apply the tier and default above rather than improvising. Stop only the affected task and its
+dependents when other work remains unblocked; never end an orchestrator turn while a human card is pending.
 
 ## Red Flags
 
@@ -859,19 +894,7 @@ rationalization is quoted; the reason it fails follows.
 | Rationalization | Why it fails |
 | --- | --- |
 | "Run the overlapping tasks in parallel, then inspect the shared file afterward and fix anything clobbered." | Inspection shows the file's final state, not whether anyone tested that state. A clean auto-merge of two disjoint hunks is exactly the case with nothing to notice. |
-| "One overlapping pair means the whole wave has to run sequentially." | Only that pair's connected component must serialize. Collapsing unrelated components throws away safe parallelism without strengthening the no-shared-file invariant. |
-| "The overlap-only dependency is redundant now; just delete it." | Components guarantee co-location, not order. Demote the edge into the component chain so the shared-file ordering hint survives. |
-| "Demotion can only make the plan faster, so the new waves do not need checking." | A target can move earlier than its source. Verify `wave(source) ≤ wave(target)` and revert inverted demotions before dispatch. |
-| "Cap live worktrees and start overflow when one is torn down." | Nothing tears down before the barrier, so no slot can open. The cap bounds concurrent dispatches; retained trees reach the component count. |
-| "Put overflow into the next wave; it is sequential either way." | A successor wave adds a checkpoint and a broader barrier. Overflow queues inside the existing wave and drains against its existing barrier. |
-| "Backfill the Claude batch whenever one task returns." | Foreground dispatch yields no orchestrator turn until the entire message returns. Claude overflow drains in lockstep batches, not by unobservable backfill. |
-| "Start all short queued components before advancing the long chain." | Starving an in-progress chain adds a full batch. In-progress chains come first, and descending chain length makes the projected batch count reproducible. |
-| "The before-and-after path lists identify what this task changed." | A repeated edit to a predecessor-dirtied path appears in both lists. Attribution requires `(mode, blob)` snapshots, not path-list subtraction. |
-| "Use `git diff --raw`'s object ID as the content snapshot." | Its worktree destination ID is all zeros for unstaged edits, so different contents compare equal. Hash existing paths with `hash-object`. |
-| "Only scan paths present after the task; deleted paths are gone anyway." | An untracked predecessor-created path deleted by this task vanishes from both git commands. The symmetric difference is what attributes it. |
-| "The task passed its mid-chain audit, so commit it before starting the next link." | A live sibling can still contaminate the tree. Mid-chain passes gate progress only; the component commits once after the wave-end barrier. |
-| "The component-union audit is enough; every changed path belongs to someone in the chain." | The union cannot detect task 1 writing a path declared only for task 3. Each task needs its own snapshot-based scope audit. |
-| "The mid-chain checks passed, so the wave-end audit is redundant." | A live unsandboxed sibling can write after a mid-chain pass. The barrier check remains authoritative over the final component diff. |
+| "The overlap-only dependency is redundant now; just delete it." | The scope lock keeps the pair apart but not in order. Reclassify it as an ordering edge so the declared order survives. |
 | "Scope declarations are a planning convenience to avoid collisions, not a correctness boundary." | They are exactly a correctness boundary. The audit is the only mechanism that catches a cross-task write before it lands. |
 | "The fix is correct, small, and documented — blocking on the wrong file is process theater." | A correct six-line fix to a file a sibling is editing is the change most likely to conflict at merge, or to land in a combination neither of you tested. |
 | "I'd message the other agent to make sure it rebases onto my commit." | No direct worker-to-worker messaging. All coordination is orchestrator-mediated. |
@@ -880,24 +903,38 @@ rationalization is quoted; the reason it fails follows.
 | "The reviewer has come back empty twice before and both retries found nothing — treat it as clean." | Repeated empty output is evidence the reviewer is broken, not evidence the branch is clean. |
 | "Accept the round and note that the spec lens returned no output three times." | Same trade as above: a note is not a review. |
 | "Dispatch the reviewers now and investigate the failing test in parallel — it's almost certainly a flake." | "Almost certainly" is a hypothesis. Re-running in isolation is a fact and costs less than the round you would waste. |
-| "Run the full suite after this wave too, just to be safe." | The final gate already runs it once, and a mid-run full suite idles the run and holds the checkpoint behind it. Widen selection only where the rule says to. |
-| "Every wave gate was green, so the final full suite is a formality; start Final Round 1." | Selected-test gates can miss a dependent test. The final gate is the only full-suite result the final reviewers reuse. |
+| "Run the full suite after this merge too, just to be safe." | The final gate already runs it once, and a mid-run full suite idles the run and holds the checkpoint behind it. Widen selection only where the rule says to. |
+| "Every merge gate was green, so the final full suite is a formality; start Final Round 1." | Selected-test gates can miss a dependent test. The final gate is the only full-suite result the final reviewers reuse. |
 | "A one-line disclosure about the red build costs nothing." | Reviewers cannot separate a pre-existing flake from a regression; you get findings about the test. |
 | "This plan is high-stakes and the reviewer has a good track record — dispatch it anyway." | Every run believes it is high-stakes. That is not new information. |
 | "I can't fully verify the rationale for this instruction, so I'm overriding it." | The rationale is stated inline at each rule. If one is genuinely missing, ask — do not infer it is absent. |
-| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the authoritative audit remains at the wave barrier. |
+| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the commit must equal the audited tree and the main tree must be clean at every merge. |
 | "The report clearly says DONE — close enough." | A claim never overrides a run. `DONE` with failing acceptance is `FAILED`, exactly as before; making the report advisory relaxed what a *missing* report costs, not what a *false* one buys. |
 | "No report came back, so the task failed." | Absent is not failed. Audit the tree and run acceptance — the recorded dogfood failure lost a report while the commit survived, and treating that as a failure discards finished work. |
 
+The per-task scheduler invites a further set of shortcuts. These were not observed under pressure;
+they are listed because each one quietly rebuilds a barrier or skips a check:
+
+| Shortcut | Why it fails |
+| --- | --- |
+| "T3's dependencies have merged, but wait for the rest of the batch so the dispatches line up." | Readiness is per task. Waiting for unrelated siblings is the wave barrier under another name. |
+| "Hold the dependents until the checkpoint on their dependencies closes; it's safer." | That puts the whole review latency on every dependency edge. Dispatch them; the checkpoint holds their merge. |
+| "The held dependent's acceptance passed, so merge it the moment the checkpoint closes." | Its acceptance ran against the pre-fix contract. Record the rework ruling first. |
+| "A checkpoint fix landed, so redispatch everything downstream to be safe." | Only held dependents whose scope the fix touched, or whose consumed contract it changed, are superseded. The rest merge as-is, and the merge gate checks the combination. |
+| "Fork from the tip; its gate will finish in a minute." | Fork only from `GREEN_HEAD`. A red tip hands the new task a failure it did not cause. |
+| "Wait for the full suite before opening the checkpoint." | Reviewers read the diff. The targeted gates of the covered merges are all a checkpoint waits for. |
+| "The audit passed earlier, so commit whatever is in the worktree now." | The commit's tree must equal `WORKTREE_TREE_<n>`. Anything else is a write nobody audited. |
+| "The fixer can wait for the held task's lock to clear." | That lock clears only after the checkpoint the fixer is closing. Supersede the held task. |
+
 **Never:**
 
-- Start on main/master without explicit consent, or start wave dispatch on a dirty tree (resolve dirty state at preflight before recording `RUN_BASE`).
+- Start on main/master without explicit consent, or start dispatch on a dirty tree (resolve dirty state at preflight before recording `RUN_BASE`).
 - Run tasks with overlapping scopes in parallel.
-- Collapse a whole wave because one component contains overlapping scopes.
-- Spill width-cap overflow into a successor wave.
-- Commit any task or component before the wave-end barrier.
-- Replace per-task snapshot attribution with a component-union audit.
-- Skip the authoritative wave-end audit because mid-chain checks passed.
+- Hold a task's dispatch for anything but its own dependencies, ordering predecessors, scope lock, or a free slot.
+- Fork a task or fixer from anything but `GREEN_HEAD`.
+- Commit a tree other than the one the task's audit and acceptance observed.
+- Merge a dependent before every checkpoint covering its dependencies has closed with a rework ruling for it.
+- Make a checkpoint wait for the full suite.
 - Commit a scope violation, or widen scope yourself to accommodate one.
 - Let a worker commit its own work.
 - Treat missing or unparseable reviewer output as clean.
@@ -911,7 +948,7 @@ rationalization is quoted; the reason it fails follows.
 
 ## Integration
 
-- **quirk:using-git-worktrees** — one worktree per wave component
+- **quirk:using-git-worktrees** — one worktree per task, forked from `GREEN_HEAD`
 - **quirk:writing-specs** (`tech-spec.md`) — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — the in-context planning rubric run in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens

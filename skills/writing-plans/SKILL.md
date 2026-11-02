@@ -84,9 +84,9 @@ When a reviewed `tech.md` exists for this work (the sibling of `logic.md`, in th
 - cite the `tech.md` section id it came from.
 - come from `tech.md` directly, pasted at the last moment — never paraphrased, never reconstructed from memory.
 
-**Re-resolve again, per dispatch.** Immediately before each task is dispatched, re-resolve every pointer in that task's excerpt against the live tree — an earlier wave may have already moved what `tech.md` pointed at. On a mismatch, update both `tech.md` and the excerpt before dispatching.
+**Re-resolve again, per dispatch.** Immediately before each task is dispatched, re-resolve every pointer in that task's excerpt against the live tree — a task that merged earlier may have already moved what `tech.md` pointed at. On a mismatch, update both `tech.md` and the excerpt before dispatching.
 
-**Keep `tech.md` in sync.** When a task *intentionally* changes a symbol `tech.md` points to (e.g. renames a function), update `tech.md` in the same commit. Skip this and a later wave's excerpt — and the reviewer that checks code against it — will certify the drift instead of catching it.
+**Keep `tech.md` in sync.** When a task *intentionally* changes a symbol `tech.md` points to (e.g. renames a function), update `tech.md` in the same commit. Skip this and a later task's excerpt — and the reviewer that checks code against it — will certify the drift instead of catching it.
 
 ## Scope Check
 
@@ -94,7 +94,7 @@ If the upstream input — the tech spec (`tech.md`) when present, else the logic
 
 ## File Structure
 
-Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in. Also build a **file-coupling map** from imports and shared files, then use it to minimize cross-task coupling before declaring `dependencies` or computing waves.
+Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in. Also build a **file-coupling map** from imports and shared files, then use it to minimize cross-task coupling before declaring `dependencies`.
 
 When the work changes a protocol, vocabulary, or event set, perform a **coherence sweep** before locking that map: use repository-wide grep commands to enumerate every file that references the changed old or new terms. Every referencing file MUST either be scoped into a task or explicitly recorded as `unchanged, verified consistent`. Search for the **vocabulary terms themselves**, not just the names of the components being changed — a file can encode a protocol without ever naming the skill or module that owns it, and those are exactly the files a name-based search misses.
 
@@ -104,11 +104,12 @@ When the work changes a protocol, vocabulary, or event set, perform a **coherenc
 - In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure - but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
 - For each unit that other tasks or systems depend on, specify its interface as a behavioral **contract** — signature shape (names, parameter/return types), preconditions, postconditions, invariants — in prose or a `CONTRACT:` sketch, never a body. Accept broad input types; return specific types.
 
-Require single-owner test topology: within each wave, every created or modified test file belongs
-to one owning task's `scope.files` (or one serialized component chain). Assign tests with their
-owning behavior so parallel tasks never collide on, or get blocked by, a shared test file.
+Require single-owner test topology: every created or modified test file belongs to one owning
+task's `scope.files`. A test file in two tasks' scopes serializes them: the scheduler never runs
+them at the same time. Assign tests with their owning behavior so parallel
+tasks never collide on, or get blocked by, a shared test file.
 
-This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently. Partition by **vertical slices of user-visible behavior**, not horizontal technical layers such as "all API routes"; vertical slices create fewer inherent cross-wave dependencies.
+This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently. Partition by **vertical slices of user-visible behavior**, not horizontal technical layers such as "all API routes"; vertical slices create fewer inherent cross-task dependencies.
 
 Treat hub-file isolation as a **scored heuristic, not a mandate**. Prefer assigning a hub change to the vertical slice that owns the behavior. Carve out a standalone hub task only when no single slice owns it, and record the explicit rationale plus the serialized integration dependency; making every hub a separate task recreates horizontal decomposition.
 
@@ -116,11 +117,11 @@ Treat hub-file isolation as a **scored heuristic, not a mandate**. Prefer assign
 
 Every task pays a fixed pipeline tax: dispatch, scope audit, acceptance run, commit, and merge. Price a split rather than treating it as free:
 
-- Split only when the result lands tasks in **different components** and therefore buys real parallelism. A split whose halves stay in the same serialized component buys nothing and pays the tax twice.
+- Split only when it buys real parallelism: the halves share no file and neither needs the other's output, so they **run at the same time**, or another task needs only one half and can **start as soon as that half merges**. A split whose halves share a file or depend on each other runs one after the other anyway, buys nothing, and pays the tax twice.
 - Collapse a contiguous run of sequentially-dependent work into one task.
 - Merge a task with a projected diff under roughly 50–100 lines into its neighbor.
 - Preserve review isolation with **commit boundaries inside the task**: commit each sub-step separately instead of paying for separate task pipelines.
-- Set the target task count from achievable wave width, never from the number of requirement bullets.
+- Set the target task count from achievable parallel width, never from the number of requirement bullets.
 
 ## Bite-Sized Task Granularity
 
@@ -135,7 +136,7 @@ Keep one behavior per red-green cycle. A non-trivial behavior may take longer th
 
 ## Task Independence
 
-When the plan will be executed by **quirk:subagent-driven-development**, declare dependencies and scope so the orchestrator can compute waves. `dependencies` is optional — a task declaring none is eligible for the first wave. `scope.files` is **required on every task**.
+When the plan will be executed by **quirk:subagent-driven-development**, declare dependencies and scope so the orchestrator can dispatch each task the moment its own dependencies merge. `dependencies` is optional — a task declaring none dispatches at the start of the run. `scope.files` is **required on every task**.
 
 Declare them in a fenced YAML-like block immediately under the `### Task N: ...` heading:
 
@@ -148,12 +149,14 @@ scope:
 **Guidance:**
 
 - Use `dependencies` for genuine semantic ordering — one task needing another's output — never merely for file overlap. File overlap is handled by scope, not by dependencies.
-- `scope.files` is **required on every task**, whether or not it will run in parallel. It is the boundary the orchestrator audits each task's diff against before committing, and the same list it hands the implementer as a hard fence — a task without it has neither. An incomplete list reads as a scope violation and stops the wave.
-- Within a wave, tasks connected by `scope.files` intersections form one component and run as a serialized chain; components run concurrently because their union scopes are disjoint. A shared path serializes the component containing those tasks, not the whole wave. There is no small-overlap exemption inside a component: concurrent branches would either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
-- List every file the task will touch, including tests and any index/barrel file it must re-export from. Under-declaring is the common failure: the task gets blocked mid-wave for touching a file it always needed.
-- Enforce single-owner test files per wave: every created or modified test file must be assigned
-  to a single task's `scope.files`, or belong to one serialized component chain. Do not let parallel
-  components share a test file even when they expect to edit different test functions.
+- A dependency costs more than ordering. The dependent's merge waits for the checkpoint review of what it depends on, and a checkpoint fix to that contract can send the dependent back to be rebuilt. A spurious dependency delays a merge for nothing; a missing one lets a task build on a contract no checkpoint is watching.
+- `scope.files` is **required on every task**, whether or not it will run in parallel. It is the boundary the orchestrator audits each task's diff against before committing, and the same list it hands the implementer as a hard fence — a task without it has neither. An incomplete list reads as a scope violation and stops the task.
+- Tasks whose `scope.files` intersect never run at the same time: the scheduler serializes them, in dependency order and then plan order, and runs everything else beside them. A shared path serializes only the tasks that share it, not the whole plan. There is no small-overlap exemption: concurrent branches would either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
+- List every file the task will touch, including tests and any index/barrel file it must re-export from. Under-declaring is the common failure: the task gets blocked mid-run for touching a file it always needed.
+- Enforce single-owner test files: every created or modified test file must be assigned to a
+  single task's `scope.files`, or the tasks sharing it are serialized, one after the other. Do
+  not let tasks meant to run in parallel share a test file even when they expect to edit different
+  test functions.
 
 ## Plan Document Header
 
@@ -198,13 +201,13 @@ The task's **Acceptance:** field MUST contain one or more literal, copy-runnable
 Make each `Acceptance` command task-scoped: run only the task's owned test files and fast targeted
 checks. Reserve full-suite execution for the execution skill's final gate (Step 7 in SDD) or branch
 completion, not each parallel worker. SDD's mid-run gates select tests from these owned test files
-and the tests that reference the files a wave changes, so an accurate `scope.files` keeps them fast.
+and the tests that reference the files a merge changes, so an accurate `scope.files` keeps them fast.
 
 ````markdown
 ### Task N: Daily metrics summary
 
 ```yaml
-# Drives wave computation under quirk:subagent-driven-development.
+# Drives per-task scheduling under quirk:subagent-driven-development.
 dependencies: []
 scope:
   files: [src/metrics/summary.py, src/metrics/__init__.py, tests/metrics/test_summary.py]
@@ -305,10 +308,10 @@ gate or branch completion. Fix every mismatch.
 
 **7. Coherence sweep:** If the plan changes a protocol, vocabulary, or event set, did you grep-enumerate every file referencing the changed old or new terms? Verify that each result is either scoped into a task or explicitly recorded as `unchanged, verified consistent`. Check that you searched for the vocabulary terms themselves, not only the names of the components being changed — a file can encode a protocol without naming the skill or module that owns it.
 
-**8. Scope and dependency declarations:** For each task, did you declare `scope.files` accurately and `dependencies` only for genuine semantic ordering? Every task needs a complete `scope.files` — including its tests and any index/barrel file it re-exports from — because the orchestrator audits each task's diff against that list and an under-declared file stops the wave. Tasks that genuinely don't depend on each other should say so, otherwise execution falls back to sequential and leaves throughput on the table. Tasks sharing any file path cannot run in parallel at all: reserve `dependencies` for one task needing another's output, never for file overlap.
-Verify every shared test file in a wave has a single owner (or one serialized component chain),
-and that no parallel component must modify or run acceptance against another task's in-flight test
-file. Task-scoped acceptance must match the owned test files in `scope.files`.
+**8. Scope and dependency declarations:** For each task, did you declare `scope.files` accurately and `dependencies` only for genuine semantic ordering? Every task needs a complete `scope.files` — including its tests and any index/barrel file it re-exports from — because the orchestrator audits each task's diff against that list and an under-declared file stops the task. Tasks that genuinely don't depend on each other should say so, otherwise execution falls back to sequential and leaves throughput on the table. Tasks sharing any file path cannot run in parallel at all: reserve `dependencies` for one task needing another's output, never for file overlap.
+Verify every created or modified test file has a single owner (or its sharers are
+serialized), and that no task must modify or run acceptance against another task's
+in-flight test file. Task-scoped acceptance must match the owned test files in `scope.files`.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a requirement in the tech spec (`tech.md`) when present, else the logic spec, with no task, add the task.
 
@@ -322,7 +325,7 @@ execution skill that invoked this rubric. Two things happen next, both owned by 
    `quirk:subagent-driven-development`'s inline decomposition skips plan-document review: it spends
    its review budget on the branch via `quirk:adversarial-review`. This carve-out replaces neither
    the standalone plan review nor the execution skill's branch gates.
-2. **Execute.** Continue in the same skill — `quirk:subagent-driven-development` computes parallel
-   waves from the task fields above and runs the per-task pipeline; `quirk:executing-plans`
+2. **Execute.** Continue in the same skill — `quirk:subagent-driven-development` dispatches each
+   task from the fields above as soon as its dependencies merge and runs the per-task pipeline; `quirk:executing-plans`
    executes sequentially. No "which approach?" prompt here: the choice of execution skill was
    already made when one of them invoked this rubric.

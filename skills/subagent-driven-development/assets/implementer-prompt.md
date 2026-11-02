@@ -24,7 +24,9 @@ where it is explicit, follow it exactly.
 
 {{WORKDIR}}
 
-Work **only** here. Do not `cd` elsewhere, and do not edit files outside this directory.
+Work **only** here. Do not `cd` elsewhere, and do not edit files outside this directory. It was
+forked from the integration branch after every task this one depends on had merged, so their work
+is already in it.
 
 ## Scope
 
