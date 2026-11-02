@@ -369,6 +369,30 @@ def test_start_app_on_a_live_screen_server_exits_2(tmp_path: Path) -> None:
         run("stop", session)
 
 
+def test_start_app_on_a_stopped_screen_session_exits_2_and_writes_nothing(tmp_path: Path) -> None:
+    session = tmp_path / "stopped-screen"
+    assert run("start", session)[0] == 0
+    spec = tmp_path / "screen.json"
+    spec.write_text(json.dumps({"title": "Layout", "question": "Which?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}))
+    rc, shown, _ = run("show", session, spec, "--project-dir", tmp_path)
+    assert rc == 0, shown
+    assert run("stop", session)[0] == 0
+    rc, out, _ = run("start", session, "--app")
+    assert rc == 2 and out == {"error": "session is a screen-mode session"}
+    assert not (session / "state" / "mode.json").exists()
+    assert not (session / "state" / "token").exists()
+    assert not (session / "state" / "steps").exists()
+    rc, _, _ = run("start", session, "--app", "--foreground")
+    assert rc == 2
+
+
+def test_restarting_an_existing_app_session_still_works(tmp_path: Path, session: Path) -> None:
+    first = start_app(tmp_path / "root", session)
+    stop_app(first)
+    second = start_app(tmp_path / "root", session)
+    stop_app(second)
+
+
 def test_stop_works_on_an_app_session(session: Path) -> None:
     assert run("start", session, "--app")[0] == 0
     rc, out, _ = run("stop", session)

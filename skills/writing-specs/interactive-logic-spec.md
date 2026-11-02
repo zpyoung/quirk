@@ -32,7 +32,7 @@ render_spec.py reapprove    <spec-dir> <export.json>
 render_spec.py challenges   <spec-dir> <export.json> [--json]
 ```
 
-`<spec-dir>` contains `logic.json`; its basename is the spec `slug`. Before opening a review, run `validate`, then `render --open`. `render` writes `review.html`, `logic.md`, and `.gitignore`, and prints the current `renderId`; it is deterministic for identical input. Do not install packages, build the page, or use a network path at spec time, except the local brainstorming companion described below: the page is a local file and the renderer embeds the data in the prebuilt template.
+`<spec-dir>` contains `logic.json`; its basename is the spec `slug`. Before opening a review, run `validate`, then `render --open`; in a companion session run `render` without `--open`, because `--open` launches a separate browser tab (see [Review in a companion session](#review-in-a-companion-session)). `render` writes `review.html`, `logic.md`, and `.gitignore`, and prints the current `renderId`; it is deterministic for identical input. Do not install packages, build the page, or use a network path at spec time, except the local brainstorming companion described below: the page is a local file and the renderer embeds the data in the prebuilt template.
 
 Exit codes: 0 ok, 1 invalid input, 2 usage error, 3 stale render, wrong slug, or stage mismatch, 4 (fold/reapprove) unsigned export or a failed gate named on stderr, 5 (find-export) no export found, 6 the spec is a read-only v1 file — see [v1 specs are read-only](#v1-specs-are-read-only). Stage-3 exports use some codes differently; see [Stage 3: compare approaches](#stage-3-compare-approaches).
 
