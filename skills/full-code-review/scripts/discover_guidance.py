@@ -87,7 +87,8 @@ def _glob_in(git_root, pattern):
 
 def _inside(root_real, path):
     try:
-        return Path(path).resolve().is_relative_to(root_real)
+        # strict, because from 3.13 a non-strict resolve returns a symlink loop instead of raising
+        return Path(path).resolve(strict=True).is_relative_to(root_real)
     except (RuntimeError, OSError):
         return False
 
