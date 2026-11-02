@@ -9,11 +9,10 @@ permissions:
 
 jobs:
   pytest:
-    # ubuntu-latest moved to 26.04, which has no python 3.9 build for setup-python
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.12"]
+        python-version: ["3.12", "3.14"]
     # several tests make throwaway git commits, which fail on a runner with no identity
     env:
       GIT_AUTHOR_NAME: ci
