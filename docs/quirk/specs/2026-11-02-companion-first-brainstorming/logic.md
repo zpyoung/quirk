@@ -2,9 +2,13 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystems, >3 files)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-11-02: SC-18 gains case (b). If the server has to restart on a different port, because
+  something else took the old one, the agent prints the new URL in the terminal. Reopening that URL
+  restores everything. An open tab cannot follow a port change. Found while writing the tech spec,
+  and approved by the user.
 
 `quirk:brainstorming` becomes a browser-first skill. Today the visual companion is an optional tool
 the agent offers for visual questions, and every other question, the approach pick, the design
@@ -249,8 +253,10 @@ chat as the user's message, and the current step updates to match.
 18. **SC-18 Server stopped**
     - **Given** the companion server stopped, from idle or a crash
     - **When** the tab is still open
-    - **Then** the tab shows "Paused, reconnecting"; ✓ on its next step the agent restarts the
-      server from the saved session, and the tab picks up where it was
+    - **Then** the tab shows "Paused, reconnecting"; ✓ (a) on its next step the agent restarts the
+      server from the saved session on the same port, and the tab picks up where it was; ✓ (b) if
+      that port is taken, the agent prints the new URL in the terminal, and opening it restores the
+      step, drafts, chat and threads
 
 19. **SC-19 Companion can't run**
     - **Given** python3 is missing, or the browser can't reach the server's port
