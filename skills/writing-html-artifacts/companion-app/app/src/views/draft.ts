@@ -28,14 +28,56 @@ export interface DraftGate {
    * Saves `value` through `post` and records it as settled only when the server took it (`ok`) or the step
    * had already moved on (`superseded`, which retrying cannot fix). An `error` leaves the draft pending, so
    * `wants` stays true for it until a later save succeeds.
+   *
+   * Saves for one step never overlap: while one is in flight a newer `save` only replaces the single pending
+   * value, which is posted once the in-flight one settles and only if it still differs from what the server
+   * last took. Every caller waiting on a step resolves with the result of the last post made for it.
    */
-  save(stepId: string, value: Draft, post: (stepId: string, value: Draft) => Promise<PostResult>): Promise<PostResult>
+  save(stepId: string, value: Draft, post: DraftPost): Promise<PostResult>
+}
+
+type DraftPost = (stepId: string, value: Draft) => Promise<PostResult>
+
+interface Pending {
+  value: Draft
+  post: DraftPost
+  waiters: ((result: PostResult) => void)[]
 }
 
 export function createDraftGate(): DraftGate {
   let stepId: string | null = null
   let last: string | null = null
-  let issued = 0
+  const inFlight = new Map<string, { pending: Pending | null }>()
+
+  async function drain(id: string, flight: { pending: Pending | null }, first: { value: Draft; post: DraftPost }): Promise<PostResult> {
+    const waiters: ((result: PostResult) => void)[] = []
+    let result: PostResult = 'error'
+    try {
+      let current = first
+      for (;;) {
+        result = await current.post(id, current.value)
+        // a save for a step the form left is moot
+        if (result !== 'error' && id === stepId) last = draftKey(current.value)
+        const next = flight.pending
+        flight.pending = null
+        if (!next) break
+        waiters.push(...next.waiters)
+        if (result === 'superseded' || id !== stepId) break
+        if (draftKey(next.value) === last) {
+          result = 'ok'
+          break
+        }
+        current = next
+      }
+      return result
+    } finally {
+      inFlight.delete(id)
+      const rest = flight.pending as Pending | null
+      if (rest) waiters.push(...rest.waiters)
+      for (const resolve of waiters) resolve(result)
+    }
+  }
+
   return {
     wants(id, value) {
       if (id !== stepId) {
@@ -45,13 +87,17 @@ export function createDraftGate(): DraftGate {
       }
       return draftKey(value) !== last
     },
-    async save(id, value, post) {
-      issued += 1
-      const ticket = issued
-      const result = await post(id, value)
-      // a later save for the same gate owns the settled state, and a save for a step the form left is moot
-      if (result !== 'error' && ticket === issued && id === stepId) last = draftKey(value)
-      return result
+    save(id, value, post) {
+      const flight = inFlight.get(id)
+      if (!flight) {
+        const started = { pending: null as Pending | null }
+        inFlight.set(id, started)
+        return drain(id, started, { value, post })
+      }
+      return new Promise<PostResult>((resolve) => {
+        const waiters = flight.pending ? [...flight.pending.waiters, resolve] : [resolve]
+        flight.pending = { value, post, waiters }
+      })
     },
   }
 }

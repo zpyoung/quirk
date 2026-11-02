@@ -56,18 +56,100 @@ const check = (ok: boolean, message: string) => {
   check(!gate.wants('s1', typed), 'a superseded draft is retried')
 }
 
-// a slow save that settles after a newer one does not roll the settled state back
+// saves for a step are serialized, so an older request can never reach the server after a newer one
 {
   const gate = createDraftGate()
   gate.wants('s1', { comment: '' })
-  const a: Draft = { comment: 'a' }
-  const b: Draft = { comment: 'b' }
-  let releaseA: (r: PostResult) => void = () => {}
-  const slow = gate.save('s1', a, () => new Promise<PostResult>((resolve) => (releaseA = resolve)))
-  await gate.save('s1', b, async () => 'ok')
-  releaseA('ok')
-  await slow
-  check(!gate.wants('s1', b), 'an older save settling late made the newer draft pending again')
+  let stored = ''
+  let inFlight = 0
+  let maxInFlight = 0
+  const arrivals: string[] = []
+  const releases: ((r: PostResult) => void)[] = []
+  const post = (_id: string, value: Draft) => {
+    inFlight += 1
+    maxInFlight = Math.max(maxInFlight, inFlight)
+    arrivals.push(String(value.comment))
+    return new Promise<PostResult>((resolve) =>
+      releases.push((r) => {
+        inFlight -= 1
+        if (r === 'ok') stored = String(value.comment)
+        resolve(r)
+      }),
+    )
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const slow = gate.save('s1', { comment: 'a' }, post)
+  const fast = gate.save('s1', { comment: 'b' }, post)
+  await settle()
+  check(arrivals.join() === 'a', `the newer save reached the server while the older one was in flight: ${arrivals.join()}`)
+  check(gate.wants('s1', { comment: 'b' }), 'the newer draft is not pending while the older one is in flight')
+  releases[0]('ok')
+  await settle()
+  check(arrivals.join() === 'a,b', `the newer draft was not posted after the older one settled: ${arrivals.join()}`)
+  releases[1]('ok')
+  await Promise.all([slow, fast])
+  check(stored === 'b', `the server holds "${stored}" instead of the latest edit`)
+  check(maxInFlight === 1, `${maxInFlight} draft posts were in flight at once`)
+  check(!gate.wants('s1', { comment: 'b' }), 'the latest draft is still pending after it was stored')
+}
+
+// while one save is in flight only the latest pending value is kept, and a value equal to the stored one is not posted
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { comment: '' })
+  const arrivals: string[] = []
+  const releases: ((r: PostResult) => void)[] = []
+  const post = (_id: string, value: Draft) => {
+    arrivals.push(String(value.comment))
+    return new Promise<PostResult>((resolve) => releases.push(resolve))
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const first = gate.save('s1', { comment: 'a' }, post)
+  const rest = [gate.save('s1', { comment: 'b' }, post), gate.save('s1', { comment: 'c' }, post)]
+  releases[0]('ok')
+  await settle()
+  check(arrivals.join() === 'a,c', `expected only the latest pending value after "a", got ${arrivals.join()}`)
+  releases[1]('ok')
+  check((await Promise.all([first, ...rest])).every((r) => r === 'ok'), 'coalesced saves do not all report the final result')
+
+  const again = gate.save('s1', { comment: 'd' }, post)
+  const back = gate.save('s1', { comment: 'c' }, post)
+  releases[2]('error')
+  check((await Promise.all([again, back])).join() === 'ok,ok', 'a pending value equal to the stored one does not report ok')
+  check(arrivals.join() === 'a,c,d', `a pending value equal to the stored one was posted: ${arrivals.join()}`)
+}
+
+// a failed in-flight save lets the newer value post; a failure with nothing newer stays an error; a 409 drops the pending value
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { comment: '' })
+  const results: PostResult[] = ['error', 'ok']
+  const arrivals: string[] = []
+  const post = async (_id: string, value: Draft): Promise<PostResult> => {
+    arrivals.push(String(value.comment))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return results.shift() ?? 'ok'
+  }
+  const first = gate.save('s1', { comment: 'a' }, post)
+  const second = gate.save('s1', { comment: 'b' }, post)
+  check((await first) === 'ok' && (await second) === 'ok' && arrivals.join() === 'a,b', `a failed save blocked the newer value: ${arrivals.join()}`)
+
+  const lone = createDraftGate()
+  lone.wants('s1', { comment: '' })
+  check((await lone.save('s1', { comment: 'x' }, async () => 'error')) === 'error', 'a lone failed save does not report error')
+  check(lone.wants('s1', { comment: 'x' }), 'a lone failed save is no longer pending')
+
+  const gone = createDraftGate()
+  gone.wants('s1', { comment: '' })
+  const sent: string[] = []
+  const post409 = async (_id: string, value: Draft): Promise<PostResult> => {
+    sent.push(String(value.comment))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return 'superseded'
+  }
+  const one = gone.save('s1', { comment: 'a' }, post409)
+  const two = gone.save('s1', { comment: 'b' }, post409)
+  check((await one) === 'superseded' && (await two) === 'superseded' && sent.join() === 'a', `a 409 must settle without retrying the pending value: ${sent.join()}`)
 }
 
 // a save that finishes after the form moved to another step settles nothing there

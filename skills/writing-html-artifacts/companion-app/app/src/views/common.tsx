@@ -64,12 +64,9 @@ export function useDraftSync(stepId: string, value: Draft, actions: Actions): vo
     const wait = failures.current === 0 ? 500 : retryDelay(failures.current)
     const timer = setTimeout(() => {
       void gate.current.save(stepId, value, (id, draft) => actions.saveDraft(id, draft as Record<string, unknown>)).then((result) => {
-        if (result === 'error') {
-          failures.current += 1
-          setAttempt((n) => n + 1)
-        } else {
-          failures.current = 0
-        }
+        failures.current = result === 'error' ? failures.current + 1 : 0
+        // re-evaluate against what the server now holds: an edit made while this save was in flight may differ from it
+        setAttempt((n) => n + 1)
       })
     }, wait)
     return () => clearTimeout(timer)

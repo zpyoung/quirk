@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { annotateSectionHtml } from '../src/section-blocks'
 import { ShellView } from '../src/shell'
 import type { Actions, Snapshot, Status, Step } from '../src/types'
 import { StepArea } from '../src/views/step-area'
@@ -177,7 +178,32 @@ for (const file of files) {
   const htmlOnly = section([{ id: 'data', title: 'Data', body_html: agentHtml }])
   same(ids(htmlOnly), ['p0', 'p1', 'p2', 'p3', 'p4'].map((p) => `section:data/${p}`), 'agent HTML block ids')
   if (!/<q-flow data-block-id="section:data\/p3" summary="s">/.test(htmlOnly)) fail('design paragraphs', 'the q-flow container is not numbered')
-  if (!/<div data-block-id="section:data\/p2" class="a>b" data-x="1">/.test(htmlOnly)) fail('design paragraphs', 'a div with ">" in an attribute is not numbered whole')
+  if (!/<div class="a>b" data-x="1"><p data-block-id="section:data\/p2">inner<\/p><\/div>/.test(htmlOnly)) fail('design paragraphs', 'a wrapper with ">" in an attribute is not numbered through to its paragraph')
+
+  // paragraphs nested in wrapper elements are numbered one by one; the wrapper itself carries no id
+  const annotate = (html: string, sectionId = 'arch', changed = new Set<string>()) => annotateSectionHtml(html, { sectionId, start: 0, changed })
+  const wrapped = annotate('<div class="layout"><p>First paragraph.</p><p>Second paragraph.</p></div>')
+  same(ids(wrapped.html), ['p0', 'p1'].map((p) => `section:arch/${p}`), 'nested paragraph ids')
+  if (wrapped.count !== 2 || /<div[^>]*data-block-id/.test(wrapped.html)) fail('design paragraphs', 'a wrapper with numbered children must carry no id of its own')
+  const deep = annotate('<section><article><h2>T</h2><p>a</p><ul><li><p>no</p></li></ul></article><aside><ol><li>x</li></ol><pre>c</pre><table><tr><td>t</td></tr></table><blockquote><p>q</p></blockquote><figure><img src="x"></figure></aside></section><h3>H</h3><q-flow><p>in</p></q-flow>')
+  same(ids(deep.html), Array.from({ length: 10 }, (_, n) => `section:arch/p${n}`), 'deeply nested block ids')
+  if (deep.count !== 10) fail('design paragraphs', `deeply nested count: ${deep.count}`)
+  const order = [...deep.html.matchAll(/<(h2|p|ul|ol|pre|table|blockquote|figure|h3|q-flow) data-block-id/g)].map((m) => m[1])
+  same(order, ['h2', 'p', 'ul', 'ol', 'pre', 'table', 'blockquote', 'figure', 'h3', 'q-flow'], 'nested blocks are not numbered in document order')
+  if (/<p data-block-id="section:arch\/p\d+">(no|in)</.test(deep.html)) fail('design paragraphs', 'a leaf block must not number its own content')
+  const leafWrapper = annotate('<div>just text</div><div><span>inline</span></div>')
+  same(ids(leafWrapper.html), ['p0', 'p1'].map((p) => `section:arch/${p}`), 'wrappers without block children stay leaf blocks')
+  const ownMarker = annotate('<div data-commentable="own"><p>a</p></div><p>b</p>')
+  if (ownMarker.count !== 2 || !/<div data-commentable="own"><p data-block-id="section:arch\/p0">a<\/p><\/div><p data-block-id="section:arch\/p1">b/.test(ownMarker.html)) fail('design paragraphs', 'an agent-marked wrapper keeps its marker and its children are numbered')
+  const changedWrapped = annotate('<div><p>a</p><p>b</p></div>', 'arch', new Set(['section:arch/p1']))
+  if (!/data-block-id="section:arch\/p1" data-changed="true"/.test(changedWrapped.html) || /p0" data-changed/.test(changedWrapped.html)) fail('design paragraphs', 'a changed nested paragraph is not highlighted exactly')
+  same(ids(annotate('<div class="layout"><p>a</p><p>b</p></div>').html), ids(wrapped.html), 'nested ids are not stable across renders')
+
+  // a literal "<" in text is text, and later blocks keep their numbers
+  const lt = annotate('<div>1 < 2</div><p>Next paragraph</p>')
+  if (lt.count !== 2 || !/<p data-block-id="section:arch\/p1">Next paragraph<\/p>/.test(lt.html)) fail('design paragraphs', `a literal "<" broke later numbering: ${lt.html}`)
+  const lt2 = annotate('<p>a < b and c <3 d</p><p>x<</p><ul><li>1</li></ul>')
+  same(ids(lt2.html), ['p0', 'p1', 'p2'].map((p) => `section:arch/${p}`), 'several literal "<" characters')
 
   const mixed = section([{ id: 'x', title: 'X', body_md: 'a\n\nb', body_html: '<p>c</p><p data-commentable="own">d</p>', diagram: 'graph LR; A-->B' }])
   same(ids(mixed), ['p0', 'p1', 'p2', 'p4'].map((p) => `section:x/${p}`), 'markdown, agent HTML and diagram numbering')
