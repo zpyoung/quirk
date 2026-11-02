@@ -527,10 +527,10 @@ tree and plan always yield the same commands:
 Over-selection costs seconds. Under-selection is what the final gate exists to catch, so do not
 hand-pick tests beyond this rule.
 
-**A wave that cannot name its tests pays for the full suite.** When step 3 finds no test file and
-step 4 finds no component check, or preflight found no runner that takes test-file arguments, use
-`FULL_SUITE_CMD` in place of the targeted command and journal why. Journal any changed non-test path
-whose tokens hit no test file as `unguarded`; the final gate covers it.
+**A wave that cannot name its tests runs no tests.** When step 3 finds no test file, or preflight
+found no runner that takes test-file arguments, drop step 3 and journal why; the gate keeps its
+build, acceptance, and component-check commands. Never substitute `FULL_SUITE_CMD` mid-run. Journal
+any changed non-test path whose tokens hit no test file as `unguarded`; the final gate covers it.
 
 The **wave gate** is `select_gate(WAVE_BASE, <the wave's tasks>)`. A **fix-batch gate** is
 `select_gate(FIX_BASE, <the batch's packets>)`, where `FIX_BASE` is HEAD before the batch commits and
@@ -836,7 +836,7 @@ the table wins.
 | A Claude task fails its retry | Stop that chain and remove it from later batches; surface it rather than stalling the remaining components |
 | Merge conflict between component branches | Component-scope disjointness was violated; stop and re-plan |
 | Wave or fix-batch gate red | Step 7's hard gate; auto-dispatch only the scoped wave-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
-| Wave gate selects no test file and no component check | Run `FULL_SUITE_CMD` for that wave and journal why |
+| Wave gate selects no test file | Run no tests for that wave, keep its other gate commands, journal why and the `unguarded` paths |
 | Final gate red | Same red-gate rules; fix through Step 6, re-run the whole final gate, journal each failing test file as a `selection miss` |
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |

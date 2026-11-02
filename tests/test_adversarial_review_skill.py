@@ -1022,10 +1022,10 @@ def test_sdd_wave_gates_select_tests_by_a_reproducible_rule() -> None:
                   "COMPONENT_CHECKS", "select_gate(WAVE_BASE", "select_gate(FIX_BASE", "FIX_BASE",
                   "GATE_CMDS"):
         assert token in selecting
-    # a wave whose rule selects nothing must not pass a gate that ran no tests
-    assert "cannot name its tests" in selecting
+    # an empty selection runs no tests rather than falling back to the full suite mid-run
+    assert "cannot name its tests runs no tests" in selecting
     fallback = selecting.split("cannot name its tests", 1)[1].split("The **wave gate**", 1)[0]
-    assert "FULL_SUITE_CMD" in fallback and "unguarded" in fallback
+    assert "Never substitute `FULL_SUITE_CMD` mid-run" in fallback and "unguarded" in fallback
 
 
 def test_sdd_mid_run_gates_never_run_the_full_suite_by_default() -> None:
