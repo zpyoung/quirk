@@ -145,8 +145,13 @@ GET  /_quirk/lib/...           unchanged (kit, chartjs, flow, highlightjs, merma
 - Every event body carries a client-generated `client_id`. The server dedupes on it, so a retried
   POST returns `{"duplicate":true}` and writes nothing.
 - `submit` and `edit-decision` events carry the current step `nonce` and get 409 when it is stale.
-  `chat`, `comment`, `draft`, `continue` and `edit-request` need only the token, because they stay
-  valid across steps.
+  `chat`, `comment`, `continue` and `edit-request` need only the token, because they stay valid
+  across steps. `continue` is accepted even before the first step exists (its `step` is null).
+  A `draft` body carries a top-level `"step": <step id>`. Without it the server returns 400. When
+  that id isn't the current step, the server returns 409 `{"superseded":true}` and saves nothing,
+  and the shell ignores that 409 silently.
+- Client-supplied fields used in membership tests (`type`, `kind`, `decision_id`, `decision`,
+  `pick`) are type-checked first, and a wrong type gets 400, never an unhandled error.
 
 ## Data models
 
@@ -187,7 +192,7 @@ comment        payload: {block_id, text, thread_id?}         (new thread when th
 edit-request   payload: {decision_id, to?:str, note?:str}
 edit-decision  payload: {decision: "confirm"|"cancel"}
 review-export  payload: {path, kind, stage?, signed?}        (written by the server, not posted)
-draft          payload: {answers, comment?}                  (stored in state/drafts/<step>.json, never in app-events)
+draft          payload: {answers?, comment?, pick?}          (stored in state/drafts/<step>.json, never in app-events; posted only when its content changed)
 ```
 
 SCHEMA (decision, the item in `state/decisions.json`; the agent replaces the whole list via `decide`):
