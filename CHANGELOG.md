@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.2.1
+
+### Changes
+- feat(sdd): dispatch each task when its own dependencies merge (#61)
+
 ## 2026.11.2
 
 ### Changes
