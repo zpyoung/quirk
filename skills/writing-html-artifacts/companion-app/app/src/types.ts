@@ -130,6 +130,9 @@ export interface ChatEntry {
   text: string
   timestamp: string
   delivered: boolean
+  /** Set on server-written pointer entries: `thread` links to the comment thread `thread_id`. */
+  kind?: string
+  thread_id?: string
 }
 
 export interface Thread {
@@ -178,8 +181,8 @@ export type PostResult = 'ok' | 'superseded' | 'error'
 export interface Actions {
   /** Posts a `submit` for the open step; the shell switches to waiting at once and reconciles on the next snapshot. */
   submit(payload: SubmitPayload): Promise<PostResult>
-  /** Posts a non-submit event such as `continue`, `edit-request` or `edit-decision`. */
-  send(type: 'continue' | 'edit-request' | 'edit-decision', payload: Record<string, unknown>, withNonce?: boolean): Promise<PostResult>
+  /** Posts a non-submit event such as `continue`, `edit-request`, `edit-decision`, `chat` or `comment`; chat and comment carry no nonce. */
+  send(type: 'continue' | 'edit-request' | 'edit-decision' | 'chat' | 'comment', payload: Record<string, unknown>, withNonce?: boolean): Promise<PostResult>
   /** Saves the draft of step `stepId`; a `superseded` result means the step moved on and is not an error. */
   saveDraft(stepId: string, payload: Record<string, unknown>): Promise<PostResult>
 }

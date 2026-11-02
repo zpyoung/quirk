@@ -12,13 +12,15 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '../../../../..')
 const COMPANION = path.join(REPO, 'skills/writing-html-artifacts/scripts/companion.py')
 const EVENT_PATH = '/_quirk/app/event'
 const SETTLE_MS = 1500
+/** Kit diagrams load a large script and lay out in the page; on a busy machine that takes tens of seconds. */
+const DIAGRAM_MS = 60_000
 
 interface CliResult {
   code: number
@@ -180,6 +182,35 @@ const FLOW_HTML = `<q-flow summary="Orders flow from checkout to the ledger." di
   }
   </script>
 </q-flow>`
+
+const MINI_FLOW_HTML = `<q-flow summary="Two services." direction="right">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "svc-a", "label": "Service A"},
+      {"id": "svc-b", "label": "Service B"}
+    ],
+    "edges": [{"from": "svc-a", "to": "svc-b", "label": "calls"}]
+  }
+  </script>
+</q-flow>`
+
+const THREAD_TEXT = 'Is B really cheaper?'
+let approachThreadId = ''
+
+/** Hovers or focuses a block, clicks its Comment pin, and posts `text` from the popover. */
+async function commentOn(page: Page, block: Locator, text: string): Promise<void> {
+  await block.hover()
+  const pin = page.locator('.comment-pin')
+  await pin.waitFor({ state: 'visible', timeout: 5000 })
+  assert(await pin.evaluate((el) => el.parentElement?.closest('button, label, [role="button"]') == null), 'the Comment pin sits inside a button or label')
+  await pin.click()
+  const popover = page.locator('.thread-popover')
+  await popover.waitFor({ state: 'visible', timeout: 5000 })
+  await popover.getByLabel('Add a comment').fill(text)
+  await popover.getByRole('button', { name: 'Comment', exact: true }).click()
+  await popover.locator('.thread-text', { hasText: text }).waitFor({ timeout: 10_000 })
+}
 
 interface Env {
   context: BrowserContext
@@ -457,7 +488,7 @@ const scenarios: [string, Scenario][] = [
           ],
         })
         await waitForStep(page, mermaid.step)
-        await page.locator('[data-block-id="question:flow"] figure.diagram svg').first().waitFor({ timeout: 10_000 })
+        await page.locator('[data-block-id="question:flow"] figure.diagram svg').first().waitFor({ timeout: DIAGRAM_MS })
 
         const kit = await step({
           kind: 'questions',
@@ -477,8 +508,152 @@ const scenarios: [string, Scenario][] = [
           ],
         })
         await waitForStep(page, kit.step)
-        await page.locator('[data-block-id="question:kit"] q-flow svg').first().waitFor({ timeout: 10_000 })
+        await page.locator('[data-block-id="question:kit"] q-flow svg').first().waitFor({ timeout: DIAGRAM_MS })
         same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
+  [
+    'j. chat round trip',
+    async (env) => {
+      const { page, consoleErrors } = await openPage(env)
+      try {
+        const s = await step(questionsStep())
+        await waitForStep(page, s.step)
+        const log = page.getByRole('log')
+        await page.getByLabel('Message', { exact: true }).fill('<b>bold</b>')
+        await page.getByRole('button', { name: 'Send' }).click()
+        const mine = log.locator('.chat-entry[data-from="user"]', { hasText: '<b>bold</b>' })
+        await mine.waitFor({ timeout: 10_000 })
+        same(await log.locator('b').count(), 0, 'bold elements created from user text')
+        assert((await mine.innerText()).includes('Queued'), 'the sent message has no Queued marker')
+        same(await page.getByLabel('Message', { exact: true }).inputValue(), '', 'composer after a successful send')
+
+        const events = await nextEvents()
+        same(events.map((e) => e.type), ['chat'], 'event types')
+        same(events[0].payload, { text: '<b>bold</b>' }, 'chat payload')
+        await mine.getByText('Queued').waitFor({ state: 'detached', timeout: 3000 })
+
+        await cliOk('say', session, '--text', 'Because B keeps undo.')
+        const agent = log.locator('.chat-entry[data-from="agent"]', { hasText: 'Because B keeps undo.' })
+        await agent.waitFor({ timeout: 10_000 })
+        assert(!(await agent.innerText()).includes('Queued'), 'an agent message shows Queued')
+
+        await cliOk('say', session, '--from', 'user', '--text', 'typed in terminal')
+        await log.locator('.chat-entry[data-from="user"]', { hasText: 'typed in terminal' }).waitFor({ timeout: 10_000 })
+
+        await page.getByLabel('Message', { exact: true }).fill('line one')
+        await page.getByLabel('Message', { exact: true }).press('Shift+Enter')
+        await page.getByLabel('Message', { exact: true }).pressSequentially('line two')
+        same(await page.getByLabel('Message', { exact: true }).inputValue(), 'line one\nline two', 'Shift+Enter newline')
+        await page.getByLabel('Message', { exact: true }).press('Enter')
+        await log.locator('.chat-entry[data-from="user"]', { hasText: 'line two' }).waitFor({ timeout: 10_000 })
+        same((await nextEvents()).map((e) => e.payload.text), ['line one\nline two'], 'Enter sends the multi-line message')
+        same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
+  [
+    'k. comment on an approach card',
+    async (env) => {
+      const { page, consoleErrors } = await openPage(env)
+      try {
+        const s = await step(approachesStep())
+        await waitForStep(page, s.step)
+        const card = page.locator('[data-block-id="approach:b"]')
+        await card.locator('input[type="radio"]').focus()
+        await page.locator('.comment-pin').waitFor({ state: 'visible', timeout: 5000 })
+        await commentOn(page, card, THREAD_TEXT)
+
+        const events = await nextEvents()
+        same(events.map((e) => e.type), ['comment'], 'event types')
+        same(events[0].payload.block_id, 'approach:b', 'comment block id')
+        same(events[0].payload.text, THREAD_TEXT, 'comment text')
+        approachThreadId = events[0].payload.thread_id
+        assert(typeof approachThreadId === 'string' && approachThreadId, 'the comment event has no thread_id')
+
+        const log = page.getByRole('log')
+        const pointer = log.locator('.chat-pointer')
+        await pointer.waitFor({ timeout: 10_000 })
+        same((await pointer.innerText()).trim(), `Comment: ${THREAD_TEXT}`, 'pointer text')
+        same(await pointer.evaluate((el) => (el.closest('li')?.getBoundingClientRect().height ?? 999) < 60), true, 'pointer is one line')
+
+        await cliOk('reply', session, approachThreadId, '--text', 'Fixed in the revision', '--resolve', 'addressed')
+        const popover = page.locator('.thread-popover')
+        await popover.getByText('Fixed in the revision').waitFor({ timeout: 10_000 })
+        await popover.getByText('Addressed', { exact: true }).waitFor({ timeout: 5000 })
+        same(await log.getByText('Fixed in the revision').count(), 0, 'agent reply shown in the chat log')
+
+        await popover.getByRole('button', { name: 'Close' }).click()
+        await popover.waitFor({ state: 'detached', timeout: 5000 })
+        await page.evaluate(`window.scrollTo(0, document.body.scrollHeight)`)
+        await pointer.click()
+        await popover.waitFor({ state: 'visible', timeout: 5000 })
+        await popover.getByText('Fixed in the revision').waitFor({ timeout: 5000 })
+        const box = await card.boundingBox()
+        const viewport = page.viewportSize()
+        assert(box && viewport && box.y + box.height > 0 && box.y < viewport.height, 'the pointer did not scroll the card into view')
+        same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
+  [
+    'l. comment on a diagram node',
+    async (env) => {
+      const { page, consoleErrors } = await openPage(env)
+      try {
+        const s = await step({
+          kind: 'questions',
+          stage: 'questions',
+          title: 'Service question',
+          questions: [
+            {
+              id: 'svc',
+              type: 'single',
+              prompt: 'Are these the right services?',
+              content_html: MINI_FLOW_HTML,
+              options: [
+                { id: 'yes', label: 'Yes' },
+                { id: 'no', label: 'No' },
+              ],
+            },
+          ],
+        })
+        await waitForStep(page, s.step)
+        const node = page.locator('q-flow [data-q-flow-node="svc-a"]')
+        await node.waitFor({ timeout: DIAGRAM_MS })
+        await commentOn(page, node, 'Should A own the queue?')
+        const events = await nextEvents()
+        same(events.map((e) => e.type), ['comment'], 'event types')
+        same(events[0].payload.block_id, `node:${s.step}/0/svc-a`, 'diagram node block id')
+        same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
+  [
+    'm. thread survives a revision',
+    async (env) => {
+      const { page } = await openPage(env)
+      try {
+        assert(approachThreadId, 'scenario k did not leave a thread')
+        const revision = await step({ ...approachesStep(), changed: { summary: 'Reworded B', blocks: ['approach:b'] } })
+        await waitForStep(page, revision.step)
+        const badge = page.locator('.comment-badge[data-for-block="approach:b"]')
+        await badge.waitFor({ state: 'visible', timeout: 10_000 })
+        same((await badge.innerText()).trim(), '1', 'badge count')
+        same(await page.locator('.comment-badge[data-for-block="approach:a"]').count(), 0, 'badge on an approach without threads')
+        await badge.click()
+        const popover = page.locator('.thread-popover')
+        await popover.getByText(THREAD_TEXT).waitFor({ timeout: 5000 })
+        await popover.getByText('Addressed', { exact: true }).waitFor({ timeout: 5000 })
       } finally {
         await page.close()
       }
