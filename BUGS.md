@@ -345,6 +345,6 @@ entries' IDs; manual edits to fix typos are fine.
 ## BUG-42: making-videos cloud POST test fails: request arrives without Content-Type
 - **Observed**: 2026-11-02
 - **File**: tests/test_making_videos_cloud.py:249
-- **Description**: test_post_json_inline_and_from_file fails deterministically with KeyError: 'Content-Type'; the POST sent with --json reaches the stub server without a Content-Type header. Reproduces at eb13d77, before the companion-first work, on macOS with python3. Found during the SDD wave gate for companion-first brainstorming; unrelated to that change.
+- **Description**: test_post_json_inline_and_from_file fails deterministically with KeyError: 'Content-Type'; the POST sent with --json reaches the stub server without a Content-Type header. Reproduces at eb13d77, before the companion-first work, on macOS with python3. Found during the SDD wave gate for companion-first brainstorming; unrelated to that change. Two more tests in the same file also fail at eb13d77 and likely share the cause: test_total_timeout_covers_every_phase_and_spares_an_existing_out_file[/stall-error-500] and test_connection_failure_is_logged_with_status_zero.
 - **Severity**: medium
 
