@@ -26,6 +26,14 @@ GUIDANCE_LISTS = ("repo_skills", "repo_skill_references", "repo_skill_reference_
                   "claude_md", "rules", "other")
 
 
+def _resolve_existing_or_missing(path):
+    """Resolve like a non-strict resolve, but raise on a symlink loop on every Python version."""
+    try:
+        return path.resolve(strict=True)
+    except FileNotFoundError:
+        return path.resolve()
+
+
 def ancestor_claude_mds(git_root, changed_files):
     """Root CLAUDE.md plus nested CLAUDE.md in the ancestor dirs of changed
     files, all within git_root. Returns a sorted, de-duplicated list."""
@@ -36,7 +44,7 @@ def ancestor_claude_mds(git_root, changed_files):
         found.append(str(root_md))
     for rel in changed_files:
         try:
-            p = (git_root / rel).resolve()
+            p = _resolve_existing_or_missing(git_root / rel)
             p.relative_to(git_root)
         except (ValueError, RuntimeError, OSError):
             continue
