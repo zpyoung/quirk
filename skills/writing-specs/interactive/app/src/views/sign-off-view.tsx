@@ -10,6 +10,7 @@ import { RadioList, RadioListItem } from '@astryxdesign/core/RadioList'
 import { StatusDot } from '@astryxdesign/core/StatusDot'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
+import { deliverExport } from '../deliver-export'
 import { decisionRecord, localStamp } from '../review-state'
 import type { Export, LogicSpec, LogicSpecPayload, ReviewState } from '../spec-types'
 import type { ReviewGate } from '../review-state'
@@ -118,17 +119,11 @@ function ReviewSignOff({ payload, spec, state, update, gates, createExport, onEx
   const record = decisionRecord(state, spec)
   const recordJson = JSON.stringify(record, null, 2)
 
-  const download = () => {
+  const download = async () => {
     const data = createExport()
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${payload.slug}-decisions-${localStamp(new Date())}.json`
-    anchor.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    const result = await deliverExport(data, `${payload.slug}-decisions-${localStamp(new Date())}.json`)
     onExport(data)
-    setCopyStatus('Decision export downloaded. Claude moves it next to review.html when it picks it up.')
+    setCopyStatus(result === 'posted' ? 'Sent to the agent' : 'Decision export downloaded. Claude moves it next to review.html when it picks it up.')
   }
   const copy = async () => {
     const data = createExport()
