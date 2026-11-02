@@ -341,3 +341,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
 - **Severity**: low
 - **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+
+## BUG-42: making-videos cloud POST test fails: request arrives without Content-Type
+- **Observed**: 2026-11-02
+- **File**: tests/test_making_videos_cloud.py:249
+- **Description**: test_post_json_inline_and_from_file fails deterministically with KeyError: 'Content-Type'; the POST sent with --json reaches the stub server without a Content-Type header. Reproduces at eb13d77, before the companion-first work, on macOS with python3. Found during the SDD wave gate for companion-first brainstorming; unrelated to that change.
+- **Severity**: medium
+
