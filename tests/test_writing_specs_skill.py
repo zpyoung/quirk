@@ -76,6 +76,17 @@ def test_tech_spec_complexity_gate_intact() -> None:
     assert "Tech spec: requested" in body
 
 
+def test_tech_spec_pins_shapes_that_several_units_share() -> None:
+    """writing-plans drops contract edges only because the tech spec carries the shared shapes."""
+    data_models = next(line for line in TECH.read_text().splitlines()
+                       if line.startswith("- **Data models / schemas**"))
+    for token in ("more than one unit builds against", "sample data and fixtures",
+                  "shared types files", "becomes a dependency edge"):
+        assert token in data_models
+    completeness = next(line for line in REVIEWER.read_text().splitlines()
+                        if "| Completeness |" in line)
+    assert "more than one unit builds against" in completeness
+
 def test_ownership_paragraph_has_one_home() -> None:
     """The rubric forbids duplicating a paragraph across the pair -- it must obey itself."""
     assert "owns *where* and *contracts*" in HUB.read_text()
