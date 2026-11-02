@@ -1000,10 +1000,71 @@ def test_sdd_cache_requires_verified_tree_identity_and_command() -> None:
         assert token in audit
     assert "worker's text claim alone" in audit and "once" in audit
     gates = sdd_step(7)
-    for token in ('((HEAD^{tree}, "clean"), full_suite_cmd)', "tree_test_cache",
+    for token in ('((HEAD^{tree}, "clean"), gate_cmd)', "tree_test_cache",
                   "$WORK/gate-check.json", "ReusedCheckInput", "tree_hash",
                   "clean_tree: true", "duration_ms"):
         assert token in gates
+
+
+def test_sdd_preflight_records_the_gate_selection_inputs() -> None:
+    preflight = " ".join(sdd_step(1).split())
+    for token in ("FULL_SUITE_CMD", "TARGETED_TEST_CMD", "TEST_FILE_GLOB", "COMPONENT_CHECKS"):
+        assert token in preflight
+
+
+def test_sdd_wave_gates_select_tests_by_a_reproducible_rule() -> None:
+    gates = " ".join(sdd_step(7).split())
+    selecting = _section(gates, "#### Selecting a gate", "#### Running a gate")
+    for token in ("select_gate(BASE, tasks)", "acceptance commands", "verbatim", "plan task order",
+                  "TARGETED_TEST_CMD", "bytewise-sorted", "Owned", "scope.files", "TEST_FILE_GLOB",
+                  "Guarded", "DO-NOT-CHANGE", "git grep -l -F",
+                  'git diff --name-only --no-renames "$BASE" HEAD', "second component", "stem",
+                  "COMPONENT_CHECKS", "select_gate(WAVE_BASE", "select_gate(FIX_BASE", "FIX_BASE",
+                  "GATE_CMDS"):
+        assert token in selecting
+    # an empty selection runs no tests rather than falling back to the full suite mid-run
+    assert "cannot name its tests runs no tests" in selecting
+    fallback = selecting.split("cannot name its tests", 1)[1].split("The **wave gate**", 1)[0]
+    assert "Never substitute `FULL_SUITE_CMD` mid-run" in fallback and "unguarded" in fallback
+
+
+def test_sdd_mid_run_gates_never_run_the_full_suite_by_default() -> None:
+    gates = " ".join(sdd_step(7).split())
+    running = _section(gates, "#### Running a gate", "#### Final gate")
+    assert "FULL_SUITE_CMD" not in running and "full_suite_cmd" not in running
+    review = sdd_step(8)
+    checkpoint = _section(review, "**Checkpoint**", "**Final loop**")
+    assert "fix-batch gate" in checkpoint and "re-run build/test" not in checkpoint
+
+
+def test_sdd_full_suite_runs_once_in_the_final_gate_before_the_final_loop() -> None:
+    gates = " ".join(sdd_step(7).split())
+    final = _section(gates, "#### Final gate", "#### Red gates")
+    for token in ("once", "FULL_SUITE_CMD", "COMPONENT_CHECKS", '"$RUN_BASE" HEAD',
+                  "FINAL_GATE_CMDS", "Final Round 1", "single-wave", "fix-batch gates", "PR CI"):
+        assert token in final
+    process = _section(SDD_SKILL.read_text(), "## The Process", "### Step 1:")
+    assert process.index('"Final gate (full suite, once)" -> "Final loop"') > 0
+
+
+def test_sdd_red_final_gate_is_a_selection_miss_that_reruns_the_final_gate() -> None:
+    red = _section(" ".join(sdd_step(7).split()), "#### Red gates", "#### Checkpoints")
+    for token in ("A red final gate", "final-gate fixer", "Tier 2", "flake", "Step 6",
+                  "re-run the whole final gate", "selection miss", "run journal", "final summary"):
+        assert token in red
+    failure = _section(SDD_SKILL.read_text(), "## Failure routing", "## Red Flags")
+    assert "| Final gate red |" in failure and "selection miss" in failure
+    never = SDD_SKILL.read_text().split("**Never:**")[1]
+    assert "final loop without a green final gate" in never
+
+
+def test_sdd_prepass_reuses_the_latest_gate_command_list_per_round() -> None:
+    review = " ".join(sdd_step(8).split())
+    prepass = review[review.index("`adversarial-review prepass` once per round"):]
+    prepass = prepass[:prepass.index("If `prepass --reuse-check`")]
+    for token in ("one `--check-cmd` per command", "GATE_CMDS", "FINAL_GATE_CMDS",
+                  '--check-cmd "$FULL_SUITE_CMD"', "Final Rounds 2–5", "fix-batch"):
+        assert token in prepass
 
 
 def test_sdd_wave_gate_automatically_fixes_only_replaced_test_contracts() -> None:
@@ -1089,8 +1150,10 @@ def test_workers_run_only_owned_acceptance_not_the_full_repository_suite(asset: 
     body = (SDD_DIR / "assets" / asset).read_text()
     acceptance = " ".join(_section(body, "## Acceptance", "## Method").split())
     for token in ("{{ACCEPTANCE}}", "owned test files", "exactly as written",
-                  "never run the full repository test suite", "Step 7"):
+                  "never run the full repository test suite", "Step 7", "selected tests",
+                  "full suite once at the end"):
         assert token in acceptance
+    assert "wave gate runs the full suite" not in acceptance
 
 
 def test_writing_plans_assigns_single_owner_tests_and_task_scoped_acceptance() -> None:

@@ -47,7 +47,8 @@ not closed anything.
 
 `{{ACCEPTANCE}}` is scoped to this component's owned test files and fast targeted checks. Run it
 exactly as written; never run the full repository test suite when it targets specific test files.
-Step 7's wave gate runs the full suite once.
+Step 7's gates run the selected tests after merge, and the full suite once at the end of the
+run.
 
 ## Method
 
