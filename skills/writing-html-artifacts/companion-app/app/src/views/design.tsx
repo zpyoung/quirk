@@ -1,4 +1,5 @@
-import { AgentHtml, Diagram, Md, blockKey } from '../blocks'
+import { AgentHtml, Diagram, MdHtml, blockKey } from '../blocks'
+import { annotateSectionHtml, paragraphId, renderSectionMarkdown } from '../section-blocks'
 import type { Step } from '../types'
 import { StepFrame, blockAttrs, type ViewProps } from './common'
 import { VerdictBar } from './verdict'
@@ -11,14 +12,24 @@ export function DesignView({ step, changed, draft, actions }: ViewProps<DesignSt
       <p className="design-count">
         Design {step.index} of {step.total}
       </p>
-      {step.sections.map((section) => (
-        <section key={section.id} className="design-section" {...blockAttrs(`section:${section.id}`, changed)}>
-          <h2 className="section-title">{section.title}</h2>
-          <Md source={section.body_md} />
-          <AgentHtml key={blockKey(step.id, `body:${section.id}`)} html={section.body_html} />
-          {section.diagram ? <Diagram key={blockKey(step.id, `diagram:${section.id}`)} source={section.diagram} /> : null}
-        </section>
-      ))}
+      {step.sections.map((section) => {
+        const md = renderSectionMarkdown(section.body_md, { sectionId: section.id, start: 0, changed })
+        const agent = annotateSectionHtml(section.body_html, { sectionId: section.id, start: md.count, changed })
+        return (
+          <section key={section.id} className="design-section" {...blockAttrs(`section:${section.id}`, changed)}>
+            <h2 className="section-title">{section.title}</h2>
+            <MdHtml html={md.html} />
+            <AgentHtml key={blockKey(step.id, `body:${section.id}`)} html={agent.html} />
+            {section.diagram ? (
+              <Diagram
+                key={blockKey(step.id, `diagram:${section.id}`)}
+                source={section.diagram}
+                blockAttrs={blockAttrs(paragraphId(section.id, md.count + agent.count), changed)}
+              />
+            ) : null}
+          </section>
+        )
+      })}
       <VerdictBar
         stepId={step.id}
         draft={draft}

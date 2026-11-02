@@ -47,7 +47,11 @@ export const AgentHtml = memo(function AgentHtml({ html, className }: { html?: s
 })
 
 export function Md({ source, className }: { source?: string; className?: string }) {
-  const html = renderMarkdown(source)
+  return <MdHtml html={renderMarkdown(source)} className={className} />
+}
+
+/** Markdown that is already rendered to HTML, for callers that number its blocks first. */
+export function MdHtml({ html, className }: { html: string; className?: string }) {
   if (!html) return null
   return <div className={className ? `md ${className}` : 'md'} dangerouslySetInnerHTML={{ __html: html }} />
 }
@@ -66,7 +70,7 @@ function mermaidTheme(): 'dark' | 'default' {
 }
 
 /** Renders one Mermaid diagram into a node React never touches again, loading the library on first use. */
-export function Diagram({ source }: { source?: string }) {
+export function Diagram({ source, blockAttrs }: { source?: string; blockAttrs?: Record<string, string> }) {
   const host = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
   const [themeTick, setThemeTick] = useState(0)
@@ -101,7 +105,7 @@ export function Diagram({ source }: { source?: string }) {
 
   if (!source) return null
   return (
-    <figure className="diagram">
+    <figure className="diagram" {...blockAttrs}>
       <div ref={host} className="diagram-host" role="img" aria-label="Diagram" hidden={failed} />
       {failed ? <pre className="diagram-source">{source}</pre> : null}
     </figure>

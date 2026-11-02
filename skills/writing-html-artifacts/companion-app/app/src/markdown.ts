@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it'
 
-const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
+/** The shared renderer; `section-blocks` reuses it to number blocks as it renders. */
+export const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
 
 const defaultLinkOpen =
   md.renderer.rules.link_open ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))

@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@astryxdesign/core/Button'
 import { AgentHtml, Md, blockKey } from '../blocks'
 import type { Actions, Draft, Step } from '../types'
-import { createDraftGate } from './draft'
+import { onTransportRecovered } from '../transport'
+import { createDraftGate, retryDelay } from './draft'
 
 export interface ViewProps<S extends Step = Step> {
   step: S
@@ -36,20 +37,43 @@ export function StepFrame({ step, changed, children }: { step: Step; changed: Se
 }
 
 /**
- * Posts the draft of step `stepId` 500 ms after its content last changed. The first render is the restored
- * state and posts nothing, and a value equal in content to the last one posted is never posted again, so a
- * new snapshot that merely rebuilds the same form does not loop.
+ * Saves the draft of step `stepId` 500 ms after its content last changed. The first render is the restored
+ * state and saves nothing, and a value equal in content to the last one the server took is never saved again,
+ * so a new snapshot that merely rebuilds the same form does not loop. A save that fails stays pending and is
+ * retried with a growing wait, and at once when the snapshot feed recovers.
  */
 export function useDraftSync(stepId: string, value: Draft, actions: Actions): void {
   const gate = useRef(createDraftGate())
+  const failures = useRef(0)
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(
+    () =>
+      onTransportRecovered(() => {
+        failures.current = 0
+        setAttempt((n) => n + 1)
+      }),
+    [],
+  )
+
   useEffect(() => {
-    if (!gate.current.wants(stepId, value)) return undefined
+    if (!gate.current.wants(stepId, value)) {
+      failures.current = 0
+      return undefined
+    }
+    const wait = failures.current === 0 ? 500 : retryDelay(failures.current)
     const timer = setTimeout(() => {
-      gate.current.sent(stepId, value)
-      void actions.saveDraft(stepId, value as Record<string, unknown>)
-    }, 500)
+      void gate.current.save(stepId, value, (id, draft) => actions.saveDraft(id, draft as Record<string, unknown>)).then((result) => {
+        if (result === 'error') {
+          failures.current += 1
+          setAttempt((n) => n + 1)
+        } else {
+          failures.current = 0
+        }
+      })
+    }, wait)
     return () => clearTimeout(timer)
-  }, [stepId, value, actions])
+  }, [stepId, value, actions, attempt])
 }
 
 export function CommentField({ value, onChange, label = 'Comment (optional)' }: { value: string; onChange(next: string): void; label?: string }) {

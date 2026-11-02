@@ -37,6 +37,16 @@ export async function postEvent(
   return 'error'
 }
 
+const recoveredListeners = new Set<() => void>()
+
+/** Calls `listener` each time the snapshot feed succeeds after failing; returns the unsubscribe function. */
+export function onTransportRecovered(listener: () => void): () => void {
+  recoveredListeners.add(listener)
+  return () => {
+    recoveredListeners.delete(listener)
+  }
+}
+
 export function backoffDelay(failures: number): number {
   if (failures < FAILURES_BEFORE_PAUSE) return POLL_MS
   return Math.min(BACKOFF_CAP_MS, POLL_MS * 2 ** (failures - FAILURES_BEFORE_PAUSE + 1))
@@ -78,8 +88,10 @@ export function useSnapshotFeed(enabled: boolean): SnapshotFeed {
       } else if (response.status !== 204) {
         throw new Error(`snapshot returned ${response.status}`)
       }
+      const recovered = failures.current > 0
       failures.current = 0
       setPaused(false)
+      if (recovered) for (const listener of [...recoveredListeners]) listener()
     } catch {
       if (!alive.current) return
       failures.current += 1

@@ -1,9 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { postEvent } from '../src/transport'
-import type { Actions, Draft, Step } from '../src/types'
+import type { Actions, Draft, PostResult, Step } from '../src/types'
 import { ApproachesView } from '../src/views/approaches'
-import { createDraftGate, draftKey, pickDraft, restorePick } from '../src/views/draft'
+import { createDraftGate, draftKey, pickDraft, restorePick, retryDelay } from '../src/views/draft'
 import { HandOffView } from '../src/views/hand-off'
 
 const failures: string[] = []
@@ -19,12 +19,72 @@ const check = (ok: boolean, message: string) => {
   check(!gate.wants('s1', form()), 'an equal rebuilt value is wanted before anything was posted')
   const typed: Draft = { answers: { q1: { selected: ['a'] } }, comment: 'wip!' }
   check(gate.wants('s1', typed), 'a changed value is not wanted')
-  gate.sent('s1', typed)
+  await gate.save('s1', typed, async () => 'ok')
   for (let snapshot = 0; snapshot < 5; snapshot += 1) {
     check(!gate.wants('s1', { answers: { q1: { selected: ['a'] } }, comment: 'wip!' }), `an unchanged form posts again after snapshot ${snapshot}`)
   }
   check(gate.wants('s1', form()), 'reverting to the restored content after a post is not wanted')
 }
+
+// a failed save stays pending and is retried; an ok or superseded save is settled
+{
+  const typed: Draft = { answers: {}, comment: 'typed' }
+  const results: PostResult[] = ['error', 'error', 'ok']
+  const posts: string[] = []
+  const post = async (_id: string, value: Draft): Promise<PostResult> => {
+    posts.push(draftKey(value))
+    return results.shift() ?? 'ok'
+  }
+  const gate = createDraftGate()
+  gate.wants('s1', { answers: {}, comment: '' })
+  check(gate.wants('s1', typed), 'a typed change is not wanted')
+  check((await gate.save('s1', typed, post)) === 'error', 'a failed save does not report error')
+  check(gate.wants('s1', { answers: {}, comment: 'typed' }), 'a draft whose save failed is no longer pending')
+  check((await gate.save('s1', typed, post)) === 'error', 'a second failed save does not report error')
+  check(gate.wants('s1', typed), 'a draft that failed twice is no longer pending')
+  check((await gate.save('s1', typed, post)) === 'ok', 'the retry does not report ok')
+  check(!gate.wants('s1', { answers: {}, comment: 'typed' }), 'a saved draft is pending again')
+  check(posts.length === 3, `expected three posts for one draft, got ${posts.length}`)
+  check(!gate.wants('s1', typed) && posts.length === 3, 'an unchanged saved draft is posted again')
+}
+{
+  const typed: Draft = { answers: {}, comment: 'typed' }
+  const gate = createDraftGate()
+  gate.wants('s1', { answers: {}, comment: '' })
+  check(gate.wants('s1', typed), 'a typed change is not wanted')
+  check((await gate.save('s1', typed, async () => 'superseded')) === 'superseded', 'a 409 save does not report superseded')
+  check(!gate.wants('s1', typed), 'a superseded draft is retried')
+}
+
+// a slow save that settles after a newer one does not roll the settled state back
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { comment: '' })
+  const a: Draft = { comment: 'a' }
+  const b: Draft = { comment: 'b' }
+  let releaseA: (r: PostResult) => void = () => {}
+  const slow = gate.save('s1', a, () => new Promise<PostResult>((resolve) => (releaseA = resolve)))
+  await gate.save('s1', b, async () => 'ok')
+  releaseA('ok')
+  await slow
+  check(!gate.wants('s1', b), 'an older save settling late made the newer draft pending again')
+}
+
+// a save that finishes after the form moved to another step settles nothing there
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { comment: '' })
+  let release: (r: PostResult) => void = () => {}
+  const late = gate.save('s1', { comment: 'x' }, () => new Promise<PostResult>((resolve) => (release = resolve)))
+  gate.wants('s2', { comment: 'x' })
+  release('ok')
+  await late
+  check(gate.wants('s2', { comment: 'y' }), 'the new step lost its change to a save for the old step')
+}
+
+check(retryDelay(1) === 1000 && retryDelay(2) === 2000 && retryDelay(3) === 4000, 'the retry wait does not double')
+check(retryDelay(5) === 16_000 && retryDelay(50) === 16_000, 'the retry wait is not capped')
+check(retryDelay(0) === 1000, 'the retry wait for no failures is not the base')
 
 // a change that is typed and reverted before the timer fires leaves nothing to post
 {
@@ -38,7 +98,7 @@ const check = (ok: boolean, message: string) => {
 {
   const gate = createDraftGate()
   gate.wants('s1', { answers: {}, comment: 'a' })
-  gate.sent('s1', { answers: {}, comment: 'b' })
+  await gate.save('s1', { answers: {}, comment: 'b' }, async () => 'ok')
   check(!gate.wants('s2', { answers: {}, comment: 'b' }), 'the first value of a new step is wanted')
   check(gate.wants('s2', { answers: {}, comment: 'c' }), 'a change on the new step is not wanted')
 }

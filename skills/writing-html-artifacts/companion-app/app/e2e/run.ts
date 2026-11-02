@@ -659,6 +659,32 @@ const scenarios: [string, Scenario][] = [
       }
     },
   ],
+  [
+    'n. comment on a design paragraph',
+    async (env) => {
+      const { page, consoleErrors } = await openPage(env)
+      try {
+        const s = await step(
+          designStep({
+            sections: [{ id: 'arch', title: 'Architecture', body_md: 'Two services talk over a queue.\n\nThe ledger is the single writer.' }],
+          }),
+        )
+        await waitForStep(page, s.step)
+        same(await page.locator('[data-block-id^="section:arch/p"]').count(), 2, 'paragraph blocks in the section')
+        const second = page.locator('[data-block-id="section:arch/p1"]')
+        same((await second.innerText()).trim(), 'The ledger is the single writer.', 'second paragraph text')
+        await commentOn(page, second, 'Who guards the writer?')
+        const events = await nextEvents()
+        same(events.map((e) => e.type), ['comment'], 'event types')
+        same(events[0].payload.block_id, 'section:arch/p1', 'comment block id')
+        same(events[0].payload.text, 'Who guards the writer?', 'comment text')
+        await page.locator('.comment-badge[data-for-block="section:arch/p1"]').waitFor({ state: 'attached', timeout: 10_000 })
+        same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
 ]
 
 async function main(): Promise<number> {
