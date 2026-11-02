@@ -157,11 +157,14 @@ def _question(raw: dict, path: str) -> dict:
                 raise _fail(_join(path, key), "text questions take no options or recommendation")
         return out
     out["options"] = _items(raw, "options", path, _option, 2, 4)
-    recommended = raw.get("recommended")
-    if recommended is not None and recommended != "":
-        if not isinstance(recommended, str) or recommended not in {o["id"] for o in out["options"]}:
+    if "recommended" in raw:
+        recommended = raw["recommended"]
+        if not isinstance(recommended, str):
             raise _fail(_join(path, "recommended"), "must be the id of one of the question's options")
-        out["recommended"] = recommended
+        if recommended != "":
+            if recommended not in {o["id"] for o in out["options"]}:
+                raise _fail(_join(path, "recommended"), "must be the id of one of the question's options")
+            out["recommended"] = recommended
     return out
 
 
