@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "kind": "edit-card",
+  "stage": "approaches",
+  "title": "edit-card step",
+  "decision_id": "pick",
+  "from": "a",
+  "to": "b",
+  "invalidates": [],
+  "origin": "chat"
+}

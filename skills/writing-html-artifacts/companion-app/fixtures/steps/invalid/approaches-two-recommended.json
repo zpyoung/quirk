@@ -1,0 +1,34 @@
+{
+  "v": 1,
+  "kind": "approaches",
+  "stage": "approaches",
+  "title": "approaches step",
+  "approaches": [
+    {
+      "id": "a",
+      "title": "Approach a",
+      "summary_md": "Summary **text**.",
+      "recommended": true,
+      "pros": [
+        "fast"
+      ],
+      "cons": [
+        "new"
+      ],
+      "sources": []
+    },
+    {
+      "id": "b",
+      "title": "Approach b",
+      "summary_md": "Summary **text**.",
+      "recommended": true,
+      "pros": [
+        "fast"
+      ],
+      "cons": [
+        "new"
+      ],
+      "sources": []
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "kind": "spec-review",
+  "stage": "spec",
+  "title": "spec-review step",
+  "format": "markdown",
+  "sections": [
+    {
+      "id": "goal",
+      "title": "Goal",
+      "body_md": "Ship it."
+    }
+  ]
+}
