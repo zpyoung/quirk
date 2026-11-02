@@ -118,6 +118,21 @@ def test_recommendation_is_optional_for_single_questions():
     validate_step(raw)
 
 
+@pytest.mark.parametrize("value", [None, 0, False, ["a"]])
+def test_present_non_string_recommendation_is_rejected(value):
+    raw = load(FIXTURES / "valid" / "questions-single.json")
+    raw["questions"][0]["recommended"] = value
+    with pytest.raises(StepError) as info:
+        validate_step(raw)
+    assert info.value.field == "questions[0].recommended"
+
+
+def test_empty_string_recommendation_is_treated_as_absent():
+    raw = load(FIXTURES / "valid" / "questions-single.json")
+    raw["questions"][0]["recommended"] = ""
+    assert "recommended" not in validate_step(raw)["questions"][0]
+
+
 def test_at_most_one_recommended_per_question_is_structural():
     raw = load(FIXTURES / "valid" / "questions-mixed.json")
     raw["questions"][0]["recommended"] = ["narrow", "wide"]

@@ -17,6 +17,7 @@
   "text-with-options.json": "questions[0].options",
   "text-with-recommended.json": "questions[0].recommended",
   "recommended-not-option.json": "questions[0].recommended",
+  "question-recommended-null.json": "questions[0].recommended",
   "duplicate-question-ids.json": "questions[1].id",
   "duplicate-option-ids.json": "questions[0].options[1].id",
   "uppercase-id.json": "questions[0].id",
