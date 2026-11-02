@@ -16,6 +16,7 @@ const fail = (where: string, message: string) => failures.push(`${where}: ${mess
 const actions: Actions = {
   submit: async () => 'ok',
   send: async () => 'ok',
+  saveDraft: async () => 'ok',
 }
 
 function snapshot(step: Step | null, extra: Partial<Snapshot> = {}): Snapshot {

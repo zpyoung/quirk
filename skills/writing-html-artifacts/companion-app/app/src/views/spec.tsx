@@ -23,6 +23,7 @@ export function SpecReviewView({ step, changed, draft, actions, token }: ViewPro
         </section>
       ))}
       <VerdictBar
+        stepId={step.id}
         draft={draft}
         actions={actions}
         verdicts={[

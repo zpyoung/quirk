@@ -9,8 +9,9 @@
     "tokens": "python3 scripts/gen_tokens.py > src/quirk-tokens.css",
     "tokens-check": "tsx scripts/check-tokens.ts",
     "steps-check": "tsx scripts/check-steps.ts",
+    "drafts-check": "tsx scripts/check-drafts.ts",
     "template-check": "tsx scripts/check-template.ts",
-    "check": "pnpm run typecheck && pnpm run tokens-check && pnpm run steps-check && pnpm run template-check",
+    "check": "pnpm run typecheck && pnpm run tokens-check && pnpm run steps-check && pnpm run drafts-check && pnpm run template-check",
     "build": "vite build"
   },
   "dependencies": {

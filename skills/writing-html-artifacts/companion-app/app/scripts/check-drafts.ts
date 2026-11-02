@@ -1,0 +1,112 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { postEvent } from '../src/transport'
+import type { Actions, Draft, Step } from '../src/types'
+import { ApproachesView } from '../src/views/approaches'
+import { createDraftGate, draftKey, pickDraft, restorePick } from '../src/views/draft'
+import { HandOffView } from '../src/views/hand-off'
+
+const failures: string[] = []
+const check = (ok: boolean, message: string) => {
+  if (!ok) failures.push(message)
+}
+
+// the same form rebuilt as a fresh object on every snapshot must not be posted again
+{
+  const gate = createDraftGate()
+  const form = (): Draft => ({ answers: { q1: { selected: ['a'] } }, comment: 'wip' })
+  check(!gate.wants('s1', form()), 'the first value of a step (the restored state) is wanted')
+  check(!gate.wants('s1', form()), 'an equal rebuilt value is wanted before anything was posted')
+  const typed: Draft = { answers: { q1: { selected: ['a'] } }, comment: 'wip!' }
+  check(gate.wants('s1', typed), 'a changed value is not wanted')
+  gate.sent('s1', typed)
+  for (let snapshot = 0; snapshot < 5; snapshot += 1) {
+    check(!gate.wants('s1', { answers: { q1: { selected: ['a'] } }, comment: 'wip!' }), `an unchanged form posts again after snapshot ${snapshot}`)
+  }
+  check(gate.wants('s1', form()), 'reverting to the restored content after a post is not wanted')
+}
+
+// a change that is typed and reverted before the timer fires leaves nothing to post
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { answers: {}, comment: '' })
+  check(gate.wants('s1', { answers: {}, comment: 'x' }), 'a typed change is not wanted')
+  check(!gate.wants('s1', { answers: {}, comment: '' }), 'a reverted change is wanted')
+}
+
+// a new step starts from its own restored state
+{
+  const gate = createDraftGate()
+  gate.wants('s1', { answers: {}, comment: 'a' })
+  gate.sent('s1', { answers: {}, comment: 'b' })
+  check(!gate.wants('s2', { answers: {}, comment: 'b' }), 'the first value of a new step is wanted')
+  check(gate.wants('s2', { answers: {}, comment: 'c' }), 'a change on the new step is not wanted')
+}
+
+check(draftKey({ answers: { a: { selected: ['x'] }, b: { text: 't' } }, comment: 'c' }) === draftKey({ comment: 'c', answers: { b: { text: 't' }, a: { selected: ['x'] } } }), 'key order changes the draft key')
+check(draftKey({ comment: 'a' }) !== draftKey({ comment: 'b' }), 'different drafts share a key')
+
+// restoring a pick
+check(restorePick({ pick: 'two' }, ['one', 'two']) === 'two', 'a saved pick is not restored')
+check(restorePick({ pick: 'gone' }, ['one', 'two']) === '', 'a pick naming no option is restored')
+check(restorePick({ pick: 3 as unknown as string }, ['one']) === '', 'a non-string pick is restored')
+check(restorePick(null, ['one']) === '' && restorePick(undefined, ['one']) === '' && restorePick({}, ['one']) === '', 'a missing pick is restored')
+check(JSON.stringify(pickDraft('two', 'c')) === '{"answers":{},"comment":"c","pick":"two"}', 'a pick is not part of the draft payload')
+check(!('pick' in pickDraft('', 'c')), 'an empty pick is part of the draft payload')
+
+// the views start from the saved pick
+const actions: Actions = { submit: async () => 'ok', send: async () => 'ok', saveDraft: async () => 'ok' }
+const props = (step: Step, draft: Draft | null) => ({ step: step as never, changed: new Set<string>(), draft, actions, token: 't' })
+const viewApproaches = (step: Step, draft: Draft | null) => renderToStaticMarkup(createElement(ApproachesView, props(step, draft)))
+const viewHandOff = (step: Step, draft: Draft | null) => renderToStaticMarkup(createElement(HandOffView, props(step, draft)))
+const base = { id: 's', nonce: 'n', v: 1, stage: 'approaches', title: 'T' }
+const approaches = {
+  ...base,
+  kind: 'approaches',
+  approaches: [
+    { id: 'one', title: 'One', summary_md: 'a', recommended: true },
+    { id: 'two', title: 'Two', summary_md: 'b', recommended: false },
+  ],
+} as unknown as Step
+const handOff = {
+  ...base,
+  kind: 'hand-off',
+  choices: [
+    { id: 'plan', label: 'Plan', description: 'p', recommended: true },
+    { id: 'stop', label: 'Stop', description: 's', recommended: false },
+  ],
+} as unknown as Step
+const checkedIds = (html: string) => [...html.matchAll(/<input[^>]*type="radio"[^>]*>/g)].filter((m) => /\schecked/.test(m[0])).map((m) => /value="([^"]*)"/.exec(m[0])?.[1])
+check(checkedIds(viewApproaches(approaches, null)).length === 0, 'an approach is selected without a draft')
+check(checkedIds(viewApproaches(approaches, { pick: 'two' })).join() === 'two', 'the approaches view does not restore the saved pick')
+check(checkedIds(viewApproaches(approaches, { pick: 'zzz' })).length === 0, 'the approaches view restores a pick that names no approach')
+check(checkedIds(viewHandOff(handOff, { pick: 'stop' })).join() === 'stop', 'the hand-off view does not restore the saved pick')
+
+// the draft request names its step and a 409 is a result, not an error
+{
+  const sent: { body: Record<string, unknown> }[] = []
+  let status = 204
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+    sent.push({ body: JSON.parse(init?.body ?? '{}') })
+    return new Response(null, { status })
+  }) as typeof fetch
+  try {
+    const boot = { token: 'tok', session: 's' }
+    check((await postEvent(boot, 'draft', { comment: 'x' }, { step: 'step-9' })) === 'ok', 'a saved draft is not ok')
+    check(sent[0]?.body.step === 'step-9' && !('nonce' in (sent[0]?.body ?? {})), 'the draft body does not carry the step id')
+    status = 409
+    check((await postEvent(boot, 'draft', { comment: 'x' }, { step: 'step-9' })) === 'superseded', 'a 409 draft is not reported as superseded')
+    await postEvent(boot, 'submit', { pick: 'one' }, { nonce: 'n1' })
+    check(sent[2]?.body.nonce === 'n1' && !('step' in (sent[2]?.body ?? {})), 'a submit body does not carry just the nonce')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}
+
+if (failures.length) {
+  console.error(`drafts-check failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`)
+  process.exitCode = 1
+} else {
+  console.log('drafts-check passed: draft dedupe, pick restore and step-scoped draft posts.')
+}

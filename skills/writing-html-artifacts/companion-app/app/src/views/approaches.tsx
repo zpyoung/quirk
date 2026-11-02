@@ -1,17 +1,18 @@
 import { useId, useMemo, useState, type FormEvent } from 'react'
 import { AgentHtml, Md, blockKey } from '../blocks'
 import type { Draft, Step } from '../types'
+import { pickDraft, restorePick } from './draft'
 import { CommentField, FormError, StepFrame, SubmitButton, Tag, blockAttrs, useDraftSync, type ViewProps } from './common'
 
 type ApproachesStep = Extract<Step, { kind: 'approaches' }>
 
 export function ApproachesView({ step, changed, draft, actions }: ViewProps<ApproachesStep>) {
   const name = useId()
-  const [pick, setPick] = useState('')
+  const [pick, setPick] = useState(() => restorePick(draft, step.approaches.map((item) => item.id)))
   const [comment, setComment] = useState(typeof draft?.comment === 'string' ? draft.comment : '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useDraftSync(useMemo<Draft>(() => ({ answers: {}, comment }), [comment]), actions)
+  useDraftSync(step.id, useMemo<Draft>(() => pickDraft(pick, comment), [pick, comment]), actions)
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()

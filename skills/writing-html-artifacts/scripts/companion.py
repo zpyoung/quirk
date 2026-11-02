@@ -641,7 +641,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": f"client_id must be a string of 1 to {MAX_CLIENT_ID} characters"})
             return
         kind = body.get("type")
-        if kind not in APP_EVENT_TYPES:
+        if not isinstance(kind, str) or kind not in APP_EVENT_TYPES:
             self._json(400, {"error": "unsupported event type"})
             return
         payload = body.get("payload", {})
@@ -651,7 +651,7 @@ class _Handler(BaseHTTPRequestHandler):
         app = self.server.app_state
         try:
             with app.lock():
-                status, reply = self._record_app_event(app, kind, client_id, body.get("nonce"), payload)
+                status, reply = self._record_app_event(app, kind, client_id, body.get("nonce"), body.get("step"), payload)
         except AppStateError as exc:
             status, reply = 400, {"error": str(exc), "field": exc.field}
         if reply is None:
@@ -660,17 +660,29 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(status, reply)
 
     def _record_app_event(
-        self, app: AppState, kind: str, client_id: str, nonce: object, payload: dict
+        self, app: AppState, kind: str, client_id: str, nonce: object, draft_step: object, payload: dict
     ) -> tuple[int, Optional[dict]]:
-        """Validate one app event against the current step and store it; runs under the state lock."""
+        """Validate one app event against the current step and store it; runs under the state lock.
+
+        ``draft_step`` is the step id a draft belongs to; a draft for any step but the current one is
+        superseded and saves nothing. A ``continue`` is recorded even before the first step exists.
+        """
         current = self.server.current()
+        if kind == "draft" and not (isinstance(draft_step, str) and draft_step):
+            return 400, {"error": "a draft must name its step"}
         if kind != "draft" and any(e.get("client_id") == client_id for e in app.events_after(0)):
             return 200, {"duplicate": True}
         needs_nonce = kind in ("submit", "edit-decision")
         if needs_nonce and (current is None or nonce != current["nonce"]):
             return 409, {"superseded": True}
         if current is None:
+            if kind == "continue" and not payload:
+                if app.append_event(kind, payload, client_id, step=None) is None:
+                    return 200, {"duplicate": True}
+                return 204, None
             return 400, {"error": "no step is current"}
+        if kind == "draft" and draft_step != current["screen"]:
+            return 409, {"superseded": True}
         step = _read_json(_state_dir(self.server.session) / "steps" / f"{current['screen']}.json")
         if not isinstance(step, dict):
             return 400, {"error": "the current step is unreadable"}
@@ -691,7 +703,7 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         kind, slug = body.get("kind"), body.get("slug")
-        if kind not in REVIEW_KINDS:
+        if not isinstance(kind, str) or kind not in REVIEW_KINDS:
             self._json(400, {"error": f"kind must be one of {', '.join(REVIEW_KINDS)}"})
             return
         if not isinstance(slug, str) or not REVIEW_SLUG.fullmatch(slug):
@@ -726,10 +738,12 @@ class _Handler(BaseHTTPRequestHandler):
 def _app_event_problem(kind: str, step: dict, payload: dict, app: AppState) -> Optional[str]:
     """Why ``payload`` is not a valid ``kind`` event for ``step``, or None."""
     if kind == "draft":
-        if set(payload) - {"answers", "comment"}:
-            return "a draft carries only answers and comment"
+        if set(payload) - {"answers", "comment", "pick"}:
+            return "a draft carries only answers, comment and pick"
         if "answers" in payload and not isinstance(payload["answers"], dict):
             return "answers must be an object"
+        if "pick" in payload and not isinstance(payload["pick"], str):
+            return "pick must be a string"
         return _comment_problem(payload)
     if kind == "continue":
         return None if not payload else "continue takes an empty payload"
@@ -737,7 +751,8 @@ def _app_event_problem(kind: str, step: dict, payload: dict, app: AppState) -> O
         extra = set(payload) - {"decision_id", "to", "note"}
         if extra:
             return f"unknown payload field(s): {', '.join(sorted(extra))}"
-        if payload.get("decision_id") not in {d.get("id") for d in app.snapshot()["decisions"]}:
+        decision_id = payload.get("decision_id")
+        if not isinstance(decision_id, str) or decision_id not in {d.get("id") for d in app.snapshot()["decisions"]}:
             return "decision_id must name an existing decision"
         for key in ("to", "note"):
             if key in payload and not (isinstance(payload[key], str) and len(payload[key]) <= MAX_COMMENT):
@@ -746,7 +761,7 @@ def _app_event_problem(kind: str, step: dict, payload: dict, app: AppState) -> O
     if kind == "edit-decision":
         if step.get("kind") != "edit-card":
             return "edit-decision is only valid on an edit-card step"
-        if set(payload) != {"decision"} or payload["decision"] not in ("confirm", "cancel"):
+        if set(payload) != {"decision"} or not isinstance(payload["decision"], str) or payload["decision"] not in ("confirm", "cancel"):
             return "payload must be {decision: confirm|cancel}"
         return None
     return _submit_problem(step, payload)
