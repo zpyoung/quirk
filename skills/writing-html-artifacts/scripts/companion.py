@@ -17,7 +17,7 @@ nonce. It never touches the network beyond its own socket.
 
 ``start --app`` runs the same server in app mode: it serves a prebuilt React shell and a
 snapshot/event API over the on-disk state in ``htmlkit.appstate``, and the agent drives it with
-``step``, ``status``, ``decide``, ``review``, ``next`` and ``snapshot``. A session is in app mode
+``step``, ``status``, ``decide``, ``review``, ``say``, ``reply``, ``next`` and ``snapshot``. A session is in app mode
 exactly when ``state/mode.json`` says so; the screen subcommands refuse an app session and the
 app subcommands refuse a screen session, both with exit 2.
 """
@@ -74,11 +74,12 @@ SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
 SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram", "layout"}
 EVENT_TYPES = ("click", "proceed")
 
-APP_EVENT_TYPES = ("submit", "continue", "edit-request", "edit-decision", "draft")
+APP_EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "draft")
 MAX_EXPORT_BODY = 2 * 1024 * 1024
 EXPORT_DRAIN_LIMIT = 8 * 1024 * 1024
 MAX_CLIENT_ID = 100
 MAX_COMMENT = 4000
+BLOCK_ID = re.compile(r"[A-Za-z0-9:/_.-]{1,200}")
 TOKEN_HEADER = "X-Quirk-Token"
 SHELL_ENV = "QUIRK_COMPANION_SHELL"
 SHELL_PLACEHOLDER = '<script type="application/json" id="quirk-companion-boot">null</script>'
@@ -672,6 +673,8 @@ class _Handler(BaseHTTPRequestHandler):
             return 400, {"error": "a draft must name its step"}
         if kind != "draft" and any(e.get("client_id") == client_id for e in app.events_after(0)):
             return 200, {"duplicate": True}
+        if kind in ("chat", "comment"):
+            return self._record_conversation(app, kind, client_id, payload, current)
         needs_nonce = kind in ("submit", "edit-decision")
         if needs_nonce and (current is None or nonce != current["nonce"]):
             return 409, {"superseded": True}
@@ -693,6 +696,30 @@ class _Handler(BaseHTTPRequestHandler):
             app.save_draft(current["screen"], payload)
             return 204, None
         if app.append_event(kind, payload, client_id, step=current["screen"]) is None:
+            return 200, {"duplicate": True}
+        return 204, None
+
+    def _record_conversation(
+        self, app: AppState, kind: str, client_id: str, payload: dict, current: Optional[dict]
+    ) -> tuple[int, Optional[dict]]:
+        """Store a ``chat`` or ``comment`` event; runs under the state lock, after the duplicate check.
+
+        Both stay valid across steps, so neither needs the step nonce. A comment's stored payload always
+        carries the thread id the server resolved, so the agent can reply to it.
+        """
+        problem = _conversation_problem(kind, payload, app)
+        if problem:
+            return 400, {"error": problem}
+        step_id = current["screen"] if current else None
+        if kind == "chat":
+            seq = app.append_event(kind, payload, client_id, step=step_id)
+            if seq is None:
+                return 200, {"duplicate": True}
+            app.append_chat("user", payload["text"], event_seq=seq)
+            return 204, None
+        thread_id = app.add_comment(payload["block_id"], step_id, payload["text"], payload.get("thread_id"))
+        stored = {"block_id": payload["block_id"], "text": payload["text"], "thread_id": thread_id}
+        if app.append_event(kind, stored, client_id, step=step_id) is None:
             return 200, {"duplicate": True}
         return 204, None
 
@@ -765,6 +792,27 @@ def _app_event_problem(kind: str, step: dict, payload: dict, app: AppState) -> O
             return "payload must be {decision: confirm|cancel}"
         return None
     return _submit_problem(step, payload)
+
+
+def _conversation_problem(kind: str, payload: dict, app: AppState) -> Optional[str]:
+    """Why ``payload`` is not a valid ``chat`` or ``comment`` event, or None; every field is type-checked first."""
+    allowed = {"text"} if kind == "chat" else {"block_id", "text", "thread_id"}
+    extra = set(payload) - allowed
+    if extra:
+        return f"unknown payload field(s): {', '.join(sorted(extra))}"
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_COMMENT:
+        return f"text must be a non-empty string of at most {MAX_COMMENT} characters"
+    if kind == "chat":
+        return None
+    block_id = payload.get("block_id")
+    if not isinstance(block_id, str) or not BLOCK_ID.fullmatch(block_id):
+        return "block_id must be 1 to 200 characters of A-Z a-z 0-9 : / _ . -"
+    if "thread_id" in payload:
+        thread_id = payload["thread_id"]
+        if not isinstance(thread_id, str) or thread_id not in {t.get("id") for t in app.snapshot()["threads"]}:
+            return "thread_id must name an existing thread"
+    return None
 
 
 def _comment_problem(payload: dict) -> Optional[str]:
@@ -1352,6 +1400,42 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_say(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    if (args.text is None) == (args.file is None):
+        return _fail("give exactly one of --text and --file")
+    text = args.text
+    if args.file is not None:
+        try:
+            text = Path(args.file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return _fail(f"cannot read {args.file}: {exc}")
+    try:
+        if not text.strip():
+            raise AppStateError("text", "text must not be empty")
+        seq = app.append_chat(args.sender, text)
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"chat": seq})
+    return EXIT_OK
+
+
+def _cmd_reply(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        if not args.text.strip():
+            raise AppStateError("text", "text must not be empty")
+        app.reply(args.thread_id, args.text, args.resolve)
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"thread": args.thread_id})
+    return EXIT_OK
+
+
 def _cmd_next(args: argparse.Namespace) -> int:
     app = _app_session(args)
     if app is None:
@@ -1474,6 +1558,20 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("session")
     review.add_argument("review_html", metavar="REVIEW_HTML")
     review.set_defaults(func=_cmd_review)
+
+    say = sub.add_parser("say", help="app mode: add a chat message")
+    say.add_argument("session")
+    say.add_argument("--text")
+    say.add_argument("--file")
+    say.add_argument("--from", dest="sender", choices=("agent", "user"), default="agent")
+    say.set_defaults(func=_cmd_say)
+
+    reply = sub.add_parser("reply", help="app mode: reply inside a comment thread")
+    reply.add_argument("session")
+    reply.add_argument("thread_id", metavar="THREAD_ID")
+    reply.add_argument("--text", required=True)
+    reply.add_argument("--resolve", choices=("addressed", "not-addressed"))
+    reply.set_defaults(func=_cmd_reply)
 
     nxt = sub.add_parser("next", help="app mode: block until user events arrive")
     nxt.add_argument("session")
