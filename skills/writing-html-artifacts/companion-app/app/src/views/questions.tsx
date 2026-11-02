@@ -64,7 +64,7 @@ export function QuestionsView({ step, changed, draft, actions }: ViewProps<Quest
     () => ({ answers: serialize(step, state, false), comment: state.comment }),
     [step, state],
   )
-  useDraftSync(draftValue, actions)
+  useDraftSync(step.id, draftValue, actions)
 
   const patch = (qid: string, next: Partial<AnswerState> | ((a: AnswerState) => AnswerState)) =>
     setState((s) => {

@@ -154,10 +154,20 @@ class App:
         status, data, _ = self.request("POST", path, body, hdrs)
         return status, data
 
-    def event(self, type_: str, payload: dict, nonce: Optional[str] = None, client_id: Optional[str] = None, **kw):
+    def event(
+        self,
+        type_: str,
+        payload: dict,
+        nonce: Optional[str] = None,
+        client_id: Optional[str] = None,
+        step: object = None,
+        **kw,
+    ):
         body: dict = {"client_id": client_id or uuid.uuid4().hex, "type": type_, "payload": payload}
         if nonce is not None:
             body["nonce"] = nonce
+        if step is not None:
+            body["step"] = step
         return self.post("/_quirk/app/event", body, **kw)
 
     def snapshot(self) -> dict:
@@ -772,17 +782,110 @@ def test_edit_decision_needs_an_edit_card_step_and_a_fresh_nonce(app: App) -> No
 
 def test_drafts_are_saved_in_the_snapshot_and_never_returned_by_next(app: App) -> None:
     step = app.step(QUESTIONS)
+    sid = step["step"]
     draft = {"answers": {"q1": {"selected": ["files"]}}, "comment": "wip"}
-    assert app.event("draft", draft)[0] == 204
-    assert app.event("draft", {**draft, "comment": "wip2"})[0] == 204
-    assert json.loads((app.state / "drafts" / f"{step['step']}.json").read_text())["comment"] == "wip2"
+    assert app.event("draft", draft, step=sid)[0] == 204
+    assert app.event("draft", {**draft, "comment": "wip2"}, step=sid)[0] == 204
+    assert json.loads((app.state / "drafts" / f"{sid}.json").read_text())["comment"] == "wip2"
     assert app.snapshot()["draft"]["comment"] == "wip2"
     assert not (app.state / "app-events").exists() or (app.state / "app-events").read_text() == ""
     assert app.cli("next", app.session, "--timeout", "0.3", expect=1)["status"] == "timeout"
 
 
 def test_draft_with_no_current_step_gets_400(app: App) -> None:
+    assert app.event("draft", {"answers": {}}, step="anything")[0] == 400
     assert app.event("draft", {"answers": {}})[0] == 400
+
+
+def test_draft_without_a_step_gets_400_and_saves_nothing(app: App) -> None:
+    step = app.step(QUESTIONS)
+    assert app.event("draft", {"answers": {}, "comment": "x"})[0] == 400
+    for bad in ("", 5, ["x"], {"id": "x"}, True):
+        assert app.event("draft", {"comment": "x"}, step=bad)[0] == 400, bad
+    assert not (app.state / "drafts" / f"{step['step']}.json").exists()
+
+
+def test_draft_for_a_superseded_step_gets_409_and_saves_nothing(app: App) -> None:
+    old = app.step(QUESTIONS)
+    new = app.step(APPROACHES)
+    status, data = app.event("draft", {"answers": {}, "comment": "late"}, step=old["step"])
+    assert status == 409 and json.loads(data) == {"superseded": True}
+    assert not (app.state / "drafts" / f"{old['step']}.json").exists()
+    assert not (app.state / "drafts" / f"{new['step']}.json").exists()
+    assert app.snapshot().get("draft") in (None, {})
+    assert app.event("draft", {"answers": {}, "comment": "now"}, step=new["step"])[0] == 204
+    assert app.snapshot()["draft"]["comment"] == "now"
+
+
+def test_draft_accepts_a_pick_and_returns_it_in_the_snapshot(app: App) -> None:
+    step = app.step(APPROACHES)
+    draft = {"answers": {}, "comment": "c", "pick": "two"}
+    assert app.event("draft", draft, step=step["step"])[0] == 204
+    assert app.snapshot()["draft"] == draft
+    for bad in (["two"], {"id": "two"}, 2, None):
+        assert app.event("draft", {"pick": bad}, step=step["step"])[0] == 400, bad
+    assert app.event("draft", {"surprise": 1}, step=step["step"])[0] == 400
+    assert app.snapshot()["draft"] == draft
+
+
+def test_continue_is_accepted_before_any_step_exists(app: App) -> None:
+    assert app.event("continue", {})[0] == 204
+    assert app.event("continue", {"extra": 1})[0] == 400
+    assert app.post("/_quirk/app/event", {"client_id": "c", "type": "continue", "payload": {}}, token="wrong")[0] == 403
+    (event,) = app.next()["events"]
+    assert event["type"] == "continue" and event["step"] is None
+
+
+def test_continue_before_any_step_dedupes_on_client_id(app: App) -> None:
+    assert app.event("continue", {}, client_id="same")[0] == 204
+    status, data = app.event("continue", {}, client_id="same")
+    assert status == 200 and json.loads(data) == {"duplicate": True}
+    assert len(app.next()["events"]) == 1
+
+
+def test_other_events_still_need_a_current_step(app: App) -> None:
+    assert app.event("edit-request", {"decision_id": "storage"})[0] == 400
+    assert app.event("edit-decision", {"decision": "cancel"}, nonce="x")[0] == 409
+
+
+WRONG_TYPES = (["x"], {"a": 1}, 5, True)
+
+
+def test_wrong_typed_fields_get_400_instead_of_crashing_the_handler(app: App) -> None:
+    path = app.root / "d.json"
+    path.write_text(json.dumps([DECISION]))
+    app.cli("decide", app.session, path)
+    card = app.step(EDIT_CARD)
+    make_review(app)
+    for bad in WRONG_TYPES:
+        assert app.event("edit-request", {"decision_id": bad})[0] == 400, bad
+        assert app.event("edit-request", {"decision_id": "storage", "to": bad})[0] == 400, bad
+        assert app.event("edit-request", {"decision_id": "storage", "note": bad})[0] == 400, bad
+        assert app.event("edit-decision", {"decision": bad}, nonce=card["nonce"])[0] == 400, bad
+        assert app.event("draft", {"pick": bad}, step=card["step"])[0] == 400, bad
+        if not isinstance(bad, dict):
+            assert app.event("draft", {"answers": bad}, step=card["step"])[0] == 400, bad
+        assert app.event("draft", {"comment": bad}, step=card["step"])[0] == 400, bad
+        assert app.event("draft", {}, step=bad)[0] == 400, bad
+        assert app.post("/_quirk/app/event", {"client_id": "c", "type": bad, "payload": {}})[0] == 400, bad
+        assert app.post("/_quirk/app/event", {"client_id": "c", "type": "continue", "payload": bad})[0] == 400, bad
+        assert app.post("/_quirk/app/event", {"client_id": "c", "type": "submit", "payload": {}, "nonce": bad})[0] == 409, bad
+        assert app.post("/_quirk/review/export", {**EXPORT, "kind": bad})[0] == 400, bad
+        assert app.post("/_quirk/review/export", {**EXPORT, "slug": bad})[0] == 400, bad
+    assert app.event("edit-request", {"decision_id": "storage"})[0] == 204
+
+
+def test_wrong_typed_submit_fields_get_400_instead_of_crashing_the_handler(app: App) -> None:
+    for spec, field in ((APPROACHES, "pick"), (HAND_OFF, "pick"), (DESIGN, "verdict")):
+        step = app.step(spec)
+        for bad in WRONG_TYPES:
+            assert app.event("submit", {field: bad}, nonce=step["nonce"])[0] == 400, (spec["kind"], bad)
+    step = app.step(QUESTIONS)
+    for bad in WRONG_TYPES:
+        assert app.event("submit", {"answers": {"q1": {"selected": bad}}}, nonce=step["nonce"])[0] == 400, bad
+        assert app.event("submit", {"answers": {"q1": {"selected": [bad]}}}, nonce=step["nonce"])[0] == 400, bad
+        assert app.event("submit", {"answers": {"q1": bad}}, nonce=step["nonce"])[0] == 400, bad
+    assert app.event("submit", {"answers": {"q1": {"selected": ["sql"]}}}, nonce=step["nonce"])[0] == 204
 
 
 # ---- snapshot -----------------------------------------------------------------------------------

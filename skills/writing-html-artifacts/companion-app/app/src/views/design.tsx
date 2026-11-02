@@ -20,6 +20,7 @@ export function DesignView({ step, changed, draft, actions }: ViewProps<DesignSt
         </section>
       ))}
       <VerdictBar
+        stepId={step.id}
         draft={draft}
         actions={actions}
         verdicts={[

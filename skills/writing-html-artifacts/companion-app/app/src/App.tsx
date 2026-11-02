@@ -46,15 +46,17 @@ export default function App() {
       async submit(payload) {
         const current = stepRef.current
         if (!boot || !current) return 'error'
-        return finish(await postEvent(boot, 'submit', payload, current.nonce), current.id)
+        return finish(await postEvent(boot, 'submit', payload, { nonce: current.nonce }), current.id)
       },
       async send(type, payload, withNonce) {
         if (!boot) return 'error'
         const current = stepRef.current
         const nonce = withNonce ? current?.nonce : undefined
-        const result = await postEvent(boot, type, payload, nonce)
-        if (type === 'draft') return result
+        const result = await postEvent(boot, type, payload, { nonce })
         return finish(result, type === 'edit-decision' && current ? current.id : null)
+      },
+      saveDraft(stepId, payload) {
+        return boot ? postEvent(boot, 'draft', payload, { step: stepId }) : Promise.resolve('error')
       },
     }
   }, [boot, refresh])

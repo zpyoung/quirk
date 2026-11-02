@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { Button } from '@astryxdesign/core/Button'
 import { AgentHtml, Md, blockKey } from '../blocks'
 import type { Actions, Draft, Step } from '../types'
+import { createDraftGate } from './draft'
 
 export interface ViewProps<S extends Step = Step> {
   step: S
@@ -34,17 +35,21 @@ export function StepFrame({ step, changed, children }: { step: Step; changed: Se
   )
 }
 
-/** Posts the draft 500 ms after the last change; the first render is the restored state, so it posts nothing. */
-export function useDraftSync(value: Draft, actions: Actions): void {
-  const first = useRef(true)
+/**
+ * Posts the draft of step `stepId` 500 ms after its content last changed. The first render is the restored
+ * state and posts nothing, and a value equal in content to the last one posted is never posted again, so a
+ * new snapshot that merely rebuilds the same form does not loop.
+ */
+export function useDraftSync(stepId: string, value: Draft, actions: Actions): void {
+  const gate = useRef(createDraftGate())
   useEffect(() => {
-    if (first.current) {
-      first.current = false
-      return undefined
-    }
-    const timer = setTimeout(() => void actions.send('draft', value as Record<string, unknown>), 500)
+    if (!gate.current.wants(stepId, value)) return undefined
+    const timer = setTimeout(() => {
+      gate.current.sent(stepId, value)
+      void actions.saveDraft(stepId, value as Record<string, unknown>)
+    }, 500)
     return () => clearTimeout(timer)
-  }, [value, actions])
+  }, [stepId, value, actions])
 }
 
 export function CommentField({ value, onChange, label = 'Comment (optional)' }: { value: string; onChange(next: string): void; label?: string }) {

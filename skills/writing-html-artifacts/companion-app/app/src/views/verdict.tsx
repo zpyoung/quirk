@@ -11,11 +11,11 @@ export interface Verdict {
 }
 
 /** Verdict buttons plus one comment; each button submits `{verdict, comment?}` and a "change" verdict needs a comment. */
-export function VerdictBar({ verdicts, draft, actions }: { verdicts: Verdict[] } & Pick<ViewProps, 'draft' | 'actions'>): ReactNode {
+export function VerdictBar({ stepId, verdicts, draft, actions }: { stepId: string; verdicts: Verdict[] } & Pick<ViewProps, 'draft' | 'actions'>): ReactNode {
   const [comment, setComment] = useState(typeof draft?.comment === 'string' ? draft.comment : '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useDraftSync(useMemo<Draft>(() => ({ answers: {}, comment }), [comment]), actions)
+  useDraftSync(stepId, useMemo<Draft>(() => ({ answers: {}, comment }), [comment]), actions)
 
   const choose = async (verdict: Verdict) => {
     if (verdict.requiresComment && !comment.trim()) {

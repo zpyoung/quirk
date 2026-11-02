@@ -11,12 +11,13 @@ export async function postEvent(
   boot: Boot,
   type: string,
   payload: Record<string, unknown>,
-  nonce?: string,
+  scope: { nonce?: string; step?: string } = {},
 ): Promise<PostResult> {
   const body = JSON.stringify({
     client_id: crypto.randomUUID(),
     type,
-    ...(nonce ? { nonce } : {}),
+    ...(scope.nonce ? { nonce: scope.nonce } : {}),
+    ...(scope.step ? { step: scope.step } : {}),
     payload,
   })
   for (let attempt = 0; attempt <= POST_RETRIES; attempt += 1) {
