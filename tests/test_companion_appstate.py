@@ -276,6 +276,47 @@ def test_seq_survives_restart(tmp_path):
     assert b.append_event("chat", {}, "c2") == 2
 
 
+def _rewind_seq(tmp_path, seq: int) -> None:
+    counters = tmp_path / "state" / "counters.json"
+    c = json.loads(counters.read_text())
+    c["seq"] = seq
+    counters.write_text(json.dumps(c))
+
+
+def test_seq_never_reused_when_counter_write_is_lost_after_event(tmp_path):
+    s = AppState(tmp_path)
+    s.init()
+    e1 = s.append_event("chat", {}, "c1")
+    cursor = s.append_chat("agent", "hello")
+    e2 = s.append_event("chat", {}, "c2")
+    _rewind_seq(tmp_path, e1)
+
+    reopened = AppState(tmp_path)
+    e3 = reopened.append_event("chat", {}, "c3")
+    assert e3 > max(e1, cursor, e2)
+    assert [e["seq"] for e in reopened.events_after(cursor)] == [e2, e3]
+    assert json.loads((tmp_path / "state" / "counters.json").read_text())["seq"] == e3
+
+
+def test_seq_never_reused_when_counter_write_is_lost_after_chat(tmp_path):
+    s = AppState(tmp_path)
+    s.init()
+    e1 = s.append_event("chat", {}, "c1")
+    c1 = s.append_chat("agent", "hello")
+    _rewind_seq(tmp_path, e1)
+
+    reopened = AppState(tmp_path)
+    c2 = reopened.append_chat("agent", "again")
+    assert c2 > c1
+    _rewind_seq(tmp_path, e1)
+    t = reopened.add_comment("b1", None, "note")
+    assert t == "t-0001"
+    seqs = [c["seq"] for c in reopened.snapshot()["chat"]]
+    assert seqs == sorted(set(seqs)) and len(seqs) == 3
+    _rewind_seq(tmp_path, 0)
+    assert reopened.append_event("chat", {}, "c2") > seqs[-1]
+
+
 def test_append_chat_delivered_and_validation(st):
     st.append_chat("agent", "a")
     st.append_chat("system", "s", kind="note")
