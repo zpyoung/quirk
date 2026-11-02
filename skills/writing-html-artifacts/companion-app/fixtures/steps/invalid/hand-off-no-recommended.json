@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "kind": "hand-off",
+  "stage": "hand-off",
+  "title": "hand-off step",
+  "choices": [
+    {
+      "id": "plan",
+      "label": "Write the plan",
+      "description": "Go to planning",
+      "recommended": false
+    },
+    {
+      "id": "stop",
+      "label": "Stop here",
+      "description": "Keep the spec",
+      "recommended": false
+    }
+  ]
+}
