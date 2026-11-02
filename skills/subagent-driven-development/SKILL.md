@@ -65,20 +65,22 @@ digraph process {
     "Decompose inline" [shape=box];
     "Dispatch wave" [shape=box];
     "Audit, accept, commit, merge" [shape=box];
-    "Build/test gate" [shape=box];
+    "Wave gate (selected tests)" [shape=box];
     "Has a successor?" [shape=diamond];
     "Checkpoint review (1 round)" [shape=box];
     "More waves?" [shape=diamond];
+    "Final gate (full suite, once)" [shape=box];
     "Final loop" [shape=box];
     "finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Preflight" -> "Tech spec if warranted" -> "Decompose inline" -> "Dispatch wave";
-    "Dispatch wave" -> "Audit, accept, commit, merge" -> "Build/test gate" -> "Has a successor?";
+    "Dispatch wave" -> "Audit, accept, commit, merge" -> "Wave gate (selected tests)" -> "Has a successor?";
     "Has a successor?" -> "Checkpoint review (1 round)" [label="yes"];
     "Has a successor?" -> "More waves?" [label="no"];
     "Checkpoint review (1 round)" -> "More waves?";
     "More waves?" -> "Dispatch wave" [label="yes"];
-    "More waves?" -> "Final loop" [label="no"];
+    "More waves?" -> "Final gate (full suite, once)" [label="no"];
+    "Final gate (full suite, once)" -> "Final loop";
     "Final loop" -> "finishing-a-development-branch";
 }
 ```
@@ -94,8 +96,12 @@ git status --porcelain
 
 In a temporary scratch directory outside the repository, run `pi-watch --check <alias>` across
 all six aliases (`codex, gemini, terra, opus, sonnet, flash`). Probe test-runner availability
-(not the full suite), and record the exact build and `FULL_SUITE_CMD` commands. Never offer an
-unverified backend pair; no probe should dirty the repository.
+(not the full suite), and record the exact build and `FULL_SUITE_CMD` commands plus Step 7's
+selection inputs: `TARGETED_TEST_CMD` (the runner invocation that takes test-file arguments, such as
+`python3 -m pytest -q`), `TEST_FILE_GLOB` (the runner's test-file pattern), and `COMPONENT_CHECKS`
+(a path prefix mapped to the exact non-test-runner checks that component needs, such as pnpm builds
+and browser e2e, read from the repo's own scripts and config). Never offer an unverified backend
+pair; no probe should dirty the repository.
 
 Present a **single consolidated Tier 1 preflight card** via `orca ask`, using `AskUserQuestion`
 when `orca ask` returns `status: "unavailable"` or is not installed (see Failure routing).
@@ -127,6 +133,7 @@ otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, the back
 (`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), dependency demotions, projected wave shapes,
 each worktree's `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>` recorded at dispatch, task status and
 component commits, reviewer outputs, findings with IDs and rulings, dismissals, fix commits,
+each gate's `GATE_CMDS`, `FIX_BASE`, and `unguarded` / `selection miss` entries,
 `tree_test_cache`, and `ROUND_<r>_HEAD` / `LAST_ROUND_HEAD`.
 
 ### Step 2: Tech spec, only when warranted
@@ -493,26 +500,88 @@ Tear down a worktree only after its branch merges; preserve it on failure.
 
 ### Step 7: Gates
 
-After every wave, check `tree_test_cache` for `((HEAD^{tree}, "clean"), full_suite_cmd)`.
-On a miss, run the project's build and full test suite once, record the result in the run journal's
-`tree_test_cache`, and write `$WORK/gate-check.json` in `ReusedCheckInput` format: `tree_hash`,
-`clean_tree: true`, and `checks[]` containing each check's `name`, exact `command`, `status`,
-`exit_code`, `output`, and `duration_ms`. Reuse only a passing entry for the same clean committed tree and exact commands;
-retain its check record for Step 8. A changed tree invalidates that entry.
+Mid-run gates run **selected tests**, and the full suite runs **once**, in the final gate before
+the final loop. A wave's real signal comes from its own tests, which take seconds to minutes; a
+full suite after every wave idles the orchestrator and holds every checkpoint behind it. PR CI runs
+the full suite again on the finished branch. `COMPONENT_CHECKS` run locally in every gate that
+touches them, because CI may not have their toolchain.
+
+#### Selecting a gate
+
+`select_gate(BASE, tasks)` derives an ordered command list from the plan and the diff, so the same
+tree and plan always yield the same commands:
+
+1. The build command recorded at preflight, if any.
+2. Each task's acceptance commands, verbatim, in plan task order, dropping exact duplicates.
+3. One targeted test command: `TARGETED_TEST_CMD` followed by the bytewise-sorted, deduplicated
+   union of these test files.
+   - **Owned:** paths in the tasks' `scope.files` that match `TEST_FILE_GLOB` and exist at HEAD.
+   - **Guarded:** test files outside that scope that a DO-NOT-CHANGE fence names, or that
+     `git grep -l -F` at HEAD over `TEST_FILE_GLOB` finds for any token of a changed non-test path
+     in `git diff --name-only --no-renames "$BASE" HEAD`. A path's tokens are the path itself; its
+     second component when it has three or more (`skills/<name>/…` gives `<name>`); and its
+     filename stem when it is a `.py`, `.ts`, `.tsx`, `.js`, or `.mjs` module, except `__init__`
+     and `index`.
+4. Each `COMPONENT_CHECKS` entry whose prefix contains a changed path, in prefix order.
+
+Over-selection costs seconds. Under-selection is what the final gate exists to catch, so do not
+hand-pick tests beyond this rule.
+
+**A wave that cannot name its tests pays for the full suite.** When step 3 finds no test file and
+step 4 finds no component check, or preflight found no runner that takes test-file arguments, use
+`FULL_SUITE_CMD` in place of the targeted command and journal why. Journal any changed non-test path
+whose tokens hit no test file as `unguarded`; the final gate covers it.
+
+The **wave gate** is `select_gate(WAVE_BASE, <the wave's tasks>)`. A **fix-batch gate** is
+`select_gate(FIX_BASE, <the batch's packets>)`, where `FIX_BASE` is HEAD before the batch commits and
+each packet contributes its fixer's acceptance commands and write scope. Journal each list as that
+tree's `GATE_CMDS`.
+
+#### Running a gate and recording it for reuse
+
+For each command in the gate, check `tree_test_cache` for `((HEAD^{tree}, "clean"), gate_cmd)`.
+Run each miss once in the main tree, record the result in the run journal's `tree_test_cache`,
+then write `$WORK/gate-check.json` in `ReusedCheckInput` format: `tree_hash`, `clean_tree: true`,
+and `checks[]` holding every command of that gate with its `name`, exact `command`, `status`,
+`exit_code`, `output`, and `duration_ms`. Reuse only passing entries for the same clean committed
+tree and exact commands; a changed tree invalidates them. Step 8's prepass passes the same command
+list, which is what makes its reuse exact.
+
+#### Final gate
+
+The final gate replaces the last wave's gate and runs once on HEAD. It is the build command, the
+last wave's acceptance commands, `FULL_SUITE_CMD`, and every `COMPONENT_CHECKS` entry whose prefix
+contains a path in `git diff --name-only --no-renames "$RUN_BASE" HEAD`. Journal it as
+`FINAL_GATE_CMDS` and record it the same way, so Final Round 1 reuses a green full-suite result.
+A single-wave run has only this gate. Fix batches inside the final loop take fix-batch gates, not
+the full suite; the final summary names the tree the full suite passed on and leaves the post-fix
+tree to PR CI.
+
+#### Red gates
 
 **A red gate is a hard stop for the affected component.** Do not dispatch reviewers over a red
 build. If failure is solely an unowned test file outside the wave's `scope.files` asserting
 pre-wave behavior the wave's contract intentionally replaced, automatically dispatch a scoped
 wave-gate fixer (`effort: "high"`) owning that test file in `scope.files`. Apply Step 6's
-audit/accept/commit gate to the fixer and re-run Step 7 without a blocking human question.
+audit/accept/commit gate to the fixer and re-run this wave's gate without a blocking human question.
 If failure instead exposes a contract conflict, ask via Tier 2 `orca ask --timeout-ms 600000`
 with the recommended default: halt the conflicting component and open a fix task. Continue only
 unblocked components. For other failures, fix the defect or establish a flake with an isolated
 reproduction before proceeding; a plausible diagnosis alone does not clear the gate.
 
-Whenever the full-suite run exceeds 300 seconds (5 minutes, `>300s` / `300000ms`), log a slow-suite
+**A red final gate is a miss the selected-test gates let through.** The same rules apply, with the
+run's contract in place of the wave's: replaced test contracts get a scoped final-gate fixer,
+contract conflicts go to Tier 2, and anything else is fixed or reproduced in isolation as a flake.
+Fixes pass Step 6's audit/accept/commit gate. Then re-run the whole final gate: Final Round 1 needs a
+green full-suite record for that exact tree, so a red final gate costs a second full-suite run.
+Journal each failing test file as a `selection miss` in the run journal and final summary, naming
+the changed path it depended on, so a later plan can own or fence it.
+
+Whenever any gate command runs over 300 seconds (5 minutes, `>300s` / `300000ms`), log a slow-suite
 optimization advisory in the run journal and final summary recommending `pytest-xdist` (`-n auto`)
 and Playwright `BrowserContext` reuse per worker, without mutating target-repo config mid-run.
+
+#### Checkpoints
 
 After every wave **that has a successor**, run a checkpoint review. The final wave gets none — the
 final loop covers it. A single-wave run therefore has no checkpoints at all; this is the core
@@ -524,7 +593,7 @@ You may skip a checkpoint for a genuinely trivial non-final wave; record a reaso
 
 **Checkpoint** — three reviewers over `git diff --no-renames "$WAVE_BASE" HEAD`, **one round**.
 Pass `--depth standard` explicitly to all three lenses at non-final wave checkpoints.
-Adjudicate, dispatch fixers, commit the fix batch, re-run build/test, continue. One round is
+Adjudicate, dispatch fixers, commit the fix batch, run its fix-batch gate (Step 7), continue. One round is
 deliberate: a checkpoint reduces the chance of building on a defect; it does not certify the wave,
 and the final loop re-examines everything anyway.
 
@@ -550,9 +619,15 @@ concurrently:
 - security and failure modes
 
 Run `adversarial-review resolve` once per round to produce `resolve.json`, then
-`adversarial-review prepass` once per round with `--check-cmd "$FULL_SUITE_CMD"
---reuse-check "$WORK/gate-check.json"` to produce `prepass.json`. If `prepass --reuse-check`
-exits 2, log the reuse miss and immediately run prepass live without `--reuse-check`.
+`adversarial-review prepass` once per round with `--reuse-check "$WORK/gate-check.json"` and one
+`--check-cmd` per command of the latest gate on the current tree, to produce `prepass.json`:
+
+- at a checkpoint, the wave gate's `GATE_CMDS`;
+- in Final Round 1, `FINAL_GATE_CMDS`, which includes `--check-cmd "$FULL_SUITE_CMD"`;
+- in Final Rounds 2–5, the previous round's fix-batch `GATE_CMDS`.
+
+If `prepass --reuse-check` exits 2, log the reuse miss and immediately run prepass live
+without `--reuse-check`.
 All three concurrent lenses (`C`, `S`, `X`) share that `resolve.json` and `prepass.json`; each uses
 its distinct `--id-prefix` at `claims` and `gate`.
 
@@ -688,13 +763,13 @@ Fix batches get the same gate the implementer wave got, unconditional on both ba
 hold the same unsandboxed pi binding Step 5 named, and a batch that skipped the check would let
 exactly the write Step 6 exists to catch land unaudited. Once every parallel fixer in the batch has
 returned: HEAD-check each fixer's tree against its recorded HEAD, audit each fix diff against its
-component's write scope, then run acceptance/build-test, then commit — Step 6's machinery, applied
-here rather than restated.
+component's write scope, then run acceptance, then commit — Step 6's machinery, applied
+here rather than restated — then run the batch's fix-batch gate from Step 7.
 
 ### Step 10: Exit
 
 The loop exits when **a completed review round reports no accepted finding above LOW** and the
-build is green — or at **five rounds**.
+latest gate is green — or at **five rounds**.
 
 A round that finds and fixes findings does not exit. It runs another review round. A fixer's
 report plus a green build is the fixer's own account of its work, and the reviewer that would have
@@ -760,7 +835,9 @@ the table wins.
 | Claude width cap binds with queued components | Keep them in the same wave and drain lockstep batches using the fixed in-progress-first, longest-chain-first order |
 | A Claude task fails its retry | Stop that chain and remove it from later batches; surface it rather than stalling the remaining components |
 | Merge conflict between component branches | Component-scope disjointness was violated; stop and re-plan |
-| Build/test red | Step 7's hard gate; auto-dispatch only the scoped wave-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
+| Wave or fix-batch gate red | Step 7's hard gate; auto-dispatch only the scoped wave-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
+| Wave gate selects no test file and no component check | Run `FULL_SUITE_CMD` for that wave and journal why |
+| Final gate red | Same red-gate rules; fix through Step 6, re-run the whole final gate, journal each failing test file as a `selection miss` |
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
 | Five-round review cap reached with accepted CRITICAL/HIGH | Tier 1 blocked handoff; explicit user override required |
@@ -803,6 +880,8 @@ rationalization is quoted; the reason it fails follows.
 | "The reviewer has come back empty twice before and both retries found nothing — treat it as clean." | Repeated empty output is evidence the reviewer is broken, not evidence the branch is clean. |
 | "Accept the round and note that the spec lens returned no output three times." | Same trade as above: a note is not a review. |
 | "Dispatch the reviewers now and investigate the failing test in parallel — it's almost certainly a flake." | "Almost certainly" is a hypothesis. Re-running in isolation is a fact and costs less than the round you would waste. |
+| "Run the full suite after this wave too, just to be safe." | The final gate already runs it once, and a mid-run full suite idles the run and holds the checkpoint behind it. Widen selection only where the rule says to. |
+| "Every wave gate was green, so the final full suite is a formality; start Final Round 1." | Selected-test gates can miss a dependent test. The final gate is the only full-suite result the final reviewers reuse. |
 | "A one-line disclosure about the red build costs nothing." | Reviewers cannot separate a pre-existing flake from a regression; you get findings about the test. |
 | "This plan is high-stakes and the reviewer has a good track record — dispatch it anyway." | Every run believes it is high-stakes. That is not new information. |
 | "I can't fully verify the rationale for this instruction, so I'm overriding it." | The rationale is stated inline at each rule. If one is genuinely missing, ask — do not infer it is absent. |
@@ -823,6 +902,7 @@ rationalization is quoted; the reason it fails follows.
 - Let a worker commit its own work.
 - Treat missing or unparseable reviewer output as clean.
 - Dispatch reviewers over a red build.
+- Start the final loop without a green final gate on that exact tree.
 - Exit the loop on a fix report rather than a review round.
 - Proceed to finishing with an accepted CRITICAL or HIGH open.
 - File this run's own defects as typed artifacts.

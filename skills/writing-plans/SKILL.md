@@ -196,8 +196,9 @@ Notice what the template does NOT contain: no test body, no implementation body.
 The task's **Acceptance:** field MUST contain one or more literal, copy-runnable commands with every flag fixed, plus the expected result. Never substitute prose such as "run the relevant tests" or a description of what someone should check; the orchestrator and the worker must be able to execute exactly the same command without choosing different flags. This prevents a real dogfood-run failure where the two ran the same check with different flags and got different pass/fail results.
 
 Make each `Acceptance` command task-scoped: run only the task's owned test files and fast targeted
-checks. Reserve full-suite execution for the execution skill's wave gate (Step 7 in SDD) or branch
-completion, not each parallel worker.
+checks. Reserve full-suite execution for the execution skill's final gate (Step 7 in SDD) or branch
+completion, not each parallel worker. SDD's mid-run gates select tests from these owned test files
+and the tests that reference the files a wave changes, so an accurate `scope.files` keeps them fast.
 
 ````markdown
 ### Task N: Daily metrics summary
@@ -299,7 +300,7 @@ After writing the complete plan, look at the tech spec (`tech.md`) when present,
 
 **6. Acceptance-command audit:** Inspect every acceptance criterion. Is each one a literal,
 copy-runnable command with exact flags and an expected result? Does it run only the task's owned
-test files and fast targeted checks, rather than the full suite? Reserve the full suite for the wave
+test files and fast targeted checks, rather than the full suite? Reserve the full suite for the final
 gate or branch completion. Fix every mismatch.
 
 **7. Coherence sweep:** If the plan changes a protocol, vocabulary, or event set, did you grep-enumerate every file referencing the changed old or new terms? Verify that each result is either scoped into a task or explicitly recorded as `unchanged, verified consistent`. Check that you searched for the vocabulary terms themselves, not only the names of the components being changed — a file can encode a protocol without naming the skill or module that owns it.
