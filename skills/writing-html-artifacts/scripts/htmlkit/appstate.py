@@ -6,7 +6,8 @@ takes an exclusive ``fcntl.flock`` on ``state/app.lock``, so concurrent writers 
 Reads that feed a snapshot take the same lock, so a snapshot is internally consistent.
 
 ``rev`` (bumped once per mutating call) and ``seq`` (shared by user events and chat entries) live in
-``state/counters.json`` and so stay monotonic across restarts.
+``state/counters.json`` and so stay monotonic across restarts. A new seq is allocated above the
+highest seq already in ``app-events`` or ``chat.json``, so a lost counters write never reuses one.
 """
 from __future__ import annotations
 
@@ -103,17 +104,33 @@ class AppState:
     def _write_json(self, name: str, value: Any) -> None:
         atomic_write(self._dir / name, json.dumps(value, ensure_ascii=False))
 
-    def _tick(self, *, seq: bool = False) -> int:
-        """Bump ``rev`` (and ``seq`` when asked) in one counters write; returns the new seq or rev."""
+    def _tick(self, *, seq: int | None = None) -> int:
+        """Bump ``rev`` in one counters write, recording ``seq`` as the high-water mark when given.
+
+        Returns ``seq`` when given, else the new rev.
+        """
         c = self._read_json("counters.json", {"rev": 0, "seq": 0})
         c["rev"] = int(c.get("rev", 0)) + 1
-        if seq:
-            c["seq"] = int(c.get("seq", 0)) + 1
+        if seq is not None:
+            c["seq"] = max(int(c.get("seq", 0)), seq)
         self._write_json("counters.json", c)
-        return c["seq"] if seq else c["rev"]
+        return seq if seq is not None else c["rev"]
 
-    def _next_seq_value(self) -> int:
-        return int(self._read_json("counters.json", {"seq": 0}).get("seq", 0)) + 1
+    def _next_seq_value(self, chat: list[dict] | None = None) -> int:
+        """Next unused seq, above anything already durable.
+
+        The counters file can lag the event and chat files after a crash between the two writes, so
+        the high-water mark is taken over all three. Callers holding the lock may pass the chat
+        list they already loaded.
+        """
+        if chat is None:
+            chat = self._read_json("chat.json", [])
+        high = int(self._read_json("counters.json", {"seq": 0}).get("seq", 0))
+        for item in (*self._events(), *chat):
+            s = item.get("seq") if isinstance(item, dict) else None
+            if isinstance(s, int) and s > high:
+                high = s
+        return high + 1
 
     def _events(self) -> list[dict]:
         out: list[dict] = []
@@ -272,7 +289,7 @@ class AppState:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
-            self._tick(seq=True)
+            self._tick(seq=seq)
             return seq
 
     def events_after(self, seq: int) -> list[dict]:
@@ -326,10 +343,10 @@ class AppState:
             raise AppStateError("text")
         with self._locked():
             chat = self._read_json("chat.json", [])
-            seq = self._next_seq_value()
+            seq = self._next_seq_value(chat)
             chat.append(self._chat_entry(seq, sender, text, kind, thread_id, event_seq))
             self._write_json("chat.json", chat)
-            self._tick(seq=True)
+            self._tick(seq=seq)
             return seq
 
     def mark_delivered(self, event_seqs: Iterable[int]) -> None:
@@ -372,11 +389,11 @@ class AppState:
             new_id = f"t-{max(nums, default=0) + 1:04d}"
             threads.append({"id": new_id, "block_id": block_id, "step": step, "messages": [message]})
             chat = self._read_json("chat.json", [])
-            seq = self._next_seq_value()
+            seq = self._next_seq_value(chat)
             chat.append(self._chat_entry(seq, "system", text[:_POINTER_CHARS], "thread", new_id, None))
             self._write_json("threads.json", threads)
             self._write_json("chat.json", chat)
-            self._tick(seq=True)
+            self._tick(seq=seq)
             return new_id
 
     def reply(self, thread_id: str, text: str, resolve: str | None = None) -> None:
