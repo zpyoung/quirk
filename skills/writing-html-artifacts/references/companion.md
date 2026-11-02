@@ -1,6 +1,6 @@
 # Companion
 
-The companion is a local page that shows the user one question at a time in a browser and sends their clicks back. Brainstorming and exploring-ideas use it for visual questions. Read this before starting a session. For screen design, see section 12 of the [design reference](design-reference.md); for custom branding of screens, see [templates](templates.md).
+The companion is a local page that shows the user one question at a time in a browser and sends their clicks back. exploring-ideas uses it for visual questions (screen mode); brainstorming runs whole sessions in app mode, described at the end of this file. Read this before starting a session. For screen design, see section 12 of the [design reference](design-reference.md); for custom branding of screens, see [templates](templates.md).
 
 Script paths below are relative to the skill directory, the one holding this skill's `SKILL.md`. Every command prints exactly one JSON object to stdout; diagnostics go to stderr.
 
@@ -126,3 +126,30 @@ The example screens, one per shape, are in `templates/companion/examples/<shape>
 - Events need the current screen's nonce, and the server rejects a foreign `Origin` or `Host` with 403, malformed JSON or a body over 64 KB with 400.
 - The server serves only the current screen, its state, and the vendored library files named in `libraries.json`. Nothing else on disk is reachable.
 - Screen HTML is not sanitized. Write it yourself, and do not include secrets: it is visible to anyone with the URL.
+
+## App mode
+
+App mode runs a whole brainstorm in one persistent tab: a step rail, batched questions, chat, pinned comment threads and a Decisions panel. `start SESSION_DIR --app` selects it; screen mode above is unchanged, and each mode's subcommands exit 2 on a session of the other mode. The loop (step, next, status, decide) and the step kinds are in `skills/brainstorming/visual-companion.md`; the full contract is the CLI and HTTP contract sections of the companion-first tech spec.
+
+Subcommands, each printing one JSON object (exit `0` ok, `1` timeout, `2` usage or no server):
+
+| Command | Does |
+|---|---|
+| `step SESSION STEP.json` | validates a `v: 1` step and makes it current |
+| `status SESSION --text T [--stage S] [--progress N/M] [--interruptible \| --clear]` | sets the live status line |
+| `decide SESSION DECISIONS.json` | replaces the Decisions panel list |
+| `say SESSION (--text T \| --file F) [--from agent\|user]` | posts a chat message |
+| `reply SESSION THREAD_ID --text T [--resolve addressed\|not-addressed]` | answers a comment thread |
+| `review SESSION REVIEW_HTML` | registers the interactive spec review page |
+| `next SESSION [--after SEQ] [--timeout 110]` | blocks for user events after a cursor |
+| `snapshot SESSION` | prints the state the tab receives |
+
+HTTP routes, all behind the Host and Origin check, with a session token required on every app `POST` (`X-Quirk-Token`):
+
+- `GET /` serves the app shell.
+- `GET /_quirk/state` is unchanged (`{screen, nonce}`, plus `mode`).
+- `GET /_quirk/app/snapshot?rev=R` returns 200 with the snapshot when `rev` differs, 204 when unchanged.
+- `POST /_quirk/app/event` takes user events (204, `{"duplicate":true}`, or 409 when a `submit` carries a stale nonce).
+- `GET /_quirk/review` serves the registered review page; `POST /_quirk/review/export` accepts its exports (2 MiB cap).
+
+App state lives under `state/` (`steps/`, `current.json`, `decisions.json`, `app-events`, `drafts/`, `token`), so a restart restores it.
