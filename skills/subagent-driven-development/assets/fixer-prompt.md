@@ -12,7 +12,7 @@ reviewing it — you are closing specific, already-decided defects.
 
 {{COMPONENT}}
 
-Other fixers are working on other components in parallel. Stay inside yours.
+Other fixers and implementers are working on other files in parallel. Stay inside your component.
 
 ## Findings to fix
 
