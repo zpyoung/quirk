@@ -174,6 +174,20 @@ def _is_app_session(session: Path) -> bool:
     return isinstance(data, dict) and data.get("mode") == "app"
 
 
+def _is_screen_session(session: Path) -> bool:
+    """Whether the session has screen-mode artifacts and no app-mode marker.
+
+    A screen-mode session cannot become an app session: its ``current.json`` names a screen, not a step.
+    """
+    if _is_app_session(session):
+        return False
+    state = _state_dir(session)
+    current = _read_json(state / "current.json")
+    if isinstance(current, dict) and current.get("mode") != "app":
+        return True
+    return (state / "events").exists() or any((session / "screens").glob("*.html"))
+
+
 def _previous_port(state: Path) -> Optional[int]:
     """The port recorded by the session's last server, read before ``server-info`` is cleared."""
     info = _read_json(state / "server-info")
@@ -933,6 +947,8 @@ def _mode_conflict(session: Path, app: bool, existing: Optional[dict]) -> Option
             )
     elif not app and _is_app_session(session):
         return _fail("session is in app mode; start it with --app")
+    elif app and _is_screen_session(session):
+        return _fail("session is a screen-mode session")
     return None
 
 
