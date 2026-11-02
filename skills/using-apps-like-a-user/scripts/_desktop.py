@@ -25,7 +25,7 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from _types import DriverError  # noqa: E402
+from _likeuser_types import DriverError  # noqa: E402
 
 FAKE_ENV = "LIKEUSER_FAKE_DESKTOP"
 SUBPROCESS_TIMEOUT_S = 10.0
