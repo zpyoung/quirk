@@ -2,7 +2,11 @@ import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type CSSProperties, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react'
-import { clampZoom, fitView, isZoomedAway, layoutRun, panelHeight, placeCardForView, viewBoxOf, wheelIntent, zoomFloor, type Size, type View } from './layout'
+import { flowAssets, loadAssets } from '../libs'
+import {
+  clampZoom, elkLayoutRun, fitView, isZoomedAway, layoutRun, panelHeight, placeCardForView, runStructureKey, viewBoxOf, wheelIntent, zoomFloor,
+  type ElkConstructor, type GraphLayout, type Size, type View,
+} from './layout'
 import { mismatchLines, TaskNode } from './node'
 import type { RunView } from './types'
 
@@ -29,6 +33,10 @@ const HINT_TEXT = 'Use ⌘ or Ctrl + scroll to zoom'
 // the hint explains the wheel once per page load, however many graphs mount
 let hintShown = false
 
+// laid-out graphs by structure key, so a remounted graph starts from the ELK layout instead of the fallback
+const elkCache = new Map<string, GraphLayout>()
+const ELK_CACHE_MAX = 8
+
 const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 function summary(run: RunView): string {
@@ -39,9 +47,19 @@ function summary(run: RunView): string {
   return `Task dependency graph: ${total} ${total === 1 ? 'task' : 'tasks'}${parts.length ? `, ${parts.join(', ')}` : ''}`
 }
 
-/** The run as a dependency graph: columns by level, pan and zoom through the viewBox, a card beside the asking task. */
+/**
+ * The run as a dependency graph: pan and zoom through the viewBox, a card beside the asking task. It paints the
+ * synchronous fallback layout first and swaps in the ELK layout once the `flow` library has loaded; a failure
+ * keeps the fallback.
+ */
 export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stale, onSelect, initialView }: RunGraphProps): JSX.Element {
-  const layout = useMemo(() => layoutRun(run), [run])
+  const key = useMemo(() => runStructureKey(run), [run])
+  const runRef = useRef(run)
+  runRef.current = run
+  // the structure key stands in for run: a status tick must not lay the graph out again
+  const fallback = useMemo(() => layoutRun(runRef.current), [key])
+  const [, setElkReady] = useState(0)
+  const layout = elkCache.get(key) ?? fallback
   const [size, setSize] = useState<Size>(DEFAULT_SIZE)
   const [view, setViewState] = useState<View>(() => initialView ?? fitView(layout, DEFAULT_SIZE))
   const [tip, setTip] = useState<string | null>(null)
@@ -109,8 +127,27 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   }, [])
 
   useEffect(() => {
+    if (elkCache.has(key)) return
+    let cancelled = false
+    const compute = async () => {
+      const win = window as unknown as { quirkFlow?: { ELK?: ElkConstructor } }
+      if (!win.quirkFlow?.ELK) await loadAssets(flowAssets())
+      const ELK = win.quirkFlow?.ELK
+      if (!ELK) return
+      const next = await elkLayoutRun(runRef.current, ELK)
+      if (elkCache.size >= ELK_CACHE_MAX) elkCache.delete(elkCache.keys().next().value as string)
+      elkCache.set(key, next)
+      if (!cancelled) setElkReady((n) => n + 1)
+    }
+    compute().catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [key])
+
+  useEffect(() => {
     if (autoFit.current) setView(fitView(layout, size))
-  }, [layout.width, layout.height, size, setView])
+  }, [layout, size, setView])
 
   const zoomAround = useCallback(
     (factor: number, px: number, py: number) => {
@@ -248,18 +285,6 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   )
 
   const tasks = useMemo(() => new Map(run.tasks.map((t) => [t.id, t])), [run])
-  const joinedAbove = new Set<string>()
-  const joinedBelow = new Set<string>()
-  for (const edge of layout.edges) {
-    if (!edge.joined) continue
-    const a = layout.nodes.find((n) => n.id === edge.from)
-    const b = layout.nodes.find((n) => n.id === edge.to)
-    if (!a || !b) continue
-    const [upper, lower] = a.y <= b.y ? [a, b] : [b, a]
-    joinedBelow.add(upper.id)
-    joinedAbove.add(lower.id)
-  }
-
   const nodeLayer = useMemo(
     () =>
       layout.nodes.map((box) => {
@@ -273,13 +298,10 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
             serverNow={serverNow}
             selected={selected === box.id}
             onSelect={select}
-            joinedAbove={joinedAbove.has(box.id)}
-            joinedBelow={joinedBelow.has(box.id)}
             onTip={setTip}
           />
         )
       }),
-    // the joined sets derive from layout, so layout stands in for them
     [layout, tasks, serverNow, selected, select],
   )
 
@@ -355,16 +377,15 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
             return (
               <path
                 key={`${edge.kind}:${edge.from}>${edge.to}`}
-                className={edge.joined ? 'run-edge run-edge-join' : 'run-edge'}
+                className="run-edge"
                 d={edge.d}
                 data-kind={edge.kind}
                 data-from={edge.from}
                 data-to={edge.to}
-                data-joined={edge.joined ? 'true' : undefined}
                 data-failed={failed ? 'true' : undefined}
                 data-flow={flowing ? 'true' : undefined}
                 data-hot={hot === edge.from || hot === edge.to ? 'true' : undefined}
-                markerEnd={edge.joined ? undefined : failed ? 'url(#run-arrow-failed)' : 'url(#run-arrow)'}
+                markerEnd={failed ? 'url(#run-arrow-failed)' : 'url(#run-arrow)'}
               />
             )
           })}

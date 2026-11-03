@@ -1,4 +1,4 @@
-import type { RunView } from './types'
+import type { RunEdge, RunView } from './types'
 
 export interface NodeBox {
   id: string
@@ -10,13 +10,12 @@ export interface NodeBox {
   chain?: string
 }
 
-/** `d` is an SVG path; `joined` marks same-chain neighbours drawn as a link glyph between touching cards. */
+/** `d` is an SVG path with rounded orthogonal corners; it leaves the source and enters the target on a straight horizontal run. */
 export interface EdgePath {
   from: string
   to: string
   kind: 'dep' | 'order'
   d: string
-  joined: boolean
 }
 
 export interface GraphLayout {
@@ -29,30 +28,149 @@ export interface GraphLayout {
 export interface LayoutOptions {
   nodeW?: number
   nodeH?: number
+  /** Space between columns; the room an edge has to turn between a source and a target. */
   colGap?: number
+  /** Space between two nodes in one column. */
   rowGap?: number
 }
 
 const PAD = 24
 
-/** A column cell: one task, or the run of same-chain tasks that must stay stacked and touching. */
+const CORNER_RADIUS = 8
+/** Shortest straight run into or out of a node, once the corner is rounded, that still reads as an arrow pointing at it. */
+export const MIN_STUB = 24
+/** The polyline stub at each node: `CANVAS_EDGE_STUB` in the kit, which leaves MIN_STUB straight after the corner radius. */
+export const EDGE_STUB = MIN_STUB + CORNER_RADIUS
+
+interface Pt {
+  x: number
+  y: number
+}
+
+const round = (n: number) => Math.round(n * 100) / 100
+
+const same = (a: number, b: number) => Math.abs(a - b) < 1e-3
+
+/** Drops repeated and collinear points so every remaining segment is a real run. */
+function simplify(pts: Pt[]): Pt[] {
+  const out: Pt[] = []
+  for (const p of pts) {
+    const last = out[out.length - 1]
+    if (last && same(last.x, p.x) && same(last.y, p.y)) continue
+    out.push(p)
+  }
+  for (let i = out.length - 2; i > 0; i--) {
+    const a = out[i - 1]
+    const b = out[i]
+    const c = out[i + 1]
+    if ((same(a.x, b.x) && same(b.x, c.x)) || (same(a.y, b.y) && same(b.y, c.y))) out.splice(i, 1)
+  }
+  return out
+}
+
+/** The `roundedFlowPath` of the kit: a polyline with each corner rounded by up to `radius`. */
+function roundedPath(pts: Pt[], radius = CORNER_RADIUS): string {
+  const fmt = (p: Pt) => `${round(p.x)} ${round(p.y)}`
+  let d = `M ${fmt(pts[0])}`
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1]
+    const p1 = pts[i]
+    const p2 = pts[i + 1]
+    const len1 = Math.hypot(p1.x - p0.x, p1.y - p0.y)
+    const len2 = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+    const r = Math.min(radius, len1 / 2, len2 / 2)
+    if (r <= 0) {
+      d += ` L ${fmt(p1)}`
+      continue
+    }
+    const enter = { x: p1.x + ((p0.x - p1.x) / len1) * r, y: p1.y + ((p0.y - p1.y) / len1) * r }
+    const leave = { x: p1.x + ((p2.x - p1.x) / len2) * r, y: p1.y + ((p2.y - p1.y) / len2) * r }
+    d += ` L ${fmt(enter)} Q ${fmt(p1)} ${fmt(leave)}`
+  }
+  return `${d} L ${fmt(pts[pts.length - 1])}`
+}
+
+/**
+ * The orthogonal route from the right side of `from` at height `ys` to the left side of `to` at height `yt`.
+ * Both ends keep a straight horizontal stub. A target in a later column turns once in the gap before it;
+ * a target in the same column loops out right of the source, runs through the row gap, and comes in from the left.
+ */
+function routeStubbed(from: NodeBox, to: NodeBox, ys: number, yt: number, lane = 0, rowGap = 28): Pt[] {
+  const x1 = from.x + from.w
+  const x2 = to.x
+  if (x2 - x1 >= 2 * EDGE_STUB) {
+    if (same(ys, yt)) return [{ x: x1, y: ys }, { x: x2, y: yt }]
+    const turn = Math.min(Math.max((x1 + x2) / 2 + lane, x1 + EDGE_STUB), x2 - EDGE_STUB)
+    return simplify([{ x: x1, y: ys }, { x: turn, y: ys }, { x: turn, y: yt }, { x: x2, y: yt }])
+  }
+  const below = to.y + to.h / 2 > from.y + from.h / 2
+  const seam = below ? from.y + from.h + rowGap / 2 : from.y - rowGap / 2
+  return simplify([
+    { x: x1, y: ys },
+    { x: x1 + EDGE_STUB, y: ys },
+    { x: x1 + EDGE_STUB, y: seam },
+    { x: x2 - EDGE_STUB, y: seam },
+    { x: x2 - EDGE_STUB, y: yt },
+    { x: x2, y: yt },
+  ])
+}
+
+/** Heights along a node's side for `count` edges, spread evenly so no two edges share a point. */
+const spread = (box: NodeBox, count: number, index: number) => round(box.y + (box.h * (index + 1)) / (count + 1))
+
+/** Offset, in units, of an edge's vertical run within the gap, so edges into one target do not stack on one line. */
+const laneOffset = (count: number, index: number) => Math.max(-4, Math.min(4, (index - (count - 1) / 2) * 2))
+
+/**
+ * Gives every edge its start and end height on the source's right side and the target's left side,
+ * ordered by where the other end sits so edges rarely cross, then routes it.
+ */
+function routeEdges(edges: RunEdge[], boxes: Map<string, NodeBox>, rowGap: number): { edge: RunEdge; pts: Pt[] }[] {
+  const live = edges.filter((e) => boxes.has(e.from) && boxes.has(e.to))
+  const centre = (id: string) => boxes.get(id)!.y + boxes.get(id)!.h / 2
+  const incoming = new Map<string, number[]>()
+  const outgoing = new Map<string, number[]>()
+  live.forEach((edge, i) => {
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), i])
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), i])
+  })
+  const endIndex = new Map<number, [number, number]>()
+  const startIndex = new Map<number, [number, number]>()
+  for (const list of incoming.values()) {
+    list.sort((a, b) => centre(live[a].from) - centre(live[b].from) || a - b)
+    list.forEach((edge, k) => endIndex.set(edge, [k, list.length]))
+  }
+  for (const list of outgoing.values()) {
+    list.sort((a, b) => centre(live[a].to) - centre(live[b].to) || a - b)
+    list.forEach((edge, k) => startIndex.set(edge, [k, list.length]))
+  }
+  return live.map((edge, i) => {
+    const from = boxes.get(edge.from)!
+    const to = boxes.get(edge.to)!
+    const [sk, sn] = startIndex.get(i)!
+    const [ek, en] = endIndex.get(i)!
+    return { edge, pts: routeStubbed(from, to, spread(from, sn, sk), spread(to, en, ek), laneOffset(en, ek), rowGap) }
+  })
+}
+
+/** A column cell: one task, or the run of same-chain tasks that stay together in chain order. */
 interface Unit {
   ids: string[]
   plan: number
   y: number
 }
 
-const round = (n: number) => Math.round(n * 100) / 100
-
 /**
- * Lays the run out as columns by level. Chain members stack with no gap in chain order; other rows are ordered
- * by two barycenter sweeps over dependency edges, ties broken by plan order. Pure and deterministic.
+ * Lays the run out as columns by level, synchronously: the first paint and the server-side checks use it.
+ * Chain members sit together in chain order with the normal row gap; other rows are ordered by two barycenter
+ * sweeps over dependency edges, ties broken by plan order. Edges keep straight stubs at both ends and spread
+ * along the node sides. Pure and deterministic. `elkLayoutRun` replaces it once the layout library has loaded.
  */
 export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
   const w = opts.nodeW ?? 248
   const h = opts.nodeH ?? 96
   const colGap = opts.colGap ?? 72
-  const rowGap = opts.rowGap ?? 16
+  const rowGap = opts.rowGap ?? 28
 
   const plan = new Map(run.tasks.map((task, index) => [task.id, index]))
   const levels = [...new Set(run.tasks.map((task) => task.level))].sort((a, b) => a - b)
@@ -82,7 +200,7 @@ export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
     unit.plan = Math.min(...unit.ids.map((id) => plan.get(id) ?? 0))
   }
 
-  const unitHeight = (unit: Unit) => unit.ids.length * h
+  const unitHeight = (unit: Unit) => unit.ids.length * h + (unit.ids.length - 1) * rowGap
   const stack = (column: Unit[]) => {
     let y = 0
     for (const unit of column) {
@@ -97,7 +215,7 @@ export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
   columns.forEach((column) => column.forEach((unit) => unit.ids.forEach((id) => unitOf.set(id, unit))))
   const centre = (id: string) => {
     const unit = unitOf.get(id)!
-    return unit.y + unit.ids.indexOf(id) * h + h / 2
+    return unit.y + unit.ids.indexOf(id) * (h + rowGap) + h / 2
   }
 
   const sweep = (column: Unit[], neighbours: (id: string) => string[]) => {
@@ -127,7 +245,7 @@ export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
         boxes.set(id, {
           id,
           x: PAD + c * (w + colGap),
-          y: round(PAD + offset + unit.y + index * h),
+          y: round(PAD + offset + unit.y + index * (h + rowGap)),
           w,
           h,
           level: task.level,
@@ -137,48 +255,167 @@ export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
     }
   })
 
-  const edges: EdgePath[] = []
-  for (const edge of run.edges) {
-    const from = boxes.get(edge.from)
-    const to = boxes.get(edge.to)
-    if (!from || !to) continue
-    edges.push({ from: edge.from, to: edge.to, kind: edge.kind, ...edgeGeometry(edge.kind, from, to) })
-  }
-
   const nodes = run.tasks.map((task) => boxes.get(task.id)!)
   const columnsUsed = levels.length
   return {
     nodes,
-    edges,
+    edges: routeEdges(run.edges, boxes, rowGap).map(({ edge, pts }) => ({ from: edge.from, to: edge.to, kind: edge.kind, d: roundedPath(pts) })),
     width: columnsUsed === 0 ? PAD * 2 : PAD * 2 + columnsUsed * w + (columnsUsed - 1) * colGap,
     height: PAD * 2 + innerHeight,
   }
 }
 
-function edgeGeometry(kind: 'dep' | 'order', from: NodeBox, to: NodeBox): { d: string; joined: boolean } {
-  const sameColumn = from.x === to.x
-  if (kind === 'order' && sameColumn && from.chain !== undefined && from.chain === to.chain) {
-    const upper = from.y <= to.y ? from : to
-    const lower = upper === from ? to : from
-    if (upper.y + upper.h === lower.y) {
-      const cx = upper.x + upper.w / 2
-      const seam = lower.y
-      return { d: `M${round(cx - 6)},${round(seam - 3)} L${round(cx)},${round(seam + 3)} L${round(cx + 6)},${round(seam - 3)}`, joined: true }
+/** A key that changes only when the task set, levels, chains or edges do, never on a status tick. */
+export function runStructureKey(run: RunView): string {
+  return JSON.stringify([
+    run.tasks.map((t) => [t.id, t.level, t.chain ?? null]),
+    run.edges.map((e) => [e.from, e.to, e.kind]),
+    run.chains.map((c) => [c.id, c.tasks]),
+  ])
+}
+
+interface ElkPoint {
+  x: number
+  y: number
+}
+interface ElkSection {
+  startPoint?: ElkPoint
+  endPoint?: ElkPoint
+  bendPoints?: ElkPoint[]
+}
+interface ElkNode {
+  id: string
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  layoutOptions?: Record<string, string>
+  children?: ElkNode[]
+  edges?: { id: string; sources: string[]; targets: string[]; sections?: ElkSection[] }[]
+}
+
+/** The constructor `flow.bundle.js` leaves on `window.quirkFlow.ELK`. */
+export type ElkConstructor = new () => { layout(graph: ElkNode): Promise<ElkNode> }
+
+/** True when a point list leaves `from` and enters `to` on straight horizontal stubs of at least EDGE_STUB. */
+function hasStubs(pts: Pt[], from: NodeBox, to: NodeBox): boolean {
+  if (pts.length < 2) return false
+  const first = pts[0]
+  const second = pts[1]
+  const last = pts[pts.length - 1]
+  const prev = pts[pts.length - 2]
+  return (
+    same(first.x, from.x + from.w) &&
+    same(first.y, second.y) &&
+    second.x - first.x >= EDGE_STUB - 1e-3 &&
+    same(last.x, to.x) &&
+    same(prev.y, last.y) &&
+    last.x - prev.x >= EDGE_STUB - 1e-3
+  )
+}
+
+/**
+ * Lays the run out with ELK, the way `q-flow` does: layered, left to right, orthogonal routing, a 32-unit stub
+ * at every node, and spacing wide enough that no two nodes touch. Dependency and ordering edges are both laid
+ * out, so a chain's tasks are separate cards joined by an ordering arrow. Resolves to the same shape as
+ * `layoutRun`; an edge ELK routes without proper stubs is re-routed rather than drawn crooked.
+ */
+export async function elkLayoutRun(run: RunView, ELK: ElkConstructor, opts: LayoutOptions = {}): Promise<GraphLayout> {
+  const w = opts.nodeW ?? 248
+  const h = opts.nodeH ?? 96
+  const betweenLayers = opts.colGap ?? 72
+  const nodeNode = opts.rowGap ?? 28
+
+  const ids = new Set(run.tasks.map((t) => t.id))
+  const seen = new Set<string>()
+  const edges = run.edges.filter((e) => {
+    const key = `${e.kind}:${e.from}>${e.to}`
+    if (e.from === e.to || !ids.has(e.from) || !ids.has(e.to) || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
+  const graph: ElkNode = {
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.edgeRouting': 'ORTHOGONAL',
+      'elk.json.shapeCoords': 'ROOT',
+      'elk.json.edgeCoords': 'ROOT',
+      'elk.layered.spacing.nodeNodeBetweenLayers': String(betweenLayers),
+      'elk.spacing.nodeNode': String(nodeNode),
+      'elk.spacing.edgeNode': '24',
+      'elk.layered.spacing.edgeNodeBetweenLayers': String(EDGE_STUB),
+      'elk.spacing.nodeSelfLoop': String(EDGE_STUB),
+    },
+    children: run.tasks.map((t) => ({ id: t.id, width: w, height: h })),
+    edges: edges.map((e, i) => ({ id: `e${i}`, sources: [e.from], targets: [e.to] })),
+  }
+  const laidOut = await new ELK().layout(graph)
+
+  const placed = new Map((laidOut.children ?? []).map((c) => [c.id, c]))
+  const routed = new Map((laidOut.edges ?? []).map((e) => [e.id, e]))
+  let minX = Infinity
+  let minY = Infinity
+  const raw = new Map<string, NodeBox>()
+  for (const task of run.tasks) {
+    const c = placed.get(task.id)
+    if (c?.x === undefined || c.y === undefined) throw new Error(`ELK did not place ${task.id}`)
+    raw.set(task.id, { id: task.id, x: c.x, y: c.y, w, h, level: task.level, ...(task.chain === undefined ? {} : { chain: task.chain }) })
+    minX = Math.min(minX, c.x)
+    minY = Math.min(minY, c.y)
+  }
+
+  const paths = edges.map((e, i) => {
+    let pts: Pt[] = []
+    for (const section of routed.get(`e${i}`)?.sections ?? []) {
+      if (section.startPoint && pts.length === 0) pts.push(section.startPoint)
+      pts.push(...(section.bendPoints ?? []))
+      if (section.endPoint) pts.push(section.endPoint)
+    }
+    return { e, pts: simplify(pts) }
+  })
+  // one bad route re-routes every edge over ELK's node positions, so the spread along each side stays consistent
+  if (paths.some(({ e, pts }) => !hasStubs(pts, raw.get(e.from)!, raw.get(e.to)!))) {
+    routeEdges(edges, raw, nodeNode).forEach(({ pts }, i) => {
+      paths[i].pts = pts
+    })
+  }
+
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const box of raw.values()) {
+    maxX = Math.max(maxX, box.x + box.w)
+    maxY = Math.max(maxY, box.y + box.h)
+  }
+  for (const { pts } of paths) {
+    for (const p of pts) {
+      minX = Math.min(minX, p.x)
+      minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x)
+      maxY = Math.max(maxY, p.y)
     }
   }
-  const y1 = from.y + from.h / 2
-  const y2 = to.y + to.h / 2
-  if (to.x >= from.x + from.w) {
-    const x1 = from.x + from.w
-    const x2 = to.x
-    const dx = Math.max(24, (x2 - x1) / 2)
-    return { d: `M${x1},${round(y1)} C${round(x1 + dx)},${round(y1)} ${round(x2 - dx)},${round(y2)} ${x2},${round(y2)}`, joined: false }
+  if (!Number.isFinite(minX)) return { nodes: [], edges: [], width: PAD * 2, height: PAD * 2 }
+
+  const dx = PAD - minX
+  const dy = PAD - minY
+  const nodes = run.tasks.map((t) => {
+    const b = raw.get(t.id)!
+    return { ...b, x: round(b.x + dx), y: round(b.y + dy) }
+  })
+  return {
+    nodes,
+    edges: paths.map(({ e, pts }) => ({
+      from: e.from,
+      to: e.to,
+      kind: e.kind,
+      d: roundedPath(pts.map((p) => ({ x: round(p.x + dx), y: round(p.y + dy) }))),
+    })),
+    width: round(maxX - minX + 2 * PAD),
+    height: round(maxY - minY + 2 * PAD),
   }
-  // target is not to the right (same column, not touching): loop out on the right side and back in
-  const x1 = from.x + from.w
-  const x2 = to.x + to.w
-  const out = Math.max(from.x, to.x) + from.w + 36
-  return { d: `M${x1},${round(y1)} C${out},${round(y1)} ${out},${round(y2)} ${x2},${round(y2)}`, joined: false }
 }
 
 export interface View {

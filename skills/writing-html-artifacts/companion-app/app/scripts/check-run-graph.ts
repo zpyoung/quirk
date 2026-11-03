@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { runInThisContext } from 'node:vm'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  CARD_MARGIN, CARD_WIDTH, effectiveFontPx, fitView, fitZoom, isZoomedAway, layoutRun, MIN_ZOOM, PANEL_MIN_H, panelHeight, placeCard, placeCardForView,
-  viewBoxOf, wheelIntent, zoomFloor,
-  type GraphLayout, type NodeBox, type Rect, type Size,
+  CARD_MARGIN, CARD_WIDTH, effectiveFontPx, elkLayoutRun, fitView, fitZoom, isZoomedAway, layoutRun, MIN_STUB, MIN_ZOOM, PANEL_MIN_H, panelHeight, placeCard,
+  placeCardForView, runStructureKey, viewBoxOf, wheelIntent, zoomFloor,
+  type ElkConstructor, type GraphLayout, type NodeBox, type Rect, type Size,
 } from '../src/run/layout'
 import { RunGraph } from '../src/run/graph'
 import type { RunEdge, RunStatus, RunTask, RunView } from '../src/run/types'
@@ -59,24 +61,45 @@ const sample = view(
   [{ id: 'c1', tasks: ['T4', 'T5'] }],
 )
 
-function overlaps(a: NodeBox, b: NodeBox): boolean {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+/** Smallest gap between two boxes: the larger axis gap when they overlap on one axis, the corner distance otherwise. */
+function boxGap(a: NodeBox, b: NodeBox): number {
+  const dx = Math.max(a.x - (b.x + b.w), b.x - (a.x + a.w))
+  const dy = Math.max(a.y - (b.y + b.h), b.y - (a.y + a.h))
+  return dx > 0 && dy > 0 ? Math.hypot(dx, dy) : Math.max(dx, dy)
 }
 
-function checkLayout(name: string, run: RunView): GraphLayout {
-  const layout = layoutRun(run)
-  check(JSON.stringify(layout) === JSON.stringify(layoutRun(run)), `${name}: layout is not deterministic`)
+interface Pt {
+  x: number
+  y: number
+}
+
+/** The points a path visits: M and L end points, and the end point of each Q. */
+function pathPoints(d: string): Pt[] {
+  const pts: Pt[] = []
+  for (const [, , args] of d.matchAll(/([MLQ])\s*([^MLQ]*)/g)) {
+    const n = args.trim().split(/[\s,]+/).map(Number)
+    pts.push({ x: n[n.length - 2], y: n[n.length - 1] })
+  }
+  return pts
+}
+
+const near = (a: number, b: number) => Math.abs(a - b) < 0.01
+
+function checkGeometry(name: string, run: RunView, layout: GraphLayout) {
   check(layout.nodes.length === run.tasks.length, `${name}: expected one box per task`)
   const byId = new Map(layout.nodes.map((n) => [n.id, n]))
+  let tightest = Infinity
   for (let i = 0; i < layout.nodes.length; i++) {
     for (let j = i + 1; j < layout.nodes.length; j++) {
-      if (overlaps(layout.nodes[i], layout.nodes[j])) failures.push(`${name}: ${layout.nodes[i].id} overlaps ${layout.nodes[j].id}`)
+      const gap = boxGap(layout.nodes[i], layout.nodes[j])
+      tightest = Math.min(tightest, gap)
+      if (gap < 16) failures.push(`${name}: ${layout.nodes[i].id} and ${layout.nodes[j].id} are ${gap.toFixed(1)} apart, under 16`)
     }
   }
-  for (const edge of run.edges.filter((e) => e.kind === 'dep')) {
+  for (const edge of run.edges) {
     const from = byId.get(edge.from)
     const to = byId.get(edge.to)
-    check(!!from && !!to && from.x + from.w <= to.x, `${name}: dep ${edge.from}->${edge.to} does not run left to right`)
+    check(edge.kind === 'order' || (!!from && !!to && from.x + from.w <= to.x), `${name}: dep ${edge.from}->${edge.to} does not run left to right`)
   }
   for (const node of layout.nodes) {
     const task = run.tasks.find((t) => t.id === node.id)
@@ -84,6 +107,36 @@ function checkLayout(name: string, run: RunView): GraphLayout {
   }
   check(layout.nodes.every((n) => n.x + n.w <= layout.width && n.y + n.h <= layout.height), `${name}: nodes exceed the layout size`)
   check(layout.edges.length === run.edges.length, `${name}: expected one path per edge`)
+
+  const ends = new Map<string, string>()
+  for (const edge of layout.edges) {
+    const label = `${name}: ${edge.kind} ${edge.from}->${edge.to}`
+    const from = byId.get(edge.from)
+    const to = byId.get(edge.to)
+    const pts = pathPoints(edge.d)
+    if (!from || !to || pts.length < 2) {
+      failures.push(`${label} has no usable path`)
+      continue
+    }
+    const [first, second] = pts
+    const last = pts[pts.length - 1]
+    const prev = pts[pts.length - 2]
+    check(near(first.x, from.x + from.w) && first.y > from.y && first.y < from.y + from.h, `${label} must start on the source's right side`)
+    check(near(first.y, second.y) && second.x - first.x >= MIN_STUB - 0.01, `${label} must leave on a horizontal run of at least ${MIN_STUB}`)
+    check(near(last.x, to.x) && last.y > to.y && last.y < to.y + to.h, `${label} must end on the target's left side`)
+    check(near(prev.y, last.y) && last.x - prev.x >= MIN_STUB - 0.01, `${label} must enter on a horizontal run of at least ${MIN_STUB}`)
+    const key = `${edge.to}@${last.x},${last.y}`
+    const other = ends.get(key)
+    check(other === undefined, `${name}: ${edge.from}->${edge.to} and ${other} share an end point on ${edge.to}`)
+    ends.set(key, `${edge.from}->${edge.to}`)
+  }
+  return tightest
+}
+
+function checkLayout(name: string, run: RunView): GraphLayout {
+  const layout = layoutRun(run)
+  check(JSON.stringify(layout) === JSON.stringify(layoutRun(run)), `${name}: layout is not deterministic`)
+  checkGeometry(name, run, layout)
   return layout
 }
 
@@ -92,12 +145,13 @@ const box = (id: string) => layout.nodes.find((n) => n.id === id)!
 const t4 = box('T4')
 const t5 = box('T5')
 check(t4.x === t5.x && t4.level === t5.level, 'chain members must share a column')
-check(t5.y === t4.y + t4.h, 'chain members must touch, in chain order')
+check(t5.y >= t4.y + t4.h + 16, 'chain members are separate cards with a gap, in chain order')
 check(t4.chain === 'c1' && t5.chain === 'c1', 'chain id is carried on the boxes')
 const join = layout.edges.find((e) => e.from === 'T4' && e.to === 'T5')
-check(join?.joined === true && join.kind === 'order', 'T4 -> T5 must be a joined order edge')
+check(join?.kind === 'order' && join.d.length > 0, 'T4 -> T5 is an ordering edge with its own path')
+check(!('joined' in (join ?? {})), 'edges no longer carry a joined flag')
 const cross = layout.edges.find((e) => e.from === 'T2' && e.to === 'T11')
-check(cross?.joined === false && cross.kind === 'order' && cross.d.length > 0, 'cross-column order edge is a plain path')
+check(cross?.kind === 'order' && cross.d.length > 0, 'cross-column order edge is a plain path')
 check(box('T1').x < box('T2').x && box('T2').x < box('T4').x && box('T4').x < box('T11').x, 'columns follow levels left to right')
 
 // a wider generated run exercises ordering and overlap at scale
@@ -131,9 +185,92 @@ const genRun = view(gen, genEdges.filter((e) => e.kind === 'order' || gen.find((
 const genLayout = checkLayout('generated', genRun)
 const gcBoxes = chained.map((t) => genLayout.nodes.find((n) => n.id === t.id)!)
 check(
-  gcBoxes.every((b, i) => i === 0 || (b.x === gcBoxes[0].x && b.y === gcBoxes[i - 1].y + gcBoxes[i - 1].h)),
-  'generated: chain members are adjacent in order',
+  gcBoxes.every((b, i) => i === 0 || (b.x === gcBoxes[0].x && b.y > gcBoxes[i - 1].y)),
+  'generated: chain members share a column in chain order',
 )
+
+// the 11-task demo run: its dependencies, and T6 -> T7 as an ordering edge in one chain
+const demoSpec: [string, number, string[]][] = [
+  ['T1', 1, []], ['T2', 1, []], ['T3', 1, []], ['T4', 2, ['T1', 'T2', 'T3']], ['T5', 1, []], ['T6', 2, ['T5']], ['T7', 2, ['T5']],
+  ['T8', 2, ['T5']], ['T9', 3, ['T4', 'T6', 'T7', 'T8']], ['T10', 1, []], ['CP1-F1', 2, ['T10']],
+]
+const demoRun = view(
+  demoSpec.map(([id, level]) => task(id, level, 'queued', id === 'T6' || id === 'T7' ? { chain: 'c1' } : {})),
+  [
+    ...demoSpec.flatMap(([id, , deps]) => deps.map((dep): RunEdge => ({ from: dep, to: id, kind: 'dep' }))),
+    { from: 'T6', to: 'T7', kind: 'order' },
+  ],
+  [{ id: 'c1', tasks: ['T6', 'T7'] }],
+)
+checkLayout('demo', demoRun)
+
+// ELK: load the vendored bundle the way the browser does, then lay the same runs out
+const flowBundle = fileURLToPath(new URL('../../../vendor/flow/0.12.0/flow.bundle.js', import.meta.url))
+const scope = globalThis as unknown as { window?: unknown; quirkFlow?: { ELK: ElkConstructor } }
+scope.window = globalThis
+runInThisContext(readFileSync(flowBundle, 'utf8'), { filename: flowBundle })
+const ELK = scope.quirkFlow!.ELK
+delete scope.window
+
+async function checkElk(name: string, run: RunView): Promise<GraphLayout> {
+  const laid = await elkLayoutRun(run, ELK)
+  check(JSON.stringify(laid) === JSON.stringify(await elkLayoutRun(run, ELK)), `${name}: elk layout is not deterministic`)
+  checkGeometry(name, run, laid)
+  const byId = new Map(laid.nodes.map((n) => [n.id, n]))
+  for (const edge of run.edges) {
+    check(byId.get(edge.from)!.x + byId.get(edge.from)!.w < byId.get(edge.to)!.x, `${name}: ${edge.kind} ${edge.from}->${edge.to} runs left to right`)
+  }
+  for (const edge of laid.edges) {
+    const pts = pathPoints(edge.d)
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [a, b] = [pts[i], pts[i + 1]]
+      const crossed = laid.nodes.find(
+        (n) => n.id !== edge.from && n.id !== edge.to && Math.max(a.x, b.x) > n.x && Math.min(a.x, b.x) < n.x + n.w && Math.max(a.y, b.y) > n.y && Math.min(a.y, b.y) < n.y + n.h,
+      )
+      check(!crossed, `${name}: ${edge.from}->${edge.to} runs through ${crossed?.id}`)
+    }
+  }
+  check(laid.nodes.every((n) => n.x >= 0 && n.y >= 0) && laid.edges.every((e) => pathPoints(e.d).every((p) => p.x >= 0 && p.y >= 0 && p.x <= laid.width && p.y <= laid.height)), `${name}: nodes and edges stay inside the layout size`)
+  return laid
+}
+
+const elkDemo = await checkElk('elk demo', demoRun)
+check(elkDemo.edges.some((e) => e.kind === 'order' && e.from === 'T6' && e.to === 'T7'), 'elk demo: the T6 -> T7 ordering edge is laid out')
+const t7Gap = boxGap(elkDemo.nodes.find((n) => n.id === 'T6')!, elkDemo.nodes.find((n) => n.id === 'T7')!)
+check(t7Gap >= 16, 'elk demo: T6 and T7 are separate, untouching cards')
+const incomingT9 = elkDemo.edges.filter((e) => e.to === 'T9').map((e) => pathPoints(e.d).at(-1)!.y)
+check(new Set(incomingT9).size === incomingT9.length && incomingT9.length === 4, 'elk demo: the four edges into T9 enter at four different points')
+await checkElk('elk generated', genRun)
+check(JSON.stringify(await elkLayoutRun(view([], []), ELK)) === JSON.stringify({ nodes: [], edges: [], width: 48, height: 48 }), 'elk: an empty run lays out nothing')
+
+// a layout engine that routes edges crookedly still yields straight stubs
+const crooked: ElkConstructor = class {
+  async layout(graph: Parameters<InstanceType<ElkConstructor>['layout']>[0]) {
+    const spot: Record<string, [number, number]> = { A: [20, 20], B: [320, 20], C: [320, 150], D: [620, 20] }
+    const children = (graph.children ?? []).map((c) => ({ ...c, x: spot[c.id][0], y: spot[c.id][1] }))
+    const at = new Map(children.map((c) => [c.id, c]))
+    return {
+      ...graph,
+      children,
+      edges: (graph.edges ?? []).map((e) => {
+        const a = at.get(e.sources[0])!
+        const b = at.get(e.targets[0])!
+        return { ...e, sections: [{ id: 's', startPoint: { x: a.x! + 248, y: a.y! + 30 }, endPoint: { x: b.x!, y: b.y! + 70 } }] }
+      }),
+    }
+  }
+}
+const crookedRun = view(
+  [task('A', 1, 'queued'), task('B', 2, 'queued'), task('C', 2, 'queued'), task('D', 3, 'queued')],
+  [{ from: 'A', to: 'B', kind: 'dep' }, { from: 'A', to: 'C', kind: 'dep' }, { from: 'B', to: 'D', kind: 'dep' }, { from: 'C', to: 'D', kind: 'order' }],
+)
+checkGeometry('crooked engine', crookedRun, await elkLayoutRun(crookedRun, crooked))
+
+// only a change to the task set, levels, chains or edges changes the structure key
+const ticked = view(sample.tasks.map((t) => ({ ...t, status: 'passed' as const, files: 9 })), sample.edges, sample.chains)
+check(runStructureKey(ticked) === runStructureKey(sample), 'a status tick keeps the structure key')
+check(runStructureKey(view(sample.tasks, [...sample.edges, { from: 'T1', to: 'T11', kind: 'dep' }], sample.chains)) !== runStructureKey(sample), 'a new edge changes the structure key')
+check(runStructureKey(view(sample.tasks.slice(1), sample.edges, sample.chains)) !== runStructureKey(sample), 'a removed task changes the structure key')
 
 const empty = layoutRun(view([], []))
 check(empty.nodes.length === 0 && empty.edges.length === 0, 'empty run lays out nothing')
@@ -156,6 +293,8 @@ check(html.includes('data-run-part="graph"') && html.startsWith('<div class="run
 check(html.includes('role="img"') && html.includes('aria-label='), 'the svg needs role="img" and an aria-label')
 check(html.includes('tabindex="0"'), 'node groups must be focusable')
 check(!/Level|Wave/.test(html), 'markup must not show Level or Wave text')
+check(!/joined|run-edge-join/.test(html) && !/joined|run-edge-join/.test(readFileSync(new URL('../src/run/graph.css', import.meta.url), 'utf8')), 'the joined-card markup and styles are gone')
+check(paths.every((p) => !p.includes('data-from') || p.includes('marker-end=')), 'every edge carries an arrowhead')
 check(!html.includes('data-stale="true"'), 'a fresh run must not render data-stale')
 
 const staleHtml = renderToStaticMarkup(createElement(RunGraph, { run: sample, ...props, stale: true }))
@@ -179,6 +318,7 @@ for (let i = 1; i <= 60; i++) {
   if (level > 1) bigEdges.push({ from: `B${i - 3}`, to: `B${i}`, kind: 'dep' })
 }
 const bigLayout = checkLayout('big', view(bigTasks, bigEdges))
+await checkElk('elk big', view(bigTasks, bigEdges))
 for (const size of [{ w: 960, h: 520 }, { w: 400, h: 300 }, { w: 1600, h: 900 }]) {
   const fitted = fitView(bigLayout, size)
   const vb = viewBoxOf(fitted, size)
