@@ -55,6 +55,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+.run-timeline-elapsed--inside {
+  fill: var(--q-color-text);
+  stroke: var(--q-color-bg);
+  stroke-width: 3px;
+  paint-order: stroke;
+  font-weight: 600;
+}
+
 .run-timeline-now line {
   stroke: var(--q-color-accent);
   stroke-width: 1;

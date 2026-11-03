@@ -262,9 +262,19 @@ export function Timeline({ run, serverNow }: { run: RunView; serverNow: number }
 }
 
 function Elapsed({ text, first, last, y, plotR }: { text: string; first: number; last: number; y: number; plotR: number }): JSX.Element {
-  const flip = last + 4 + text.length * CHAR_W > plotR
+  const width = text.length * CHAR_W
+  const flip = last + 4 + width > plotR
+  // a bar that runs to the right edge carries its time inside, clear of the connector arrowheads at its start
+  const inside = flip && last - first > width + 12
+  const x = inside ? last - 6 : flip ? first - 4 : last + 4
   return (
-    <text className="run-timeline-elapsed" x={flip ? first - 4 : last + 4} y={y} textAnchor={flip ? 'end' : 'start'} dominantBaseline="central">
+    <text
+      className={inside ? 'run-timeline-elapsed run-timeline-elapsed--inside' : 'run-timeline-elapsed'}
+      x={x}
+      y={y}
+      textAnchor={flip ? 'end' : 'start'}
+      dominantBaseline="central"
+    >
       {text}
     </text>
   )

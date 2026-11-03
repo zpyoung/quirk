@@ -70,8 +70,9 @@
   }
 
   .run-banner-item[data-kind='open'] {
-    flex-direction: column;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--q-space-2);
   }
 
   .run-banner-item[data-kind='open'] + .run-banner-item {
@@ -87,16 +88,16 @@
     gap: var(--q-space-2);
   }
 
-  .run-card--inline {
+  .run-card.run-card--inline {
     padding: 0;
     border: 0;
     background: transparent;
   }
 
   .run-card--inline .run-card-form {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
     gap: var(--q-space-2);
   }
 
@@ -104,7 +105,6 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: stretch;
-    flex: 1 1 auto;
     margin: 0;
   }
 
@@ -134,6 +134,7 @@
 
   .run-card--inline .run-card-other {
     flex: 1 1 14rem;
+    max-width: 32rem;
     justify-content: flex-end;
   }
 
@@ -141,9 +142,19 @@
     color: var(--q-color-text-muted);
   }
 
+  .run-drawer .run-card--inline .run-card-form {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+
+  .run-drawer .run-card--inline .run-card-fields {
+    justify-self: stretch;
+  }
+
   .run-drawer .run-card--inline .run-card-option,
   .run-drawer .run-card--inline .run-card-other {
     flex-basis: 100%;
+    max-width: none;
   }
 
   .run-banner-text {

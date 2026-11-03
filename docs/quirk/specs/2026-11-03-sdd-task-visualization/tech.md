@@ -368,16 +368,21 @@ contracts are:
 - **Motion**: every animation is CSS keyframes in `run.css`, scoped under `.run-view`; the existing
   reduced-motion rule (`APP/src/theme.css:471`) stops them, and each final frame stays readable.
 - **Banner** (`banner.tsx`): pinned under the header, every open question oldest first, each with
-  Show on graph (SC-7).
+  Show on graph (SC-7) and an inline answer form (`QuestionCard inline`, marker
+  `data-run-part="question-answer"`), hidden while that question's card is open beside the node.
 - **Question card** (`question-card.tsx`): beside the node, the question's options as radios plus an
-  Other text box, Send. A 409 shows the winning answer.
-- **Drawer** (`drawer.tsx`): contract (markdown-it, as text-safe as `APP/src/markdown.ts`), status,
+  Other text box, Send. A 409 shows the winning answer. The same component renders the inline form
+  in the banner and the drawer.
+- **Drawer** (`drawer.tsx`): the task's open questions as inline answer forms, contract (markdown-it, as text-safe as `APP/src/markdown.ts`), status,
   attempts, Diff link and Findings link (`target="_blank"` to `/?view=...`), Stop chain and Retry.
 - **Confirm** (`confirm.tsx`): Stop chain lists the task's fate, each `downstream` task that will be
   marked stopped, the committed predecessors that stay, and that other chains keep going (SC-10).
   Retry names the next attempt number and the last `reason` (SC-11).
-- **Timeline** (`timeline.tsx`): one row per started task, ordered by first start time, one segment
-  per attempt on a shared time axis.
+- **Timeline** (`timeline.tsx`): a waterfall at true pixel size (the SVG's viewBox width is the
+  measured container width, 880 when server-rendered). One row per task: started tasks by first
+  start, then queued tasks in plan order with a placeholder and any "blocked by". One segment per
+  attempt on a shared axis with gridlines at a nice step and a now line; elbow connectors from each
+  `run.edges` predecessor's last end to the dependent's first start, dashed for ordering edges.
 - **Reviews** (`reviews.tsx`): a card per round with its findings and rulings and fix-task tags.
 - **Summary** (`summary.tsx`): shown when `ended` is set; every task's final status and time, each
   round's outcome, the branch and the next step.
