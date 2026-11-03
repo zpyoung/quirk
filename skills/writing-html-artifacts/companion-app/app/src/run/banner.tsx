@@ -21,6 +21,10 @@ function writeDismissed(ids: string[]): void {
   }
 }
 
+function dismissalKey(runId: string, questionId: string): string {
+  return `${runId}:${questionId}`
+}
+
 function answeredText(question: RunQuestion): string | null {
   const answer = question.answer
   if (!answer) return null
@@ -41,12 +45,12 @@ export function NeedsYouBanner({ run, onShow }: { run: RunView; onShow(question:
   const byAge = (a: RunQuestion, b: RunQuestion) => a.asked_at - b.asked_at
   const open = run.questions.filter((question) => question.state === 'open').sort(byAge)
   const elsewhere = run.questions
-    .filter((question) => question.state === 'answered' && answeredText(question) !== null && !dismissed.includes(question.id))
+    .filter((question) => question.state === 'answered' && answeredText(question) !== null && !dismissed.includes(dismissalKey(run.run_id, question.id)))
     .sort(byAge)
   if (open.length === 0 && elsewhere.length === 0) return null
 
   const dismiss = (id: string) => {
-    const next = [...dismissed, id]
+    const next = [...dismissed, dismissalKey(run.run_id, id)]
     setDismissed(next)
     writeDismissed(next)
   }
