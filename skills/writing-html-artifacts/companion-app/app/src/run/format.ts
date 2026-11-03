@@ -46,9 +46,10 @@ export function serverOffsetMs(run: RunView, clientNowMs: number): number {
   return run.now * 1000 - clientNowMs
 }
 
-/** Seconds since the last update once it passes the stale threshold; null for a fresh or ended run. */
+/** Seconds since the last update once it passes the stale threshold; null for a fresh or ended run, or one with no update yet. */
 export function staleSince(run: RunView, serverNowMs: number): number | null {
   if (run.ended) return null
+  if (run.last_update_at === null || run.last_update_at === undefined) return null
   const seconds = Math.floor(serverNowMs / 1000 - run.last_update_at)
   return seconds > run.stale_after_s ? seconds : null
 }
