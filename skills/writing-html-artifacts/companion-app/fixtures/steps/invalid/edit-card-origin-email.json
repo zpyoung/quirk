@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "kind": "edit-card",
+  "stage": "questions",
+  "title": "edit-card step",
+  "decision_id": "scope",
+  "from": "wide",
+  "to": "narrow",
+  "invalidates": [
+    {
+      "label": "Approaches",
+      "step_id": "approaches"
+    },
+    {
+      "label": "Design"
+    }
+  ],
+  "origin": "email"
+}

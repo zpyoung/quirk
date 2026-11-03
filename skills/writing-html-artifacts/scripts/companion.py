@@ -14,10 +14,17 @@ check or a timeout is reported as ``{"error": ...}``, except ``wait``'s
 
 The server binds 127.0.0.1 by default and trusts nothing from the page except a per-screen
 nonce. It never touches the network beyond its own socket.
+
+``start --app`` runs the same server in app mode: it serves a prebuilt React shell and a
+snapshot/event API over the on-disk state in ``htmlkit.appstate``, and the agent drives it with
+``step``, ``status``, ``decide``, ``review``, ``say``, ``reply``, ``next`` and ``snapshot``. A session is in app mode
+exactly when ``state/mode.json`` says so; the screen subcommands refuse an app session and the
+app subcommands refuse a screen session, both with exit 2.
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import html as html_lib
 import http.client
 import ipaddress
@@ -33,18 +40,21 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import NoReturn, Optional, Sequence
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 # the skill directory holds htmlkit and is not on sys.path when this file is run by path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htmlkit import SKILL_DIR, assemble, resolve  # noqa: E402
+from htmlkit.appstate import AppState, AppStateError  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
 from htmlkit.header import read_header, render_header  # noqa: E402
 from htmlkit.layouts import validate_layout  # noqa: E402
+from htmlkit.steps import StepError, validate_step  # noqa: E402
 from htmlkit.vendor import VendorError, VendorStore, shell_block  # noqa: E402
 
 EXIT_OK, EXIT_NOT_OK, EXIT_USAGE = 0, 1, 2
@@ -63,6 +73,26 @@ OPTION_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
 SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram", "layout"}
 EVENT_TYPES = ("click", "proceed")
+
+APP_EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "draft")
+MAX_EXPORT_BODY = 2 * 1024 * 1024
+EXPORT_DRAIN_LIMIT = 8 * 1024 * 1024
+MAX_CLIENT_ID = 100
+MAX_COMMENT = 4000
+BLOCK_ID = re.compile(r"[A-Za-z0-9:/_.-]{1,200}")
+TOKEN_HEADER = "X-Quirk-Token"
+SHELL_ENV = "QUIRK_COMPANION_SHELL"
+SHELL_PLACEHOLDER = '<script type="application/json" id="quirk-companion-boot">null</script>'
+REVIEW_KINDS = {
+    "quirk-logic-spec-decisions": "decisions",
+    "quirk-approach-comparison-challenges": "challenges",
+}
+REVIEW_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
+VERDICTS = {
+    "design-section": ("looks-right", "needs-changes"),
+    "spec-review": ("sign-off", "changes"),
+}
+ANSWER_KEYS = {"selected", "other", "text", "skipped"}
 
 WAITING_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -136,6 +166,33 @@ def _read_json(path: Path) -> Optional[object]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _is_app_session(session: Path) -> bool:
+    """Whether ``state/mode.json`` marks the session as app mode."""
+    data = _read_json(_state_dir(session) / "mode.json")
+    return isinstance(data, dict) and data.get("mode") == "app"
+
+
+def _is_screen_session(session: Path) -> bool:
+    """Whether the session has screen-mode artifacts and no app-mode marker.
+
+    A screen-mode session cannot become an app session: its ``current.json`` names a screen, not a step.
+    """
+    if _is_app_session(session):
+        return False
+    state = _state_dir(session)
+    current = _read_json(state / "current.json")
+    if isinstance(current, dict) and current.get("mode") != "app":
+        return True
+    return (state / "events").exists() or any((session / "screens").glob("*.html"))
+
+
+def _previous_port(state: Path) -> Optional[int]:
+    """The port recorded by the session's last server, read before ``server-info`` is cleared."""
+    info = _read_json(state / "server-info")
+    port = info.get("port") if isinstance(info, dict) else None
+    return port if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 else None
 
 
 def _prepare_session(session: Path) -> None:
@@ -293,9 +350,14 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, host: str, port: int, session: Path, allowed_hosts: Sequence[str] = ()) -> None:
+    def __init__(
+        self, host: str, port: int, session: Path, allowed_hosts: Sequence[str] = (), app: bool = False
+    ) -> None:
         self.address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
         self.session = session
+        self.app = app
+        self.app_state = AppState(session) if app else None
+        self.token = self.app_state.token() if self.app_state else ""
         self.bound_host = host
         self.allowed_hosts = [parsed for parsed in map(_parse_authority, allowed_hosts) if parsed is not None]
         self.event_lock = threading.Lock()
@@ -383,10 +445,18 @@ class _Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/":
-            self._serve_screen()
+            if self.server.app:
+                self._serve_shell()
+            else:
+                self._serve_screen()
         elif path == "/_quirk/state":
             current = self.server.current() or {}
-            self._json(200, {"screen": current.get("screen"), "nonce": current.get("nonce")})
+            state = {"screen": current.get("screen"), "nonce": current.get("nonce")}
+            self._json(200, {**state, "mode": "app"} if self.server.app else state)
+        elif self.server.app and path == "/_quirk/app/snapshot":
+            self._serve_snapshot()
+        elif self.server.app and path == "/_quirk/review":
+            self._serve_review()
         elif path.startswith("/_quirk/lib/"):
             self._serve_library(path[len("/_quirk/lib/") :])
         else:
@@ -395,10 +465,15 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._guard():
             return
-        if urlsplit(self.path).path != "/_quirk/event":
+        path = urlsplit(self.path).path
+        if self.server.app and path == "/_quirk/app/event":
+            self._accept_app_event()
+        elif self.server.app and path == "/_quirk/review/export":
+            self._accept_review_export()
+        elif not self.server.app and path == "/_quirk/event":
+            self._accept_event()
+        else:
             self._reply(404, b"not found\n")
-            return
-        self._accept_event()
 
     def _serve_screen(self) -> None:
         current = self.server.current()
@@ -411,6 +486,42 @@ class _Handler(BaseHTTPRequestHandler):
                 except OSError:
                     page = None
         self._reply(200, page if page is not None else WAITING_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _serve_shell(self) -> None:
+        """The prebuilt app shell with the session token written into its boot element."""
+        override = os.environ.get(SHELL_ENV)
+        shell = Path(override) if override else Path(__file__).resolve().parent.parent / "companion-app" / "shell.html"
+        try:
+            text = shell.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            text = ""
+        if text.count(SHELL_PLACEHOLDER) != 1:
+            self._json(500, {"error": "companion shell not built"})
+            return
+        boot = json.dumps(
+            {"token": self.server.token, "session": self.server.session.resolve().name}, separators=(",", ":")
+        ).replace("<", "\\u003c")
+        page = text.replace(SHELL_PLACEHOLDER, SHELL_PLACEHOLDER.replace("null", boot))
+        self._reply(200, page.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _serve_snapshot(self) -> None:
+        snapshot = self.server.app_state.snapshot()
+        wanted = parse_qs(urlsplit(self.path).query).get("rev", [""])[0]
+        if wanted.isascii() and wanted.isdigit() and int(wanted) == snapshot["rev"]:
+            self._reply(204)
+        else:
+            self._json(200, snapshot)
+
+    def _serve_review(self) -> None:
+        path = self.server.app_state.review_path()
+        try:
+            page = path.read_bytes() if path is not None else None
+        except OSError:
+            page = None
+        if page is None:
+            self._reply(404, b"not found\n")
+        else:
+            self._reply(200, page, "text/html; charset=utf-8")
 
     def _serve_library(self, rest: str) -> None:
         parts = [unquote(p) for p in rest.split("/")]
@@ -430,8 +541,8 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError:
             self._reply(404, b"not found\n")
 
-    def _drain(self, length: int) -> None:
-        remaining = min(length, DRAIN_LIMIT)
+    def _drain(self, length: int, limit: int = DRAIN_LIMIT) -> None:
+        remaining = min(length, limit)
         try:
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 65536))
@@ -493,6 +604,289 @@ class _Handler(BaseHTTPRequestHandler):
                 fh.write(json.dumps(record) + "\n")
         self._reply(204)
 
+    def _check_token(self) -> bool:
+        """Refuse an app POST that lacks the session token; the unread body is drained first."""
+        given = self.headers.get(TOKEN_HEADER, "")
+        if secrets.compare_digest(given.encode("utf-8"), self.server.token.encode("utf-8")):
+            return True
+        try:
+            self._drain(int(self.headers.get("Content-Length", "0")))
+        except ValueError:
+            pass
+        self.close_connection = True
+        self._json(403, {"error": "bad token"})
+        return False
+
+    def _read_object(self, limit: int, over_status: int, drain_limit: int = DRAIN_LIMIT) -> Optional[dict]:
+        """The request body as a JSON object, or None after replying with the matching error."""
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self._json(400, {"error": "a Content-Length is required"})
+            return None
+        if length > limit:
+            self._drain(length, drain_limit)
+            self.close_connection = True
+            self._json(over_status, {"error": f"body is over {limit} bytes"})
+            return None
+        try:
+            payload = json.loads(self.rfile.read(length))
+        except OSError:
+            self.close_connection = True
+            return None
+        except (ValueError, RecursionError):
+            self._json(400, {"error": "body is not valid JSON"})
+            return None
+        if not isinstance(payload, dict):
+            self._json(400, {"error": "body must be a JSON object"})
+            return None
+        return payload
+
+    def _accept_app_event(self) -> None:
+        if not self._check_token():
+            return
+        body = self._read_object(MAX_BODY, 400)
+        if body is None:
+            return
+        client_id = body.get("client_id")
+        if not isinstance(client_id, str) or not 0 < len(client_id) <= MAX_CLIENT_ID:
+            self._json(400, {"error": f"client_id must be a string of 1 to {MAX_CLIENT_ID} characters"})
+            return
+        kind = body.get("type")
+        if not isinstance(kind, str) or kind not in APP_EVENT_TYPES:
+            self._json(400, {"error": "unsupported event type"})
+            return
+        payload = body.get("payload", {})
+        if not isinstance(payload, dict):
+            self._json(400, {"error": "payload must be an object"})
+            return
+        app = self.server.app_state
+        try:
+            with app.lock():
+                status, reply = self._record_app_event(app, kind, client_id, body.get("nonce"), body.get("step"), payload)
+        except AppStateError as exc:
+            status, reply = 400, {"error": str(exc), "field": exc.field}
+        if reply is None:
+            self._reply(status)
+        else:
+            self._json(status, reply)
+
+    def _record_app_event(
+        self, app: AppState, kind: str, client_id: str, nonce: object, draft_step: object, payload: dict
+    ) -> tuple[int, Optional[dict]]:
+        """Validate one app event against the current step and store it; runs under the state lock.
+
+        ``draft_step`` is the step id a draft belongs to; a draft for any step but the current one is
+        superseded and saves nothing. A ``continue`` is recorded even before the first step exists.
+        """
+        current = self.server.current()
+        if kind == "draft" and not (isinstance(draft_step, str) and draft_step):
+            return 400, {"error": "a draft must name its step"}
+        if kind != "draft" and any(e.get("client_id") == client_id for e in app.events_after(0)):
+            return 200, {"duplicate": True}
+        if kind in ("chat", "comment"):
+            return self._record_conversation(app, kind, client_id, payload, current)
+        needs_nonce = kind in ("submit", "edit-decision")
+        if needs_nonce and (current is None or nonce != current["nonce"]):
+            return 409, {"superseded": True}
+        if current is None:
+            if kind == "continue" and not payload:
+                if app.append_event(kind, payload, client_id, step=None) is None:
+                    return 200, {"duplicate": True}
+                return 204, None
+            return 400, {"error": "no step is current"}
+        if kind == "draft" and draft_step != current["screen"]:
+            return 409, {"superseded": True}
+        step = _read_json(_state_dir(self.server.session) / "steps" / f"{current['screen']}.json")
+        if not isinstance(step, dict):
+            return 400, {"error": "the current step is unreadable"}
+        problem = _app_event_problem(kind, step, payload, app)
+        if problem:
+            return 400, {"error": problem}
+        if kind == "draft":
+            app.save_draft(current["screen"], payload)
+            return 204, None
+        if app.append_event(kind, payload, client_id, step=current["screen"]) is None:
+            return 200, {"duplicate": True}
+        return 204, None
+
+    def _record_conversation(
+        self, app: AppState, kind: str, client_id: str, payload: dict, current: Optional[dict]
+    ) -> tuple[int, Optional[dict]]:
+        """Store a ``chat`` or ``comment`` event; runs under the state lock, after the duplicate check.
+
+        Both stay valid across steps, so neither needs the step nonce. A comment's stored payload always
+        carries the thread id the server resolved, so the agent can reply to it.
+        """
+        problem = _conversation_problem(kind, payload, app)
+        if problem:
+            return 400, {"error": problem}
+        step_id = current["screen"] if current else None
+        if kind == "chat":
+            seq = app.append_event(kind, payload, client_id, step=step_id)
+            if seq is None:
+                return 200, {"duplicate": True}
+            app.append_chat("user", payload["text"], event_seq=seq)
+            return 204, None
+        thread_id = app.add_comment(payload["block_id"], step_id, payload["text"], payload.get("thread_id"))
+        stored = {"block_id": payload["block_id"], "text": payload["text"], "thread_id": thread_id}
+        if app.append_event(kind, stored, client_id, step=step_id) is None:
+            return 200, {"duplicate": True}
+        return 204, None
+
+    def _accept_review_export(self) -> None:
+        if not self._check_token():
+            return
+        body = self._read_object(MAX_EXPORT_BODY, 413, EXPORT_DRAIN_LIMIT)
+        if body is None:
+            return
+        kind, slug = body.get("kind"), body.get("slug")
+        if not isinstance(kind, str) or kind not in REVIEW_KINDS:
+            self._json(400, {"error": f"kind must be one of {', '.join(REVIEW_KINDS)}"})
+            return
+        if not isinstance(slug, str) or not REVIEW_SLUG.fullmatch(slug):
+            self._json(400, {"error": "slug must match [a-z0-9][a-z0-9-]{0,80}"})
+            return
+        app = self.server.app_state
+        review = app.review_path()
+        if review is None:
+            self._json(404, {"error": "no review is registered"})
+            return
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            with app.lock():
+                target = review.parent / f"{slug}-{REVIEW_KINDS[kind]}-{stamp}.json"
+                copy = 2
+                while target.exists():
+                    target = review.parent / f"{slug}-{REVIEW_KINDS[kind]}-{stamp}-{copy}.json"
+                    copy += 1
+                atomic_write(target, json.dumps(body, indent=2, ensure_ascii=False))
+                app.append_event(
+                    "review-export",
+                    {"path": str(target), "kind": kind, "stage": body.get("stage"), "signed": body.get("signed")},
+                    client_id=f"review-export-{uuid.uuid4().hex}",
+                    step=(self.server.current() or {}).get("screen"),
+                )
+        except OSError as exc:
+            self._json(500, {"error": f"cannot write the export: {exc}"})
+            return
+        self._json(200, {"path": str(target)})
+
+
+def _app_event_problem(kind: str, step: dict, payload: dict, app: AppState) -> Optional[str]:
+    """Why ``payload`` is not a valid ``kind`` event for ``step``, or None."""
+    if kind == "draft":
+        if set(payload) - {"answers", "comment", "pick"}:
+            return "a draft carries only answers, comment and pick"
+        if "answers" in payload and not isinstance(payload["answers"], dict):
+            return "answers must be an object"
+        if "pick" in payload and not isinstance(payload["pick"], str):
+            return "pick must be a string"
+        return _comment_problem(payload)
+    if kind == "continue":
+        return None if not payload else "continue takes an empty payload"
+    if kind == "edit-request":
+        extra = set(payload) - {"decision_id", "to", "note"}
+        if extra:
+            return f"unknown payload field(s): {', '.join(sorted(extra))}"
+        decision_id = payload.get("decision_id")
+        if not isinstance(decision_id, str) or decision_id not in {d.get("id") for d in app.snapshot()["decisions"]}:
+            return "decision_id must name an existing decision"
+        for key in ("to", "note"):
+            if key in payload and not (isinstance(payload[key], str) and len(payload[key]) <= MAX_COMMENT):
+                return f"{key} must be a string of at most {MAX_COMMENT} characters"
+        return None
+    if kind == "edit-decision":
+        if step.get("kind") != "edit-card":
+            return "edit-decision is only valid on an edit-card step"
+        if set(payload) != {"decision"} or not isinstance(payload["decision"], str) or payload["decision"] not in ("confirm", "cancel"):
+            return "payload must be {decision: confirm|cancel}"
+        return None
+    return _submit_problem(step, payload)
+
+
+def _conversation_problem(kind: str, payload: dict, app: AppState) -> Optional[str]:
+    """Why ``payload`` is not a valid ``chat`` or ``comment`` event, or None; every field is type-checked first."""
+    allowed = {"text"} if kind == "chat" else {"block_id", "text", "thread_id"}
+    extra = set(payload) - allowed
+    if extra:
+        return f"unknown payload field(s): {', '.join(sorted(extra))}"
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_COMMENT:
+        return f"text must be a non-empty string of at most {MAX_COMMENT} characters"
+    if kind == "chat":
+        return None
+    block_id = payload.get("block_id")
+    if not isinstance(block_id, str) or not BLOCK_ID.fullmatch(block_id):
+        return "block_id must be 1 to 200 characters of A-Z a-z 0-9 : / _ . -"
+    if "thread_id" in payload:
+        thread_id = payload["thread_id"]
+        if not isinstance(thread_id, str) or thread_id not in {t.get("id") for t in app.snapshot()["threads"]}:
+            return "thread_id must name an existing thread"
+    return None
+
+
+def _comment_problem(payload: dict) -> Optional[str]:
+    comment = payload.get("comment")
+    if "comment" in payload and not (isinstance(comment, str) and len(comment) <= MAX_COMMENT):
+        return f"comment must be a string of at most {MAX_COMMENT} characters"
+    return None
+
+
+def _submit_problem(step: dict, payload: dict) -> Optional[str]:
+    """Why ``payload`` is not a valid ``submit`` for ``step``'s kind, or None."""
+    kind = step.get("kind")
+    if kind in ("done", "edit-card"):
+        return f"a {kind} step takes no submit"
+    if kind == "spec-review" and step.get("format") == "interactive":
+        return "an interactive spec review is exported with review-export, not submit"
+    field = {"questions": "answers", "approaches": "pick", "hand-off": "pick"}.get(kind, "verdict")
+    extra = set(payload) - {field, "comment"}
+    if extra:
+        return f"unknown payload field(s): {', '.join(sorted(extra))}"
+    problem = _comment_problem(payload)
+    if problem:
+        return problem
+    value = payload.get(field)
+    if kind == "questions":
+        return _answers_problem(step, value)
+    if kind == "approaches":
+        allowed = [a.get("id") for a in step.get("approaches", [])]
+    elif kind == "hand-off":
+        allowed = [c.get("id") for c in step.get("choices", [])]
+    else:
+        allowed = list(VERDICTS.get(kind, ()))
+    if not isinstance(value, str) or value not in allowed:
+        return f"{field} must be one of {', '.join(map(str, allowed))}"
+    return None
+
+
+def _answers_problem(step: dict, answers: object) -> Optional[str]:
+    if not isinstance(answers, dict):
+        return "answers must be an object"
+    questions = {q.get("id"): q for q in step.get("questions", [])}
+    for qid, answer in answers.items():
+        if qid not in questions:
+            return f"answers.{qid}: not a question of this step"
+        if not isinstance(answer, dict):
+            return f"answers.{qid} must be an object"
+        extra = set(answer) - ANSWER_KEYS
+        if extra:
+            return f"answers.{qid}: unknown field(s): {', '.join(sorted(extra))}"
+        options = {o.get("id") for o in questions[qid].get("options", [])}
+        selected = answer.get("selected", [])
+        if not isinstance(selected, list) or not all(isinstance(o, str) and o in options for o in selected):
+            return f"answers.{qid}.selected must list option ids of that question"
+        for key in ("other", "text"):
+            if key in answer and not isinstance(answer[key], str):
+                return f"answers.{qid}.{key} must be a string"
+        if "skipped" in answer and answer["skipped"] is not True:
+            return f"answers.{qid}.skipped must be true"
+    return None
+
 
 def _event_problem(payload: dict) -> Optional[str]:
     if payload.get("type") not in EVENT_TYPES:
@@ -543,18 +937,62 @@ def _reuse_live_server(existing: dict, host: Optional[str], allowed_hosts: Seque
     return EXIT_OK
 
 
-def _serve(session: Path, host: Optional[str], port: int, idle_minutes: float, allowed_hosts: Sequence[str] = ()) -> int:
+def _mode_conflict(session: Path, app: bool, existing: Optional[dict]) -> Optional[int]:
+    """Exit code 2 (after reporting) when ``start`` asks for a mode the session is not in."""
+    if existing is not None:
+        running = existing.get("mode", "screen")
+        if (running == "app") != app:
+            return _fail(
+                f"a companion server is already running for this session in {running} mode; run stop first, then start again"
+            )
+    elif not app and _is_app_session(session):
+        return _fail("session is in app mode; start it with --app")
+    elif app and _is_screen_session(session):
+        return _fail("session is a screen-mode session")
+    return None
+
+
+def _bind(host: str, ports: Sequence[int], session: Path, allowed_hosts: Sequence[str], app: bool) -> _Server:
+    """A server on the first of ``ports`` that binds; raises the last OSError when none does."""
+    error: Optional[OSError] = None
+    for port in ports:
+        try:
+            return _Server(host, port, session, allowed_hosts, app)
+        except OSError as exc:
+            error = exc
+    assert error is not None
+    raise error
+
+
+def _serve(
+    session: Path,
+    host: Optional[str],
+    port: int,
+    idle_minutes: float,
+    allowed_hosts: Sequence[str] = (),
+    app: bool = False,
+    prefer_port: Optional[int] = None,
+) -> int:
     """Run the server in this process until it is stopped, idle or signalled."""
     existing = live_server_info(session)
+    conflict = _mode_conflict(session, app, existing)
+    if conflict is not None:
+        return conflict
     if existing is not None:
         return _reuse_live_server(existing, host, allowed_hosts)
     host = DEFAULT_HOST if host is None else host
     _prepare_session(session)
     state = _state_dir(session)
+    if app:
+        if prefer_port is None:
+            prefer_port = _previous_port(state)
+        AppState(session).init()
+        atomic_write(state / "mode.json", json.dumps({"mode": "app"}))
     for stale in ("server-stopped", "server-info"):
         (state / stale).unlink(missing_ok=True)
+    ports = [prefer_port, port] if prefer_port and prefer_port != port else [port]
     try:
-        httpd = _Server(host, port, session, allowed_hosts)
+        httpd = _bind(host, ports, session, allowed_hosts, app)
     except OSError as exc:
         return _fail(f"cannot listen on {host}:{port}: {exc}")
     shown_host = "127.0.0.1" if host in WILDCARD_HOSTS else (f"[{host}]" if ":" in host else host)
@@ -568,6 +1006,8 @@ def _serve(session: Path, host: Optional[str], port: int, idle_minutes: float, a
         "screen_dir": str(session / "screens"),
         "state_dir": str(state),
     }
+    if app:
+        info["mode"] = "app"
     stop = threading.Event()
     reason = {"value": "signal"}
 
@@ -594,12 +1034,19 @@ def _serve(session: Path, host: Optional[str], port: int, idle_minutes: float, a
 def _cmd_start(args: argparse.Namespace) -> int:
     session = Path(args.session)
     if args.foreground:
-        return _serve(session, args.host, args.port, args.idle_minutes, args.allow_host)
+        return _serve(session, args.host, args.port, args.idle_minutes, args.allow_host, args.app, args.prefer_port)
     existing = live_server_info(session)
+    conflict = _mode_conflict(session, args.app, existing)
+    if conflict is not None:
+        return conflict
     if existing is not None:
         return _reuse_live_server(existing, args.host, args.allow_host)
     _prepare_session(session)
     state = _state_dir(session)
+    prefer_port = _previous_port(state) if args.app else None
+    if args.app:
+        AppState(session).init()
+        atomic_write(state / "mode.json", json.dumps({"mode": "app"}))
     for stale in ("server-stopped", "server-info"):
         (state / stale).unlink(missing_ok=True)
     command = [
@@ -617,6 +1064,10 @@ def _cmd_start(args: argparse.Namespace) -> int:
     ]
     for entry in args.allow_host:
         command += ["--allow-host", entry]
+    if args.app:
+        command.append("--app")
+        if prefer_port:
+            command += ["--prefer-port", str(prefer_port)]
     with open(state / "server.log", "ab") as log:
         child = subprocess.Popen(
             command,
@@ -805,6 +1256,8 @@ def _build_screen(spec: dict, nonce: str, project_dir: Path) -> str:
 
 def _cmd_show(args: argparse.Namespace) -> int:
     session = Path(args.session)
+    if _is_app_session(session):
+        return _fail("session is in app mode")
     state = _state_dir(session)
     if not state.is_dir() or not (session / "screens").is_dir():
         return _fail(f"{session} is not a companion session; run start first")
@@ -830,6 +1283,8 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 def _cmd_wait(args: argparse.Namespace) -> int:
     session = Path(args.session)
+    if _is_app_session(session):
+        return _fail("session is in app mode")
     deadline = time.monotonic() + args.timeout
     current: Optional[dict] = None
     while True:
@@ -861,10 +1316,170 @@ def _cmd_wait(args: argparse.Namespace) -> int:
 
 
 def _cmd_events(args: argparse.Namespace) -> int:
+    if _is_app_session(Path(args.session)):
+        return _fail("session is in app mode")
     events = _read_events(Path(args.session))
     if args.screen:
         events = [e for e in events if e.get("screen") == args.screen]
     _emit({"events": events})
+    return EXIT_OK
+
+
+def _app_session(args: argparse.Namespace) -> Optional[AppState]:
+    """The session's AppState, or None after reporting that the session is not in app mode."""
+    session = Path(args.session)
+    if not _is_app_session(session):
+        _fail("session is not in app mode")
+        return None
+    return AppState(session)
+
+
+def _field_error(exc: Exception, field: str) -> int:
+    print(str(exc), file=sys.stderr)
+    _emit({"error": str(exc), "field": field})
+    return EXIT_USAGE
+
+
+def _read_input(path: str) -> object:
+    """The JSON in ``path``; raises ScreenError when it cannot be read or parsed."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ScreenError(f"cannot read {path}: {exc}") from exc
+    except (ValueError, RecursionError) as exc:
+        raise ScreenError(f"{path} is not valid JSON: {exc}") from exc
+
+
+def _cmd_step(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        step = validate_step(_read_input(args.step))
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except StepError as exc:
+        return _field_error(exc, exc.field)
+    written = app.write_step(step)
+    info = live_server_info(Path(args.session))
+    _emit({**written, "url": info.get("url") if info else None})
+    return EXIT_OK
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    if args.clear:
+        app.clear_status()
+        _emit({"status": None})
+        return EXIT_OK
+    if args.text is None:
+        return _fail("--text is required unless --clear is given")
+    try:
+        status = app.set_status(args.text, args.stage, args.progress, args.interruptible)
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"status": status})
+    return EXIT_OK
+
+
+def _cmd_decide(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        decisions = _read_input(args.decisions)
+        if not isinstance(decisions, list):
+            raise ScreenError("the decisions file must contain a JSON list")
+        app.set_decisions(decisions)
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"decisions": len(decisions)})
+    return EXIT_OK
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    path = Path(args.review_html)
+    try:
+        with open(path, "rb") as fh:
+            fh.read(1)
+    except OSError as exc:
+        return _fail(f"cannot read {path}: {exc}")
+    app.set_review(path)
+    _emit({"review_url": "/_quirk/review"})
+    return EXIT_OK
+
+
+def _cmd_say(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    if (args.text is None) == (args.file is None):
+        return _fail("give exactly one of --text and --file")
+    text = args.text
+    if args.file is not None:
+        try:
+            text = Path(args.file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return _fail(f"cannot read {args.file}: {exc}")
+    try:
+        if not text.strip():
+            raise AppStateError("text", "text must not be empty")
+        seq = app.append_chat(args.sender, text)
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"chat": seq})
+    return EXIT_OK
+
+
+def _cmd_reply(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        if not args.text.strip():
+            raise AppStateError("text", "text must not be empty")
+        app.reply(args.thread_id, args.text, args.resolve)
+    except AppStateError as exc:
+        return _field_error(exc, exc.field)
+    _emit({"thread": args.thread_id})
+    return EXIT_OK
+
+
+def _cmd_next(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    session = Path(args.session)
+    deadline = time.monotonic() + args.timeout
+    while True:
+        if live_server_info(session) is None:
+            _emit({"status": "no-server"})
+            print("no live companion server for this session; run start --app", file=sys.stderr)
+            return EXIT_USAGE
+        events = app.events_after(args.after)
+        if events:
+            app.mark_delivered([e["seq"] for e in events])
+            _emit({"events": events, "cursor": max(e["seq"] for e in events)})
+            return EXIT_OK
+        if time.monotonic() >= deadline:
+            _emit({"status": "timeout", "cursor": args.after})
+            print("timed out waiting for an event; re-run next with the same --after, nothing is lost", file=sys.stderr)
+            return EXIT_NOT_OK
+        time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
+def _cmd_snapshot(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    _emit(app.snapshot())
     return EXIT_OK
 
 
@@ -915,6 +1530,8 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--port", type=_port, default=0)
     start.add_argument("--idle-minutes", type=_positive, default=30.0)
     start.add_argument("--foreground", action="store_true")
+    start.add_argument("--app", action="store_true", help="serve the app-mode shell and API")
+    start.add_argument("--prefer-port", type=_port, default=None, help=argparse.SUPPRESS)
     start.set_defaults(func=_cmd_start)
 
     show = sub.add_parser("show", help="build a screen and make it current")
@@ -932,6 +1549,55 @@ def _build_parser() -> argparse.ArgumentParser:
     events.add_argument("session")
     events.add_argument("--screen")
     events.set_defaults(func=_cmd_events)
+
+    step = sub.add_parser("step", help="app mode: make a step current")
+    step.add_argument("session")
+    step.add_argument("step", metavar="STEP.json")
+    step.set_defaults(func=_cmd_step)
+
+    status = sub.add_parser("status", help="app mode: set or clear the status line")
+    status.add_argument("session")
+    status.add_argument("--text")
+    status.add_argument("--stage")
+    status.add_argument("--progress", metavar="N/M")
+    mark = status.add_mutually_exclusive_group()
+    mark.add_argument("--interruptible", action="store_true")
+    mark.add_argument("--clear", action="store_true")
+    status.set_defaults(func=_cmd_status)
+
+    decide = sub.add_parser("decide", help="app mode: replace the decisions list")
+    decide.add_argument("session")
+    decide.add_argument("decisions", metavar="DECISIONS.json")
+    decide.set_defaults(func=_cmd_decide)
+
+    review = sub.add_parser("review", help="app mode: register the interactive review page")
+    review.add_argument("session")
+    review.add_argument("review_html", metavar="REVIEW_HTML")
+    review.set_defaults(func=_cmd_review)
+
+    say = sub.add_parser("say", help="app mode: add a chat message")
+    say.add_argument("session")
+    say.add_argument("--text")
+    say.add_argument("--file")
+    say.add_argument("--from", dest="sender", choices=("agent", "user"), default="agent")
+    say.set_defaults(func=_cmd_say)
+
+    reply = sub.add_parser("reply", help="app mode: reply inside a comment thread")
+    reply.add_argument("session")
+    reply.add_argument("thread_id", metavar="THREAD_ID")
+    reply.add_argument("--text", required=True)
+    reply.add_argument("--resolve", choices=("addressed", "not-addressed"))
+    reply.set_defaults(func=_cmd_reply)
+
+    nxt = sub.add_parser("next", help="app mode: block until user events arrive")
+    nxt.add_argument("session")
+    nxt.add_argument("--after", type=int, default=0, metavar="SEQ")
+    nxt.add_argument("--timeout", type=float, default=110.0)
+    nxt.set_defaults(func=_cmd_next)
+
+    snapshot = sub.add_parser("snapshot", help="app mode: print the snapshot the tab receives")
+    snapshot.add_argument("session")
+    snapshot.set_defaults(func=_cmd_snapshot)
 
     stop = sub.add_parser("stop", help="stop the session's server")
     stop.add_argument("session")

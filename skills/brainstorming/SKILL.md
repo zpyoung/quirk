@@ -9,6 +9,8 @@ Help turn ideas into fully formed designs and specs through natural collaborativ
 
 Start by understanding the current project context, then ask focused questions — batched, in small groups — to refine the idea. Once you understand what you're building, present the design and get user approval.
 
+A brainstorm is **companion-first**: it runs from kickoff to hand-off inside one browser tab (the visual companion's app mode). The terminal is where the user types the command, where they can still override, and where the skill falls back. See [Start the companion](#start-the-companion).
+
 <HARD-GATE>
 Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
 </HARD-GATE>
@@ -23,16 +25,16 @@ You MUST create a task for each of these items and complete them in order:
 
 1. **Explore project context** — check files, docs, recent commits
 2. **Detect domain + dispatch context research** — classify the work (Visual / API / CLI / Docs / Organization / Data / Integration) and spawn parallel research agents for domain patterns and anti-patterns. See [Research Agents](#research-agents).
-3. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
-4. **Resolve gray areas** — optionally surface *additional* non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present the standard domain-specific areas — plus any adhd additions — via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
-5. **Ask remaining clarifying questions** — batched via `AskUserQuestion` (≤4 per call), for anything not covered by gray-area resolution (purpose, constraints, success criteria)
+3. **Start the companion** — unless the user passed `--terminal`, start the app-mode companion and print its URL; if it can't start, say why once and use the [Terminal flow](#terminal-flow). See [Start the companion](#start-the-companion).
+4. **Resolve gray areas** — optionally surface *additional* non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then put the standard domain-specific areas — plus any adhd additions — on screen (multi-select), then drill into each selected area with batched clarifying questions.
+5. **Ask remaining clarifying questions** — batched on screen (≤4 per step), for anything not covered by gray-area resolution (purpose, constraints, success criteria)
 6. **Essential-coverage check** — diff what is established against the six Essential items (see [essential-coverage.md](references/essential-coverage.md)); ask any gaps before proposing approaches. Only past this gate may the user fast-track what remains.
 7. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
-8. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
-9. **Present design** — in sections scaled to their complexity, get user approval after each section
-10. **Write logic spec** — follow **quirk:writing-specs**: ask once whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
-11. **User reviews written spec** — the rubric's review gate; for an interactive spec, the gate is the page's final (stage-2) sign-off; do not proceed until the user approves
-12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
+8. **Propose 2-3 approaches** — side by side on screen, with trade-offs, citing research findings, your recommendation
+9. **Present design** — one section per screen (short ones may share), get user approval on each before the next
+10. **Write logic spec** — follow **quirk:writing-specs**: ask once, on screen, whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
+11. **User reviews written spec** — on screen, the rubric's review gate; for an interactive spec, the gate is the page's final (stage-2) sign-off; do not proceed until the user approves
+12. **Transition to implementation** — the user picks the execution skill on screen (quirk:subagent-driven-development, recommended; or quirk:executing-plans); invoke it, and it authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
 
@@ -40,8 +42,7 @@ You MUST create a task for each of these items and complete them in order:
 digraph brainstorming {
     "Explore project context" [shape=box];
     "Detect domain +\ndispatch context research" [shape=box];
-    "Visual questions ahead?" [shape=diamond];
-    "Offer Visual Companion\n(own message, no other content)" [shape=box];
+    "Start the companion\n(--terminal or failure → terminal flow)" [shape=box];
     "Resolve gray areas\n(multiSelect → drill-in)" [shape=box];
     "Ask remaining\nclarifying questions" [shape=box];
     "Essential-coverage\ncheck" [shape=diamond];
@@ -54,10 +55,8 @@ digraph brainstorming {
     "Invoke execution skill\n(plans in context)" [shape=doublecircle];
 
     "Explore project context" -> "Detect domain +\ndispatch context research";
-    "Detect domain +\ndispatch context research" -> "Visual questions ahead?";
-    "Visual questions ahead?" -> "Offer Visual Companion\n(own message, no other content)" [label="yes"];
-    "Visual questions ahead?" -> "Resolve gray areas\n(multiSelect → drill-in)" [label="no"];
-    "Offer Visual Companion\n(own message, no other content)" -> "Resolve gray areas\n(multiSelect → drill-in)";
+    "Detect domain +\ndispatch context research" -> "Start the companion\n(--terminal or failure → terminal flow)";
+    "Start the companion\n(--terminal or failure → terminal flow)" -> "Resolve gray areas\n(multiSelect → drill-in)";
     "Resolve gray areas\n(multiSelect → drill-in)" -> "Ask remaining\nclarifying questions";
     "Ask remaining\nclarifying questions" -> "Essential-coverage\ncheck";
     "Essential-coverage\ncheck" -> "Ask remaining\nclarifying questions" [label="gaps remain"];
@@ -74,6 +73,27 @@ digraph brainstorming {
 ```
 
 **The terminal state is invoking an execution skill** — quirk:subagent-driven-development (recommended) or quirk:executing-plans — which authors a tech spec when warranted, then plans in context, then executes. Do NOT invoke frontend-design, mcp-builder, or any other implementation skill, and do NOT write a separate plan document first.
+
+## Start the companion
+
+The companion is on by default; `/quirk:brainstorming --terminal add CSV export` opts out. Read [visual-companion.md](visual-companion.md) first: it holds the script path, the step JSON and the loop.
+
+- **Start it at kickoff**, before the context work in steps 1-2, so the tab shows a status line while you read the project. Run `start SESSION --app` with a session directory under `.quirk/brainstorm/`, print the URL in the terminal, and do not open a browser.
+- **If it can't run** (`--terminal`, no python3, `start` exits 2, or the user's browser can't reach the port), say why once and run the [Terminal flow](#terminal-flow). `--host` and `--allow-host` are for remote setups, only when the user asks.
+
+Inside a companion brainstorm:
+
+- **The companion replaces orca ask and `AskUserQuestion`.** Your whole voice goes to the chat with `say`, and the terminal stays quiet. Typed terminal input wins: echo it with `say --from user` and update the step.
+- **Each wait is a loop.** Send a `step`, run `next` in the background with a long `--timeout`, and act on its events. Set `status` (a plain activity line; `--interruptible` during research) while you work, and refresh `decide` after each answered step.
+- **Question batches:** up to ~4 related questions per step, one submit. The recommended option is labeled and first, never preselected. Every choice has an Other box, text-only questions are fine, and a skip is logged as open and re-asked only if something depends on it. A question may carry its own mockup or diagram.
+- **Research waits.** On a `continue` event ("Continue without the rest"), stop the outstanding researchers, proceed with what returned, and mark their options "(research pending)" in the spec's Industry Insights.
+- **Approaches:** one `approaches` step with 2-3 cards side by side, one recommended, each citing its research.
+- **Design:** one `design-section` step per section (short ones may share, up to 3), answered Looks right or Needs changes plus a comment. A revision sets `changed` to highlight the passages and say what changed. The next section follows only after Looks right.
+- **Spec:** ask the format as a question on screen. Markdown goes in a `spec-review` step, where Sign off is the review gate's approval and per-section comments get a `reply`. Interactive registers the page with `review`, sends a `spec-review` interactive step, and reads exports from `review-export` events.
+- **Edits.** A rail Change or a chat request arrives as an `edit-request`. Send an `edit-card` listing what it invalidates and apply it only on an `edit-decision` confirm, then update `decide`. Never change a decision from chat without that card.
+- **Chat and comments.** Answer chat questions with `say` and leave the current step as it is. Answer each comment with `reply` in its thread, and mark it addressed when a revision covers it.
+- **Show options, don't just describe them.** When options differ in anything the user could see or feel, every option gets a `preview_html`: a mockup for layouts, densities and states, motion for behavior over time, and an interactive element when the difference is in how it feels to use. Use the writing-html-artifacts kit (`q-flow`, `q-schema`, `q-sequence`, `q-chart`, Mermaid `diagram` for state charts) wherever a picture explains the structure better. Text-only options are for choices with nothing to see, such as a policy or a default. [visual-companion.md](visual-companion.md#showing-options) has the mechanics.
+- **Hand-off.** A `hand-off` step picks the execution skill, a `done` step follows, then `stop` the companion.
 
 ## Research Agents
 
@@ -161,8 +181,8 @@ internal optimization strategy; `data-mapping` is the visible field contract, no
 ### Question Altitude
 
 Brainstorming asks about **observable outcomes**. Implementation belongs to the tech spec. Apply this
-to every design question before asking it — not to the skill's own process prompts (the companion
-offer, the adhd offer, the gray-area pick):
+to every design question before asking it — not to the skill's own process prompts (the adhd offer,
+the gray-area pick):
 
 > **Would the answer change what the consumer observes, or only how it is built?**
 
@@ -188,77 +208,31 @@ Before surfacing gray areas, offer to run the `adhd` skill to find **non-obvious
 
 adhd is **purely additive**: it appends extra candidate areas on top of the standard set. It never drops, replaces, reorders, or reworks a catalog area — running it can only ever grow the set of areas the user chooses from.
 
-**Skip this offer entirely on truly trivial work** (for example: a config tweak or an obvious one-line utility). This is narrower than the research-swarm skip rule — do **not** suppress the offer just because you've already researched the domain in-session. Otherwise, present:
+**Skip this offer entirely on truly trivial work** (for example: a config tweak or an obvious one-line utility). This is narrower than the research-swarm skip rule — do **not** suppress the offer just because you've already researched the domain in-session. Otherwise the offer is the first question of the first batch, next to the gray-area pick from Step 1. Its header is "Find gray areas", with two options: "Use the standard set (Recommended)" (catalog areas only, no extra cost) and "Add adhd areas" (5–10× cost, extra non-obvious areas on top of the standard set, which stays intact). The question reads: "Before we pick what to clarify — want me to run adhd to surface non-obvious decision areas specific to this request? (~5–10× cost, parallel divergent ideation)". The [Terminal flow](#terminal-flow) shows the exact shape.
 
-```
-AskUserQuestion:
-  questions:
-    - question: "Before we pick what to clarify — want me to run adhd to surface non-obvious decision areas specific to this request? (~5–10× cost, parallel divergent ideation)"
-      header: "Find gray areas"
-      multiSelect: false
-      options:
-        - label: "Use the standard set (Recommended)"
-          description: "Surface gray areas from the domain catalog only. No extra cost."
-        - label: "Add adhd areas"
-          description: "Spend 5–10× to surface non-obvious ambiguities the catalog misses; they're added on top of the standard set, which stays intact."
-```
-
-- **Recommended = the cheap path**, so the default is a one-keystroke "no."
+- **Recommended = the cheap path**, so the default is a one-click "no."
 - If the user picks **"Add adhd areas"**: invoke the `adhd` skill with a **discovery-framed** delegation — the decision point you hand adhd is *"what latent ambiguous decisions are in this request?"*, so its returned "options" are candidate gray areas (not solutions). adhd's frames (failure pre-mortem, stakeholder rotation, expert blind spots) are blind-spot finders well-suited to this.
-- **Dedupe, then append.** Drop any returned area that restates a catalog area already in the standard set (same decision under a different name); keep the catalog wording for those. Carry the remaining 2–4 forward to Step 1 as a *second* question, prefixing each label with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
-- If the user picks **"Use the standard set (Recommended)"**: proceed straight to Step 1 with catalog areas only — identical to the no-adhd flow.
+- **Dedupe, then append.** Drop any returned area that restates a catalog area already in the standard set (same decision under a different name); keep the catalog wording for those. Carry the remaining 2–4 forward as their own question (in the next batch on screen), prefixing each label with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
+- If the user picks **"Use the standard set (Recommended)"**: proceed with catalog areas only — identical to the no-adhd flow.
 
-### Step 1 — Surface gray areas (multiSelect)
+### Step 1 — Surface gray areas (multi-select)
 
-Use `AskUserQuestion` with `multiSelect: true`. Each option is a domain-specific area with a description that explains *why* it's ambiguous:
-
-```
-AskUserQuestion:
-  questions:
-    - question: "Which of these areas should we clarify before designing?"
-      header: "Gray areas"
-      multiSelect: true
-      options:
-        - label: "[Area name]"
-          description: "[Why this area matters and what's ambiguous about it]"
-        # ... 3–4 standard-set areas total (any adhd areas go in their own question, below)
-```
-
-**When adhd ran**, send both questions in the **same `AskUserQuestion` call** — the standard question above, unchanged, plus a second question carrying the adhd areas. `AskUserQuestion` caps options at 4 per question, which is why the adhd areas need their own question rather than a longer list:
-
-```
-AskUserQuestion:
-  questions:
-    - question: "Which of these areas should we clarify before designing?"
-      header: "Gray areas"
-      multiSelect: true
-      options:
-        # the 3–4 standard-set areas, verbatim
-    - question: "adhd also surfaced these less-obvious areas — clarify any of them too?"
-      header: "adhd areas"
-      multiSelect: true
-      options:
-        - label: "adhd: [area name]"
-          description: "[Why this area matters and what's ambiguous about it]"
-        # ... 2–4 total
-```
-
-Selecting nothing in the adhd question is a valid answer — the standard areas still proceed to drill-in.
+Send a `multi` question. Each option is a domain-specific area with a description that explains *why* it's ambiguous: 3–4 standard-set areas, verbatim. The adhd areas, when adhd ran, go in their own question ("adhd also surfaced these less-obvious areas — clarify any of them too?", header "adhd areas", arriving in the next batch on screen), never appended to the standard list, so the standard question is unchanged. A question holds at most 4 options, which is the other reason they need their own. Selecting nothing in the adhd question is a valid answer — the standard areas still proceed to drill-in.
 
 Two cases need a different shape:
 
-- **Exactly one adhd area survives.** The tool requires at least 2 options, but do *not* pad a multiSelect list with "None of these" — in a multiSelect the user could check it *and* the area, which is contradictory. Make this question `multiSelect: false` with two mutually exclusive options: `adhd: [area name]` and "Skip it".
-- **No adhd area survives.** Send the standard question alone and say in the same turn that adhd found nothing beyond the catalog.
+- **Exactly one adhd area survives.** Do *not* pad a multi-select list with "None of these" — the user could check it *and* the area, which is contradictory. Make it a `single` question with two mutually exclusive options: `adhd: [area name]` and "Skip it".
+- **No adhd area survives.** Send the standard question alone and say in the chat that adhd found nothing beyond the catalog.
 
 Drill-in (Step 2) treats selections from both questions identically — one area at a time, in the order they were presented.
 
 ### Step 2 — Drill-in per selected area (3–7 questions, batched)
 
-For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits) — screened candidate questions that belong to the area first, then your own. Use `AskUserQuestion` with up to 4 questions per call (2 calls if an area needs 5–7).
+For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits) — screened candidate questions that belong to the area first, then your own. Send up to 4 questions per `questions` step (2 steps if an area needs 5–7).
 
 Per-question rules:
-- `multiSelect: false` (single choice per question)
-- 2–4 concrete options, with the **recommended option first** and `(Recommended)` appended to its label
+- `single` choice per question
+- 2–4 concrete options, with the **recommended option first** and `(Recommended)` appended to its label (on screen, set `recommended` and the shell adds the tag)
 - `description` ≥ 1 sentence explaining implications and trade-offs
 - `header` is a short category label (e.g., "Layout", "Auth", "Errors")
 - **Order by forking power**: ask first whatever answer eliminates the most downstream options, then progress foundational → edge-case
@@ -273,7 +247,7 @@ Example — Visual / "Layout style" (5 questions):
 
 ### Checkpoint Rules (apply to all gray-area questions)
 
-- **No delegation options**: never offer "You decide", "Whatever you think". If the user says "you decide", pick the recommended option, explain why, and confirm via `AskUserQuestion`.
+- **No delegation options**: never offer "You decide", "Whatever you think". If the user says "you decide", pick the recommended option, explain why, and confirm on screen.
 - **Concrete labels**: name options by what they ARE ("Card layout", "JSON responses") — not "Option A".
 - **Recommended option first**, with `(Recommended)` appended.
 - **Delegation vs election**: the skill **may never offer to decide** — no "You decide" option, ever. But the user may always **elect to accept stated defaults** ("go with your recommendations"). That is their call, not an option you offered; log each resulting decision as `assumed — fast-tracked`. **Scope decides which rule fires:** "you decide" on *one* question takes the confirm path above; "go with your recommendations" for *everything remaining* is the fast-track, legal only once the six are covered. See [essential-coverage.md](references/essential-coverage.md).
@@ -293,17 +267,17 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Before asking detailed questions, assess scope: if the request describes multiple independent subsystems (e.g., "build a platform with chat, file storage, billing, and analytics"), flag this immediately. Don't spend questions refining details of a project that needs to be decomposed first.
 - If the project is too large for a single spec, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own spec → plan → implementation cycle.
 - Classify the domain (Visual / API / CLI / Docs / Organization / Data / Integration). Dispatch the **Phase A research swarm** in parallel (see [Research Agents](#research-agents)) so findings are ready by the time you ask clarifying questions. Skip the swarm only if the work is truly trivial or you've already researched this domain in-session.
-- After research returns and the visual companion has been offered (if relevant), run the **gray-areas resolution** (see [Gray Areas](#gray-areas)) to batch-resolve domain ambiguity before the remaining questions.
-- Then ask any remaining clarifying questions — including screened candidates that belong to no selected area — batched via `AskUserQuestion` (≤4 per call) and ordered most-forking-first, as in the drill-in
+- After research returns and the companion has started, run the **gray-areas resolution** (see [Gray Areas](#gray-areas)) to batch-resolve domain ambiguity before the remaining questions.
+- Then ask any remaining clarifying questions — including screened candidates that belong to no selected area — batched on screen (≤4 per step) and ordered most-forking-first, as in the drill-in
 - Prefer multiple choice questions when possible, but open-ended is fine too
-- Keep batches small — four per call is the tool's cap; split a topic needing more into a second call
+- Keep batches small — about four per step; split a topic needing more into a second step
 - Focus on understanding: purpose, constraints, success criteria
 
 **Exploring approaches:**
 
 - Before proposing approaches, dispatch the **Phase B option-validation research swarm** (one `web-research-agent` per candidate option, in parallel) so each option's pros/cons cite real-world findings.
 - Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
+- Show them as one `approaches` step with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
 - Lead with your recommended option and explain why
 - For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the logic spec
 
@@ -311,7 +285,7 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 
 - Once you believe you understand what you're building, present the design
 - Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
-- Ask after each section whether it looks right so far
+- Ask after each section whether it looks right so far (Looks right or Needs changes, on screen)
 - Cover: conceptual model, data flow (prose), key decisions & rationale, behavior & scenarios, scope & non-goals, glossary. **quirk:writing-specs** owns the line between what belongs here and what belongs in the tech spec authored later at execution
 - Be ready to go back and clarify if something doesn't make sense
 
@@ -340,12 +314,12 @@ Do not proceed past the rubric's user review gate until the user approves.
 
 **Implementation:**
 
-- Invoke an execution skill — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It authors a tech spec when warranted, then plans in context, then executes.
+- Send a `hand-off` step so the user picks the execution skill, then invoke it — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It authors a tech spec when warranted, then plans in context, then executes.
 - Do NOT invoke any other implementation skill, and do NOT write a separate plan document first.
 
 ## Key Principles
 
-- **Batch questions, don't drip them** — `AskUserQuestion`, up to 4 per call, one *area* at a time. A batch lets the user see how the questions relate to each other; dripping them serially hides it.
+- **Batch questions, don't drip them** — up to 4 per screen, one *area* at a time. A batch lets the user see how the questions relate to each other; dripping them serially hides it.
 - **Multiple choice preferred** - Easier to answer than open-ended when possible
 - **Research in parallel, never sequentially** - Same-phase agents ship in a single message
 - **Resolve gray areas before open dialogue** - Multi-select up front, drill into each selected area, then batch the remaining open questions
@@ -354,21 +328,44 @@ Do not proceed past the rubric's user review gate until the user approves.
 - **Incremental validation** - Present design, get approval before moving on
 - **Be flexible** - Go back and clarify when something doesn't make sense
 
-## Visual Companion
+## Terminal flow
 
-A browser-based companion for showing mockups, diagrams, and visual options during brainstorming. Available as a tool — not a mode. Accepting the companion means it's available for questions that benefit from visual treatment; it does NOT mean every question goes through the browser.
+The shape used by `--terminal` and the fallback. Everything above applies, except that questions go through `orca ask` when it is available (see the `orca-ask` skill) and otherwise `AskUserQuestion`, up to 4 per call, one area at a time. There is no companion, so approaches, design sections and the spec review are conversational and the execution pick is a question. The labels are the same ones used on screen.
 
-**Offering the companion:** When you anticipate that upcoming questions will involve visual content (mockups, layouts, diagrams), offer it once for consent:
-> "Some of what we're working on might be easier to explain if I can show it to you in a web browser. I can put together mockups, diagrams, comparisons, and other visuals as we go. This feature is still new and runs a small local Python server. Want to try it? (Requires opening a local URL)"
+The adhd offer, its own call (skipped on truly trivial work):
 
-**This offer MUST be its own message.** Do not combine it with clarifying questions, context summaries, or any other content. The message should contain ONLY the offer above and nothing else. Wait for the user's response before continuing. If they decline, proceed with text-only brainstorming.
+```
+AskUserQuestion:
+  questions:
+    - question: "Before we pick what to clarify — want me to run adhd to surface non-obvious decision areas specific to this request? (~5–10× cost, parallel divergent ideation)"
+      header: "Find gray areas"
+      multiSelect: false
+      options:
+        - label: "Use the standard set (Recommended)"
+          description: "Surface gray areas from the domain catalog only. No extra cost."
+        - label: "Add adhd areas"
+          description: "Spend 5–10× to surface non-obvious ambiguities the catalog misses; they're added on top of the standard set, which stays intact."
+```
 
-**Per-question decision:** Even after the user accepts, decide FOR EACH QUESTION whether to use the browser or the terminal. The test: **would the user understand this better by seeing it than reading it?**
+The gray-area pick. When adhd ran, send both questions in the **same call**, because a question holds at most 4 options:
 
-- **Use the browser** for content that IS visual — mockups, wireframes, layout comparisons, architecture diagrams, side-by-side visual designs
-- **Use the terminal** for content that is text — requirements questions, conceptual choices, tradeoff lists, A/B/C/D text options, scope decisions
+```
+AskUserQuestion:
+  questions:
+    - question: "Which of these areas should we clarify before designing?"
+      header: "Gray areas"
+      multiSelect: true
+      options:
+        - label: "[Area name]"
+          description: "[Why this area matters and what's ambiguous about it]"
+        # ... 3–4 standard-set areas total
+    - question: "adhd also surfaced these less-obvious areas — clarify any of them too?"
+      header: "adhd areas"
+      multiSelect: true
+      options:
+        - label: "adhd: [area name]"
+          description: "[Why this area matters and what's ambiguous about it]"
+        # ... 2–4 total
+```
 
-A question about a UI topic is not automatically a visual question. "What does personality mean in this context?" is a conceptual question — use the terminal. "Which wizard layout works better?" is a visual question — use the browser.
-
-If they agree to the companion, read the detailed guide before proceeding:
-`skills/brainstorming/visual-companion.md`
+For exactly one surviving adhd area, make that question `multiSelect: false` with `adhd: [area name]` and "Skip it". Drill-in questions use `multiSelect: false`, 2–4 options, and the recommended option first.
