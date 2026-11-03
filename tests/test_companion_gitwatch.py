@@ -468,3 +468,98 @@ def test_watcher_survives_exception_in_poll(fx):
     finally:
         w.stop()
         w.join(1.0)
+
+
+def test_watcher_retries_final_poll_when_it_raises(fx):
+    fx.fork("T1", commit=("a.txt", "one\n"))
+    calls = {"n": 0}
+    saved: list[dict] = []
+
+    def load():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient git error")
+        return fx.run, [{"n": 1, "kind": "run-end", "outcome": "clean"}], None
+
+    w = Watcher(load, saved.append, interval=0.05)
+    w.start()
+    try:
+        assert wait_for(lambda: len(saved) == 1)
+    finally:
+        w.stop()
+        w.join(1.0)
+    assert not w.is_alive()
+
+
+def test_watcher_retries_final_poll_when_observe_raises(fx, monkeypatch):
+    fx.fork("T1", commit=("a.txt", "one\n"))
+    real = gitwatch.observe
+    calls = {"n": 0}
+    saved: list[dict] = []
+
+    def flaky(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient git error")
+        return real(*args, **kw)
+
+    monkeypatch.setattr(gitwatch, "observe", flaky)
+    reports = [{"n": 1, "kind": "run-end", "outcome": "clean"}]
+    w = Watcher(lambda: (fx.run, reports, None), saved.append, interval=0.05)
+    w.start()
+    try:
+        assert wait_for(lambda: len(saved) == 1)
+    finally:
+        w.stop()
+        w.join(1.0)
+    assert not w.is_alive()
+
+
+def test_watcher_retries_failed_save_until_it_succeeds(fx):
+    fx.fork("T1", commit=("a.txt", "one\n"))
+    state = {"prev": None, "attempts": 0}
+    saved: list[dict] = []
+
+    def load():
+        return fx.run, [], state["prev"]
+
+    def save(facts):
+        state["attempts"] += 1
+        if state["attempts"] == 1:
+            raise OSError("disk full")
+        saved.append(facts)
+        state["prev"] = facts
+
+    w = Watcher(load, save, interval=0.05)
+    w.start()
+    try:
+        assert wait_for(lambda: len(saved) == 1)
+        assert state["attempts"] == 2
+    finally:
+        w.stop()
+        w.join(1.0)
+    assert not w.is_alive()
+
+
+def test_watcher_failed_final_save_is_retried_not_finalized(fx):
+    fx.fork("T1", commit=("a.txt", "one\n"))
+    state = {"prev": None, "attempts": 0}
+    saved: list[dict] = []
+    reports = [{"n": 1, "kind": "run-end", "outcome": "clean"}]
+
+    def save(facts):
+        state["attempts"] += 1
+        if state["attempts"] == 1:
+            raise OSError("disk full")
+        saved.append(facts)
+        state["prev"] = facts
+
+    w = Watcher(lambda: (fx.run, reports, state["prev"]), save, interval=0.05)
+    w.start()
+    try:
+        assert wait_for(lambda: len(saved) == 1)
+        time.sleep(0.3)
+        assert len(saved) == 1 and state["attempts"] == 2
+    finally:
+        w.stop()
+        w.join(1.0)

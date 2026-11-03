@@ -365,7 +365,8 @@ class Watcher(threading.Thread):
 
     ``load()`` returns ``(run, reports, previous facts)``. The watcher polls every ``interval``
     while the run has no run-end, makes one final poll after it, then idles and keeps checking
-    ``load()`` so a new run restarts polling. A failing poll is retried next interval.
+    ``load()`` so a new run restarts polling. A failing poll or save is retried next interval,
+    and the run is finalized only once its final poll's facts were saved.
     """
 
     def __init__(
@@ -399,15 +400,18 @@ class Watcher(threading.Thread):
             self._finalized = None
             return
         run_id = str(run.get("run_id"))
-        if any(r.get("kind") == "run-end" for r in reports):
+        ended = any(r.get("kind") == "run-end" for r in reports)
+        if ended:
             if self._finalized == run_id:
                 return
-            self._finalized = run_id
         else:
             self._finalized = None
         if previous is None and self._last and self._last[0] == run_id:
             previous = self._last[1]
         facts = observe(run, reports, previous, time.time())
-        self._last = (run_id, facts)
         if previous is None or facts["changed_at"] != previous.get("changed_at"):
             self._save(facts)
+        # only after a successful save, so a failed poll or save is retried next interval
+        self._last = (run_id, facts)
+        if ended:
+            self._finalized = run_id
