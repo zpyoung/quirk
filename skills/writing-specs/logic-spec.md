@@ -25,6 +25,7 @@ the user read and signed off on. It is never silently overridden downstream.
   - **Glossary** — terms and definitions a reader needs to follow the spec
   - **Status** — one line recording the spec's current state (e.g. "Draft", "Approved", "Tech spec: requested")
   - **Amendments** — under a `## Status & amendments` heading, a dated `**Amendments:**` log entry for any change to a locked decision made after approval
+- When the brainstorm signed off a UX mock, also include a **Screens** section. It links `mock/mock.html` and `mock/screens.md`, lists each screen and each of its states, and gives one acceptance item per screen and state (for example "Saved exports, empty state: matches mock"). Every gap in `screens.md` (a mocked element with no repo component) becomes an open question. When the review was skipped, record "UX review: skipped" in Decisions Locked instead and write no Screens section.
 - Commit the logic spec to git
 
 ## Logic-spec self-review
@@ -36,6 +37,7 @@ After writing the logic spec, look at it with fresh eyes:
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
 5. **Example check:** Does every example agree with its Then, and is each open `[ASK]` a question the design didn't already answer? See [scenario-examples.md](scenario-examples.md#self-review-check).
+6. **Screens check:** When a mock was signed off, does the Screens section cover every screen and state in `mock/screens.md`, each with an acceptance item, and is every gap an open question?
 
 Fix any issues inline. No need to re-review — just fix and move on.
 
