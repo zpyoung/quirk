@@ -1,4 +1,4 @@
-export const STAGES = ['context', 'gray-areas', 'questions', 'approaches', 'design', 'spec', 'hand-off'] as const
+export const STAGES = ['context', 'gray-areas', 'questions', 'approaches', 'ux-review', 'design', 'spec', 'hand-off'] as const
 export type StageId = (typeof STAGES)[number]
 
 export const STAGE_LABELS: Record<StageId, string> = {
@@ -6,6 +6,7 @@ export const STAGE_LABELS: Record<StageId, string> = {
   'gray-areas': 'Gray areas',
   questions: 'Questions',
   approaches: 'Approaches',
+  'ux-review': 'UX review',
   design: 'Design',
   spec: 'Spec',
   'hand-off': 'Hand-off',
@@ -91,6 +92,7 @@ export type Step = StepCommon &
   (
     | { kind: 'questions'; questions: Question[] }
     | { kind: 'approaches'; approaches: Approach[] }
+    | { kind: 'mock-review'; version: number }
     | { kind: 'design-section'; index: number; total: number; sections: DesignSectionItem[] }
     | { kind: 'spec-review'; format: 'markdown'; spec_path: string; sections: SpecSection[] }
     | { kind: 'spec-review'; format: 'interactive' }

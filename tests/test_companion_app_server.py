@@ -91,6 +91,7 @@ HAND_OFF = {
         {"id": "stop", "label": "Stop", "description": "stop here", "recommended": False},
     ],
 }
+MOCK_REVIEW = {"v": 1, "kind": "mock-review", "stage": "ux-review", "title": "UX review", "version": 1}
 DONE = {"v": 1, "kind": "done", "stage": "hand-off", "title": "Done", "message_md": "bye"}
 DECISION = {"id": "storage", "stage": "questions", "area": "Data", "label": "Storage", "value": "SQL", "status": "confirmed"}
 
@@ -711,6 +712,17 @@ def test_submit_with_no_current_step_is_409(app: App) -> None:
         (DONE, {}),
         (EDIT_CARD, {"decision": "confirm"}),
         (SPEC_INTERACTIVE, {"verdict": "sign-off"}),
+        (MOCK_REVIEW, {}),
+        (MOCK_REVIEW, {"verdict": "maybe"}),
+        (MOCK_REVIEW, {"verdict": "sign-off"}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "pick": "x"}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "visited": ["Bad Id"]}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "visited": ["a" * 41]}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "visited": ["a"] * 201}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "visited": "home"}),
+        (MOCK_REVIEW, {"verdict": "needs-changes", "marks": [5]}),
+        (MOCK_REVIEW, {"verdict": "needs-changes", "marks": ["ok"] * 201}),
+        (MOCK_REVIEW, {"verdict": "needs-changes", "comment": 5}),
     ],
 )
 def test_submit_payloads_are_validated_against_the_step(app: App, spec: dict, payload: dict) -> None:
@@ -730,6 +742,10 @@ def test_submit_payloads_are_validated_against_the_step(app: App, spec: dict, pa
         (SPEC_MD, {"verdict": "sign-off"}),
         (SPEC_MD, {"verdict": "changes"}),
         (HAND_OFF, {"pick": "plan"}),
+        (MOCK_REVIEW, {"verdict": "looks-right"}),
+        (MOCK_REVIEW, {"verdict": "needs-changes", "comment": "fix it", "visited": ["home", "cart"], "marks": ["cart"]}),
+        (MOCK_REVIEW, {"verdict": "skip"}),
+        (MOCK_REVIEW, {"verdict": "looks-right", "visited": ["a"] * 200, "marks": []}),
     ],
 )
 def test_valid_submits_for_each_kind_are_accepted(app: App, spec: dict, payload: dict) -> None:

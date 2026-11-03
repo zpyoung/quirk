@@ -39,7 +39,7 @@ def decision(i: int = 1, **over) -> dict:
 
 
 def test_constants():
-    assert STAGES == ("context", "gray-areas", "questions", "approaches", "design", "spec", "hand-off")
+    assert STAGES == ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
     assert EVENT_TYPES == (
         "submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export",
     )

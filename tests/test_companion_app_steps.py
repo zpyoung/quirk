@@ -31,8 +31,8 @@ def load(path: Path) -> object:
 
 
 def test_contract_constants():
-    assert STEP_KINDS == ("questions", "approaches", "design-section", "spec-review", "edit-card", "hand-off", "done")
-    assert STAGES == ("context", "gray-areas", "questions", "approaches", "design", "spec", "hand-off")
+    assert STEP_KINDS == ("questions", "approaches", "mock-review", "design-section", "spec-review", "edit-card", "hand-off", "done")
+    assert STAGES == ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
     assert issubclass(StepError, ValueError)
     assert steps.StepError("msg", field="a.b").field == "a.b"
 

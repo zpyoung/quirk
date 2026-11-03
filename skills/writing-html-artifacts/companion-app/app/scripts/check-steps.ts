@@ -121,6 +121,11 @@ function checkKind(name: string, step: FixtureStep, html: string) {
     case 'spec-review':
       has(/Sign off|\/_quirk\/review\?t=tok/, 'Sign off button or review iframe')
       break
+    case 'mock-review':
+      has('<iframe class="mock-frame" title="Mock review" src="/_quirk/mock/1?t=tok"', 'mock iframe with the versioned src')
+      if (/<iframe[^>]*\ssandbox/.test(html)) fail(name, 'the mock iframe must not carry a sandbox attribute')
+      if (html.includes('Looks right')) fail(name, 'the shell must not render a verdict bar for a mock review')
+      break
     case 'edit-card':
       has('Confirm and redo', 'Confirm and redo button')
       has('Cancel', 'Cancel button')

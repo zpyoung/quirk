@@ -89,10 +89,13 @@ REVIEW_KINDS = {
 }
 REVIEW_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
 VERDICTS = {
+    "mock-review": ("looks-right", "needs-changes", "skip"),
     "design-section": ("looks-right", "needs-changes"),
     "spec-review": ("sign-off", "changes"),
 }
 ANSWER_KEYS = {"selected", "other", "text", "skipped"}
+MOCK_ID_LIST_MAX = 200
+MOCK_ID = re.compile(r"[a-z0-9-]{1,40}")
 
 WAITING_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -844,12 +847,16 @@ def _submit_problem(step: dict, payload: dict) -> Optional[str]:
     if kind == "spec-review" and step.get("format") == "interactive":
         return "an interactive spec review is exported with review-export, not submit"
     field = {"questions": "answers", "approaches": "pick", "hand-off": "pick"}.get(kind, "verdict")
-    extra = set(payload) - {field, "comment"}
+    extra = set(payload) - {field, "comment"} - ({"visited", "marks"} if kind == "mock-review" else set())
     if extra:
         return f"unknown payload field(s): {', '.join(sorted(extra))}"
     problem = _comment_problem(payload)
     if problem:
         return problem
+    if kind == "mock-review":
+        for key in ("visited", "marks"):
+            if key in payload and not _mock_ids_ok(payload[key]):
+                return f"{key} must be a list of at most {MOCK_ID_LIST_MAX} screen ids matching [a-z0-9-]{{1,40}}"
     value = payload.get(field)
     if kind == "questions":
         return _answers_problem(step, value)
@@ -862,6 +869,14 @@ def _submit_problem(step: dict, payload: dict) -> Optional[str]:
     if not isinstance(value, str) or value not in allowed:
         return f"{field} must be one of {', '.join(map(str, allowed))}"
     return None
+
+
+def _mock_ids_ok(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) <= MOCK_ID_LIST_MAX
+        and all(isinstance(v, str) and MOCK_ID.fullmatch(v) for v in value)
+    )
 
 
 def _answers_problem(step: dict, answers: object) -> Optional[str]:
