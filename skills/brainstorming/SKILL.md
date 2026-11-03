@@ -93,7 +93,7 @@ Inside a companion brainstorm:
 - **Edits.** A rail Change or a chat request arrives as an `edit-request`. Send an `edit-card` listing what it invalidates and apply it only on an `edit-decision` confirm, then update `decide`. Never change a decision from chat without that card.
 - **Chat and comments.** Answer chat questions with `say` and leave the current step as it is. Answer each comment with `reply` in its thread, and mark it addressed when a revision covers it.
 - **Show options, don't just describe them.** When options differ in anything the user could see or feel, every option gets a `preview_html`: a mockup for layouts, densities and states, motion for behavior over time, and an interactive element when the difference is in how it feels to use. Use the writing-html-artifacts kit (`q-flow`, `q-schema`, `q-sequence`, `q-chart`, Mermaid `diagram` for state charts) wherever a picture explains the structure better. Text-only options are for choices with nothing to see, such as a policy or a default. [visual-companion.md](visual-companion.md#showing-options) has the mechanics.
-- **Hand-off.** A `hand-off` step picks the execution skill, a `done` step follows, then `stop` the companion.
+- **Hand-off.** A `hand-off` step picks the execution skill, then a `done` step follows. If the pick is quirk:subagent-driven-development, the `done` message is "Starting SDD in this tab", do not run `stop`, and hand SDD the session path. Any other pick keeps done, then `stop` the companion.
 
 ## Research Agents
 
@@ -314,7 +314,7 @@ Do not proceed past the rubric's user review gate until the user approves.
 
 **Implementation:**
 
-- Send a `hand-off` step so the user picks the execution skill, then invoke it — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It authors a tech spec when warranted, then plans in context, then executes.
+- Send a `hand-off` step so the user picks the execution skill, then invoke it — quirk:subagent-driven-development (recommended) or quirk:executing-plans. For SDD, send `done` ("Starting SDD in this tab"), skip `stop` and pass the session path; for executing-plans, `done` then `stop`. It authors a tech spec when warranted, then plans in context, then executes.
 - Do NOT invoke any other implementation skill, and do NOT write a separate plan document first.
 
 ## Key Principles

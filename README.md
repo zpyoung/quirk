@@ -77,7 +77,7 @@ The `writing-html-artifacts` skill builds offline, single-file HTML pages from t
 vendored libraries, and runs the visual companion: a small local Python server
 that shows screens in a browser and sends the user's input back to the agent. Brainstorming runs
 inside the companion's app mode (batched questions, chat, comments and spec review in one tab);
-exploring-ideas uses its screen mode. Markdown stays the canonical source for specs; the companion needs
+exploring-ideas uses its screen mode, and subagent-driven-development runs show live in the same tab. Markdown stays the canonical source for specs; the companion needs
 Python 3 only.
 
 ## Development
