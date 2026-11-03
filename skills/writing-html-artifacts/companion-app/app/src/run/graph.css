@@ -1,3 +1,343 @@
 .run-view .run-graph-root {
   position: relative;
 }
+
+.run-view .run-graph-tools {
+  position: absolute;
+  top: var(--q-space-2);
+  right: var(--q-space-2);
+  z-index: 2;
+  display: flex;
+  gap: var(--q-space-1);
+}
+
+.run-view .run-graph-tools button {
+  min-width: 2rem;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-view .run-graph-tools button:hover {
+  border-color: var(--q-color-accent);
+}
+
+.run-view .run-graph {
+  display: block;
+  width: 100%;
+  height: clamp(320px, 62vh, 680px);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: filter 0.4s ease;
+}
+
+.run-view .run-graph[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.run-view .run-graph[data-stale='true'] {
+  filter: grayscale(1) opacity(0.6);
+}
+
+.run-view .run-graph-card {
+  position: absolute;
+  z-index: 3;
+  width: 22rem;
+  max-width: calc(100% - var(--q-space-4));
+  animation: run-card-in 0.25s ease-out;
+}
+
+/* status colours: one custom property per status, read by the card, stripe and glyph */
+.run-view .run-node {
+  --run-status: var(--q-color-text-muted);
+  --run-status-text: var(--q-color-bg);
+  outline: none;
+  cursor: pointer;
+  font-family: var(--q-font-sans, sans-serif);
+  animation: run-node-in 0.35s ease-out both;
+}
+.run-view .run-node[data-status='running'] {
+  --run-status: var(--q-color-accent);
+  --run-status-text: var(--q-color-accent-text);
+}
+.run-view .run-node[data-status='needs-you'] {
+  --run-status: var(--q-color-warn);
+}
+.run-view .run-node[data-status='retrying'] {
+  --run-status: var(--q-color-chart-5, var(--q-color-warn));
+}
+.run-view .run-node[data-status='passed'] {
+  --run-status: var(--q-color-good);
+}
+.run-view .run-node[data-status='failed'] {
+  --run-status: var(--q-color-critical);
+}
+.run-view .run-node[data-status='stopped'] {
+  --run-status: color-mix(in srgb, var(--q-color-critical) 55%, var(--q-color-text-muted));
+}
+.run-view .run-node[data-status='missing'] {
+  --run-status: var(--q-color-warn);
+}
+
+.run-view .run-node[data-ready='false'] .run-node-card,
+.run-view .run-node[data-ready='false'] text,
+.run-view .run-node[data-ready='false'] .run-node-chip {
+  opacity: 0.55;
+}
+
+.run-view .run-node-card {
+  fill: var(--q-color-surface);
+  stroke: var(--run-status);
+  stroke-width: 1.5;
+  transition: stroke-width 0.15s ease, filter 0.15s ease;
+}
+.run-view .run-node[data-status='queued'] .run-node-card,
+.run-view .run-node[data-status='skipped'] .run-node-card {
+  stroke: var(--q-color-border);
+}
+.run-view .run-node[data-status='skipped'] .run-node-card {
+  stroke-dasharray: 4 3;
+}
+.run-view .run-node:hover .run-node-card {
+  stroke-width: 2.5;
+}
+.run-view .run-node:focus-visible .run-node-card {
+  stroke: var(--q-color-focus);
+  stroke-width: 3;
+}
+.run-view .run-node[data-selected='true'] .run-node-card {
+  stroke-width: 3;
+  filter: drop-shadow(0 2px 6px color-mix(in srgb, var(--run-status) 55%, transparent));
+}
+
+.run-view .run-node-stripe {
+  fill: var(--run-status);
+}
+.run-view .run-node[data-status='queued'] .run-node-stripe,
+.run-view .run-node[data-status='skipped'] .run-node-stripe {
+  fill: var(--q-color-border);
+}
+
+.run-view .run-node-title {
+  fill: var(--q-color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.run-view .run-node-meta {
+  fill: var(--q-color-text-muted);
+  font-family: var(--q-font-mono, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.run-view .run-node-reason {
+  fill: var(--q-color-critical);
+  font-size: 10.5px;
+}
+
+.run-view .run-node-dot {
+  fill: var(--run-status);
+}
+.run-view .run-node-glyph {
+  fill: var(--run-status-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+.run-view .run-node[data-status='retrying'] .run-node-glyph,
+.run-view .run-node[data-status='needs-you'] .run-node-glyph,
+.run-view .run-node[data-status='passed'] .run-node-glyph,
+.run-view .run-node[data-status='failed'] .run-node-glyph,
+.run-view .run-node[data-status='stopped'] .run-node-glyph,
+.run-view .run-node[data-status='missing'] .run-node-glyph {
+  fill: var(--q-color-bg);
+}
+.run-view .run-node[data-status='retrying'] .run-node-glyph {
+  fill: var(--run-status);
+}
+.run-view .run-node[data-status='queued'] .run-node-glyph,
+.run-view .run-node[data-status='skipped'] .run-node-glyph {
+  fill: var(--q-color-bg);
+}
+
+.run-view .run-node-ring {
+  fill: none;
+  stroke: var(--run-status);
+  stroke-width: 2.5;
+  stroke-dasharray: 28 12;
+  stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: run-spin 1s linear infinite;
+}
+
+.run-view .run-node-pulse {
+  fill: none;
+  stroke: var(--run-status);
+  stroke-width: 3;
+  animation: run-pulse 1.6s ease-in-out infinite;
+}
+.run-view .run-node-flash {
+  fill: var(--run-status);
+  stroke: none;
+  pointer-events: none;
+  opacity: 0;
+  animation: run-flash 0.9s ease-out;
+}
+
+.run-view .run-node-shimmer {
+  pointer-events: none;
+  overflow: hidden;
+  color: var(--run-status);
+}
+.run-view .run-node-sweep {
+  opacity: 0;
+  animation: run-sweep 2.2s ease-in-out infinite;
+}
+
+.run-view .run-node-chip rect {
+  fill: color-mix(in srgb, var(--q-color-text-muted) 18%, var(--q-color-surface));
+  stroke: var(--q-color-border);
+  stroke-width: 1;
+}
+.run-view .run-node-chip text {
+  fill: var(--q-color-text);
+  font-size: 10px;
+}
+.run-view .run-node-chip[data-kind='try'] rect {
+  fill: color-mix(in srgb, var(--q-color-warn) 30%, var(--q-color-surface));
+  stroke: var(--q-color-warn);
+}
+.run-view .run-node-chip[data-kind='pending'] rect {
+  fill: color-mix(in srgb, var(--q-color-accent) 25%, var(--q-color-surface));
+  stroke: var(--q-color-accent);
+}
+
+.run-view .run-node-mark circle {
+  fill: var(--q-color-warn);
+  stroke: var(--q-color-bg);
+  stroke-width: 1.5;
+}
+.run-view .run-node-mark text {
+  fill: var(--q-color-bg);
+  font-size: 12px;
+  font-weight: 800;
+}
+.run-view .run-node-mark {
+  cursor: help;
+  transform-box: fill-box;
+}
+
+.run-view .run-tip rect {
+  fill: var(--q-color-text);
+  opacity: 0.95;
+}
+.run-view .run-tip text {
+  fill: var(--q-color-bg);
+  font-size: 11px;
+}
+
+/* edges */
+.run-view .run-edge {
+  fill: none;
+  stroke: var(--q-color-text-muted);
+  stroke-width: 1.6;
+  transition: stroke 0.2s ease, opacity 0.2s ease;
+}
+.run-view .run-edge[data-kind='order'] {
+  stroke-dasharray: 6 5;
+}
+.run-view .run-edge-join {
+  stroke-dasharray: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.run-view .run-edge[data-failed='true'] {
+  stroke: var(--q-color-critical);
+}
+.run-view .run-edge[data-flow='true'] {
+  stroke: var(--q-color-accent);
+  stroke-dasharray: 7 6;
+  animation: run-flow 0.8s linear infinite;
+}
+.run-view .run-graph[data-hot] .run-edge:not([data-hot='true']) {
+  opacity: 0.3;
+}
+.run-view .run-edge[data-hot='true'] {
+  stroke-width: 2.6;
+}
+.run-view .run-arrow {
+  fill: var(--q-color-text-muted);
+}
+.run-view .run-arrow-failed {
+  fill: var(--q-color-critical);
+}
+
+@keyframes run-node-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes run-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes run-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes run-pulse {
+  50% {
+    stroke-width: 7;
+    opacity: 0.35;
+  }
+}
+@keyframes run-flash {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes run-sweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-60%);
+  }
+  20% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(170%);
+  }
+}
+@keyframes run-flow {
+  to {
+    stroke-dashoffset: -13;
+  }
+}
+
+/* theme.css's reduced-motion rule is scoped to .agent-html, so the run view carries its own; every base style above is the final frame */
+@media (prefers-reduced-motion: reduce) {
+  .run-view .run-graph,
+  .run-view .run-graph *,
+  .run-view .run-graph-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}
