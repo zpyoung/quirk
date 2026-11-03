@@ -384,6 +384,17 @@ def test_torn_report_line_is_skipped_and_not_extended(store, run_doc):
     assert [r["text"] for r in store.reports()] == ["a", "b"]
 
 
+def test_torn_multibyte_report_line_is_skipped(store, run_doc):
+    store.start(run_doc)
+    store.report({"kind": "status", "text": "a"})
+    path = Path(store._app._dir) / "run" / "reports.jsonl"
+    with open(path, "ab") as fh:
+        fh.write(b'{"n": 2, "kind": "status", "text": "\xe2\x82\n')
+    assert [r["text"] for r in store.reports()] == ["a"]
+    assert store.report({"kind": "status", "text": "b"}) == {"n": 2}
+    assert [r["text"] for r in store.reports()] == ["a", "b"]
+
+
 # ---- questions and answers ----------------------------------------------------
 
 
@@ -454,6 +465,12 @@ def test_ask_duplicate_id_rejected(store, run_doc):
         (lambda q: q["options"][0].update(extra=1), "options[0].extra"),
         (lambda q: q.update(recommended="zzz"), "recommended"),
         (lambda q: q.update(default="zzz"), "default"),
+        (lambda q: q.update(recommended=["a"]), "recommended"),
+        (lambda q: q.update(recommended={"a": 1}), "recommended"),
+        (lambda q: q.update(recommended=1), "recommended"),
+        (lambda q: q.update(default=["a"]), "default"),
+        (lambda q: q.update(default={"a": 1}), "default"),
+        (lambda q: q.update(default=1), "default"),
     ],
 )
 def test_invalid_question_rejected(store, run_doc, mutate, field):
