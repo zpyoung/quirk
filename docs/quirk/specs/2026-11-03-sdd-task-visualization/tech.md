@@ -283,8 +283,9 @@ set, for tests. Rules, in the order they apply:
   to `needs-you` until it is answered.
 - **Git-only pass** (SC-16a): no report for the task, but git shows `commits > 0` or `merged` on
   its branch (from `branch_pattern`): `passed` with the label "seen in git, not reported".
-- **Missing** (SC-16b): no report and no git facts, every dependency is `passed`, and either every
-  other task on its level is terminal (`passed`, `failed`, `skipped`, `stopped`) or the run ended.
+- **Missing** (SC-16b): no report and no git facts, every dependency is `passed`, and either the run
+  ended, or at least one other task shares its level, every such task is terminal (`passed`,
+  `failed`, `skipped`, `stopped`), and no task is `running`, `retrying` or `needs-you`.
   A task whose dependencies have not all passed is never missing; it stays `queued`.
 - **Mismatch** (SC-15): compared only against git facts observed after the report's `at`, so the
   3 s poll lag never flashes a mark. Cases: SDD `passed` with no commit on the branch ("SDD says
