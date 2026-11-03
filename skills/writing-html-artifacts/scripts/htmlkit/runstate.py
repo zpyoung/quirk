@@ -536,12 +536,28 @@ class RunStore:
     # ---- git facts -----------------------------------------------------------
 
     def git_facts(self) -> dict | None:
-        return self._read_json("git.json", None)
+        """The stored git facts, or None when there are none or they were written for another run."""
+        facts = self._read_json("git.json", None)
+        if not isinstance(facts, dict):
+            return None
+        stored = self._read_json("run.json", None)
+        if stored is not None and "run_id" in facts and facts["run_id"] != stored.get("run_id"):
+            return None
+        return facts
 
-    def write_git_facts(self, facts: dict) -> None:
-        """Replace ``state/run/git.json``; called by the git watcher only when facts changed."""
+    def write_git_facts(self, facts: dict, run_id: str | None = None) -> bool:
+        """Replace ``state/run/git.json``; called by the git watcher only when facts changed.
+
+        The facts are stamped with ``run_id`` and written only while that run is still the stored
+        one, so a watcher that loaded an old run cannot write over its replacement. Returns whether
+        the facts were written.
+        """
         if not isinstance(facts, dict):
             raise RunError("facts")
         with self._app.lock():
-            self._write_json("git.json", facts)
+            stored = self._read_json("run.json", None)
+            if run_id is not None and (stored is None or stored.get("run_id") != run_id):
+                return False
+            self._write_json("git.json", {**facts, "run_id": run_id} if run_id is not None else facts)
             self._app.bump_rev()
+            return True

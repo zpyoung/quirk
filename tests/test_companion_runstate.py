@@ -617,6 +617,24 @@ def test_git_facts_round_trip(store, run_doc):
     assert json.loads((Path(store._app._dir) / "run" / "git.json").read_text()) == facts
 
 
+def test_write_git_facts_for_a_replaced_run_is_dropped(store, run_doc):
+    store.start(run_doc)
+    facts = {"observed_at": 5.0, "changed_at": 5.0, "tasks": {}}
+    assert store.write_git_facts(facts, run_id="run-1") is True
+    assert store.git_facts() == {**facts, "run_id": "run-1"}
+    store.start(dict(run_doc, run_id="run-2"))
+    assert store.write_git_facts(facts, run_id="run-1") is False
+    assert store.git_facts() is None
+
+
+def test_git_facts_of_another_run_are_not_returned(store, run_doc):
+    store.start(run_doc)
+    (Path(store._app._dir) / "run" / "git.json").write_text(
+        json.dumps({"observed_at": 1, "changed_at": 1, "tasks": {}, "run_id": "run-0"})
+    )
+    assert store.git_facts() is None
+
+
 # ---- rev ----------------------------------------------------------------------
 
 

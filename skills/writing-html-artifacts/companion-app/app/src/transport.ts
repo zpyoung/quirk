@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { readBoot } from './boot'
 import type { Boot, PostResult, Snapshot } from './types'
 
 export const POLL_MS = 1000
@@ -59,8 +60,11 @@ export interface SnapshotFeed {
   refresh(): void
 }
 
-/** Polls the snapshot route: every second, at once on becoming visible, and with capped backoff after repeated failures. */
-export function useSnapshotFeed(enabled: boolean): SnapshotFeed {
+/**
+ * Polls the snapshot route: every second, at once on becoming visible, and with capped backoff after repeated failures.
+ * Each fetch sends the session token (`token`, else the boot block's) because only a token-bearing poll counts as a tab check-in.
+ */
+export function useSnapshotFeed(enabled: boolean, token?: string): SnapshotFeed {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [paused, setPaused] = useState(false)
   const rev = useRef<string>('')
@@ -79,7 +83,11 @@ export function useSnapshotFeed(enabled: boolean): SnapshotFeed {
     if (!alive.current || inFlight.current) return
     inFlight.current = true
     try {
-      const response = await fetch(`/_quirk/app/snapshot?rev=${encodeURIComponent(rev.current)}`, { cache: 'no-store' })
+      const sessionToken = token ?? readBoot()?.token
+      const response = await fetch(`/_quirk/app/snapshot?rev=${encodeURIComponent(rev.current)}`, {
+        cache: 'no-store',
+        ...(sessionToken ? { headers: { 'X-Quirk-Token': sessionToken } } : {}),
+      })
       if (!alive.current) return
       if (response.status === 200) {
         const next = (await response.json()) as Snapshot

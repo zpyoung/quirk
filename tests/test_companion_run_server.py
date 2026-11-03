@@ -113,8 +113,10 @@ class App:
         status, data = self.post("/_quirk/app/event", body, **kw)
         return status, (json.loads(data) if data else None)
 
-    def snapshot(self) -> dict:
-        status, data, _ = self.request("GET", "/_quirk/app/snapshot")
+    def snapshot(self, token: Optional[str] = "") -> dict:
+        """The snapshot; sent with the session token (as the tab does) unless ``token`` is None."""
+        headers = {} if token is None else {TOKEN_HEADER: token or self.token}
+        status, data, _ = self.request("GET", "/_quirk/app/snapshot", headers=headers)
         assert status == 200
         return json.loads(data)
 
@@ -406,7 +408,7 @@ def test_answer_first_by_tab_then_cli_is_already(app: App, repo: Repo) -> None:
     assert late["answered"]["source"] == "tab" and late["answered"]["pick"] == "b"
     delivered = app.next()["events"]
     assert [(e["type"], e["step"], e["payload"]) for e in delivered] == [
-        ("run-answer", None, {"question": "q-1", "pick": "b"})
+        ("run-answer", None, {"question": "q-1", "pick": "b", "run_id": "r1"})
     ]
 
 
@@ -531,8 +533,21 @@ def test_run_stop_is_accepted_once_then_duplicate_and_reaches_next(mixed: App) -
     assert mixed.event("run-stop", {"task": "T1"}, client_id="c1") == (200, {"duplicate": True})
     events = mixed.next()["events"]
     assert [(e["type"], e["step"], e["payload"], e["client_id"]) for e in events] == [
-        ("run-stop", None, {"task": "T1"}, "c1")
+        ("run-stop", None, {"task": "T1", "run_id": "r1"}, "c1")
     ]
+    task = next(t for t in mixed.snapshot()["run"]["tasks"] if t["id"] == "T1")
+    assert task["pending_action"] == "stop"
+
+
+def test_an_old_runs_pending_action_does_not_block_a_new_run(mixed: App, repo: Repo) -> None:
+    assert mixed.event("run-stop", {"task": "T1"}, client_id="old")[0] == 204
+    mixed.run_start(run_doc(repo, tk("T1"), tk("T2"), tk("T3"), run_id="r2"))
+    mixed.report(dispatch("T1"))
+    task = next(t for t in mixed.snapshot()["run"]["tasks"] if t["id"] == "T1")
+    assert task["status"] == "running" and "pending_action" not in task
+    assert mixed.event("run-stop", {"task": "T1"}, client_id="new")[0] == 204
+    events = mixed.next("--after", "0")["events"]
+    assert [(e["client_id"], e["payload"]["run_id"]) for e in events] == [("old", "r1"), ("new", "r2")]
     task = next(t for t in mixed.snapshot()["run"]["tasks"] if t["id"] == "T1")
     assert task["pending_action"] == "stop"
 
@@ -605,8 +620,22 @@ def test_snapshot_get_counts_as_a_tab_check_in_even_on_204(app: App, repo: Repo)
     rev = app.snapshot()["rev"]
     assert (app.state / "run" / "tab-seen").exists()
     (app.state / "run" / "tab-seen").unlink()
-    assert app.request("GET", f"/_quirk/app/snapshot?rev={rev}")[0] in (200, 204)
+    headers = {TOKEN_HEADER: app.token}
+    assert app.request("GET", f"/_quirk/app/snapshot?rev={rev}", headers=headers)[0] in (200, 204)
     assert (app.state / "run" / "tab-seen").exists()
+
+
+def test_a_snapshot_get_without_the_token_does_not_count_as_a_tab_check_in(app: App, repo: Repo) -> None:
+    app.run_start(run_doc(repo, tk("T1")))
+    app.ask(question("q-1"))
+    assert app.snapshot(token=None)["run"] is not None
+    assert not (app.state / "run" / "tab-seen").exists()
+    app.snapshot(token="wrong")
+    assert not (app.state / "run" / "tab-seen").exists()
+    app.snapshot()
+    assert (app.state / "run" / "tab-seen").exists()
+    out = app.cli("await", app.session, "q-1", "--quiet-after", "60", "--timeout", "1", expect=1)
+    assert out == {"status": "timeout"}
 
 
 # ---- diff route --------------------------------------------------------------------------------

@@ -609,7 +609,9 @@ def test_run_view_folds_the_store_with_the_clock_and_run_stop_retry_events(tmp_p
     state.mkdir()
     events = [
         {"seq": 1, "type": "chat", "timestamp": T0, "payload": {"text": "hi"}},
-        {"seq": 2, "type": "run-stop", "timestamp": T0 + 2, "payload": {"task": "A"}},
+        {"seq": 2, "type": "run-stop", "timestamp": T0 + 2, "payload": {"task": "A", "run_id": "r1"}},
+        {"seq": 3, "type": "run-retry", "timestamp": T0 + 3, "payload": {"task": "A", "run_id": "old"}},
+        {"seq": 4, "type": "run-retry", "timestamp": T0 + 4, "payload": {"task": "A"}},
     ]
     (state / "app-events").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
     session = tmp_path
@@ -621,6 +623,17 @@ def test_run_view_folds_the_store_with_the_clock_and_run_stop_retry_events(tmp_p
     a = by_id(view)["A"]
     assert a["status"] == "failed" and a["pending_action"] == "stop"
     assert view["stale"] == {"since": 499}
+
+
+def test_current_run_actions_keeps_only_events_that_name_the_current_run():
+    events = [
+        {"seq": 1, "type": "run-stop", "payload": {"task": "A", "run_id": "r1"}},
+        {"seq": 2, "type": "run-stop", "payload": {"task": "A", "run_id": "r0"}},
+        {"seq": 3, "type": "run-retry", "payload": {"task": "A"}},
+        {"seq": 4, "type": "chat", "payload": {"run_id": "r1"}},
+        {"seq": 5, "type": "run-retry"},
+    ]
+    assert [e["seq"] for e in runfold.current_run_actions(events, "r1")] == [1]
 
 
 @pytest.mark.parametrize("value, expected", [("5", 5.0), ("0.5", 0.5), ("0", STALE_AFTER_S), ("-3", STALE_AFTER_S),

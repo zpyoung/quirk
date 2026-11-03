@@ -176,7 +176,10 @@ GET  /?view=diff&task=ID, /?view=findings&round=ID   the same shell; App.tsx rou
   `_record_app_event` (688) first, then a `run-stop` or `run-retry` for a task that already has the
   same `pending_action` returns 200 `{"duplicate":true}` and writes nothing.
 - Every accepted `run-*` event is appended to `state/app-events` with a `seq`, so `companion.py next`
-  returns it to SDD unchanged.
+  returns it to SDD unchanged. Each stored payload carries the current `run_id`; the fold and the
+  duplicate check count only events whose `run_id` equals the current run's, and ignore any without one.
+- A snapshot GET counts as a tab check-in (`touch_tab`) only when it sends `X-Quirk-Token` equal to
+  the session token; without it the snapshot is still served.
 - The diff route runs git through `gitwatch.git()` with `--no-ext-diff --no-textconv`, caps the
   patch text at 1 MiB and sets `truncated`. `base` is the task's base from its `dispatch` report,
   else `merge-base <head> <feature branch>`. A committed task diffs `base..head` from the repo. A
@@ -235,11 +238,13 @@ Answer = {question, source: "tab"|"orca"|"sdd", pick?: value, label?: str, text?
 
 SCHEMA (`state/run/git.json`, written only by the watcher):
 ```
-{observed_at, changed_at, tasks: {ID: {branch_head?: sha, commits: int, merged: bool,
+{run_id, observed_at, changed_at, tasks: {ID: {branch_head?: sha, commits: int, merged: bool,
   files: [path], worktree_present: bool, error?: str}}}
 ```
 `changed_at` moves only when some task's facts differ from the previous poll, and only then does
-the watcher write the file and call `bump_rev()`. A task whose branch does not exist has no entry.
+the watcher write the file and call `bump_rev()`. A task whose branch does not exist has no entry. `run_id` names the run the facts were observed for:
+`write_git_facts` drops facts for a run that is no longer stored, and `git_facts()` ignores a file whose
+`run_id` differs from the stored run's.
 
 ### Snapshot
 
