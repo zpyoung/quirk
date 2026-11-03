@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { layoutRun, type GraphLayout } from './layout'
+import { CARD_MARGIN, CARD_WIDTH, clampZoom, fitView, layoutRun, placeCard, viewBoxOf, zoomFloor, type Size, type View } from './layout'
 import { mismatchLines, TaskNode } from './node'
 import type { RunView } from './types'
 
@@ -14,35 +14,12 @@ export interface RunGraphProps {
   onSelect(task: string): void
 }
 
-interface View {
-  cx: number
-  cy: number
-  z: number
-}
-interface Size {
-  w: number
-  h: number
-}
-
-const MIN_ZOOM = 0.2
-const MAX_ZOOM = 3
 const FOCUS_ZOOM = 1
 const FOCUS_MS = 400
 const DEFAULT_SIZE: Size = { w: 960, h: 520 }
+const DEFAULT_CARD_H = 280
 
-const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
 const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-
-function fitView(layout: GraphLayout, size: Size): View {
-  const z = clampZoom(Math.min(size.w / layout.width, size.h / layout.height, 1.25))
-  return { cx: layout.width / 2, cy: layout.height / 2, z }
-}
-
-function viewBoxOf(view: View, size: Size) {
-  const w = size.w / view.z
-  const h = size.h / view.z
-  return { x: view.cx - w / 2, y: view.cy - h / 2, w, h }
-}
 
 function summary(run: RunView): string {
   const tally = new Map<string, number>()
@@ -68,7 +45,11 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   const frame = useRef(0)
   const moved = useRef(false)
   const lastNonce = useRef<number | null>(null)
+  const layoutRef = useRef(layout)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [cardH, setCardH] = useState(DEFAULT_CARD_H)
   sizeRef.current = size
+  layoutRef.current = layout
 
   const setView = useCallback((next: View) => {
     viewRef.current = next
@@ -99,7 +80,7 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
       const current = viewRef.current
       const sz = sizeRef.current
       const box = viewBoxOf(current, sz)
-      const z = clampZoom(current.z * factor)
+      const z = clampZoom(current.z * factor, zoomFloor(layoutRef.current, sz))
       const wx = box.x + px / current.z
       const wy = box.y + py / current.z
       setView({ cx: wx - px / z + sz.w / (2 * z), cy: wy - py / z + sz.h / (2 * z), z })
@@ -252,13 +233,19 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   const tipBox = tip ? layout.nodes.find((n) => n.id === tip) : undefined
   const cardBox = cardTask ? layout.nodes.find((n) => n.id === cardTask) : undefined
 
-  let cardStyle: { left?: number; right?: number; top: number } | null = null
+  let placement: ReturnType<typeof placeCard> | null = null
   if (cardBox) {
-    const rightPx = (cardBox.x + cardBox.w - vb.x) * view.z + 14
-    const leftPx = (cardBox.x - vb.x) * view.z - 14
-    const top = Math.max(0, Math.min((cardBox.y - vb.y) * view.z, size.h - 40))
-    cardStyle = rightPx + 352 <= size.w || leftPx < 352 ? { left: Math.max(0, rightPx), top } : { right: Math.max(0, size.w - leftPx), top }
+    const left = (cardBox.x - vb.x) * view.z
+    const top = (cardBox.y - vb.y) * view.z
+    const cardSize = { w: Math.min(CARD_WIDTH, size.w - 2 * CARD_MARGIN), h: Math.min(cardH, size.h - 2 * CARD_MARGIN) }
+    placement = placeCard({ left, top, right: left + cardBox.w * view.z, bottom: top + cardBox.h * view.z }, size, cardSize)
   }
+  const docked = placement?.mode === 'dock'
+
+  useEffect(() => {
+    const height = cardRef.current?.getBoundingClientRect().height
+    if (height && Math.abs(height - cardH) > 1) setCardH(height)
+  })
 
   return (
     <div className="run-graph-root" data-run-part="graph">
@@ -328,8 +315,13 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
         <g className="run-nodes">{nodeLayer}</g>
         {tipTask?.mismatch && tipBox ? <MismatchTip text={tipTask.mismatch.text} x={tipBox.x} y={tipBox.y} /> : null}
       </svg>
-      {cardStyle ? (
-        <div className="run-graph-card" style={cardStyle}>
+      {placement ? (
+        <div
+          ref={cardRef}
+          className="run-graph-card"
+          data-dock={docked ? 'true' : undefined}
+          style={placement.mode === 'beside' ? { left: placement.left, top: placement.top } : undefined}
+        >
           {card}
         </div>
       ) : null}

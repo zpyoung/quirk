@@ -180,3 +180,73 @@ function edgeGeometry(kind: 'dep' | 'order', from: NodeBox, to: NodeBox): { d: s
   const out = Math.max(from.x, to.x) + from.w + 36
   return { d: `M${x1},${round(y1)} C${out},${round(y1)} ${out},${round(y2)} ${x2},${round(y2)}`, joined: false }
 }
+
+export interface View {
+  cx: number
+  cy: number
+  z: number
+}
+
+export interface Size {
+  w: number
+  h: number
+}
+
+export const MIN_ZOOM = 0.2
+export const MAX_ZOOM = 3
+const MAX_FIT_ZOOM = 1.25
+
+/** The zoom at which the whole layout fits the container; never floored, so a large graph still fits. */
+export function fitZoom(layout: GraphLayout, size: Size): number {
+  return Math.min(size.w / layout.width, size.h / layout.height, MAX_FIT_ZOOM)
+}
+
+/** Lowest zoom a wheel or button may reach: the usual floor, or the fit zoom when the graph needs less. */
+export function zoomFloor(layout: GraphLayout, size: Size): number {
+  return Math.min(MIN_ZOOM, fitZoom(layout, size))
+}
+
+export function clampZoom(z: number, floor: number = MIN_ZOOM): number {
+  return Math.min(MAX_ZOOM, Math.max(floor, z))
+}
+
+/** The view that shows every node box, centred. */
+export function fitView(layout: GraphLayout, size: Size): View {
+  return { cx: layout.width / 2, cy: layout.height / 2, z: fitZoom(layout, size) }
+}
+
+export function viewBoxOf(view: View, size: Size): { x: number; y: number; w: number; h: number } {
+  const w = size.w / view.z
+  const h = size.h / view.z
+  return { x: view.cx - w / 2, y: view.cy - h / 2, w, h }
+}
+
+export interface Rect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+export type CardPlacement = { mode: 'beside'; left: number; top: number } | { mode: 'dock' }
+
+export const CARD_WIDTH = 352
+export const CARD_GAP = 14
+export const CARD_MARGIN = 8
+export const DOCK_BELOW = 640
+
+/**
+ * Places the question card in container pixels. Beside the node when it fits (right side first, then left),
+ * clamped on both axes to the container; docked full-width at the bottom when the container is under
+ * DOCK_BELOW wide or narrower than the card plus the node.
+ */
+export function placeCard(node: Rect, container: Size, card: Size): CardPlacement {
+  const nodeWidth = node.right - node.left
+  if (container.w < DOCK_BELOW || container.w < card.w + nodeWidth) return { mode: 'dock' }
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)))
+  let left = node.right + CARD_GAP
+  if (left + card.w > container.w - CARD_MARGIN) left = node.left - CARD_GAP - card.w
+  left = clamp(left, CARD_MARGIN, container.w - card.w - CARD_MARGIN)
+  const top = clamp(node.top, CARD_MARGIN, container.h - card.h - CARD_MARGIN)
+  return { mode: 'beside', left, top }
+}

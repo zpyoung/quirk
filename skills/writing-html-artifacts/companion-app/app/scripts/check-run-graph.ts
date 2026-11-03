@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { layoutRun, type GraphLayout, type NodeBox } from '../src/run/layout'
+import {
+  CARD_MARGIN, CARD_WIDTH, fitView, fitZoom, layoutRun, MIN_ZOOM, placeCard, viewBoxOf, zoomFloor,
+  type GraphLayout, type NodeBox, type Rect, type Size,
+} from '../src/run/layout'
 import { RunGraph } from '../src/run/graph'
 import type { RunEdge, RunStatus, RunTask, RunView } from '../src/run/types'
 
@@ -164,6 +168,85 @@ const cardHtml = renderToStaticMarkup(
 )
 check(cardHtml.includes('id="the-card"'), 'cardTask must render the card overlay')
 check(!renderToStaticMarkup(createElement(RunGraph, { run: sample, ...props, card: createElement('b', null, 'x') })).includes('<b>x</b>'), 'no card without cardTask')
+
+// Fit must show every node box, even for a graph that needs a zoom below the wheel floor
+const bigTasks: RunTask[] = []
+const bigEdges: RunEdge[] = []
+for (let i = 1; i <= 60; i++) {
+  const level = 1 + Math.floor((i - 1) / 3)
+  bigTasks.push(task(`B${i}`, level, 'queued'))
+  if (level > 1) bigEdges.push({ from: `B${i - 3}`, to: `B${i}`, kind: 'dep' })
+}
+const bigLayout = checkLayout('big', view(bigTasks, bigEdges))
+for (const size of [{ w: 960, h: 520 }, { w: 400, h: 300 }, { w: 1600, h: 900 }]) {
+  const fitted = fitView(bigLayout, size)
+  const vb = viewBoxOf(fitted, size)
+  const holdsAll = bigLayout.nodes.every(
+    (n) => n.x >= vb.x - 1e-6 && n.y >= vb.y - 1e-6 && n.x + n.w <= vb.x + vb.w + 1e-6 && n.y + n.h <= vb.y + vb.h + 1e-6,
+  )
+  check(holdsAll, `fit ${size.w}x${size.h}: viewBox must contain every node box`)
+  check(fitted.z === fitZoom(bigLayout, size), `fit ${size.w}x${size.h}: zoom is the fit zoom, unclamped`)
+  check(zoomFloor(bigLayout, size) <= fitted.z, `fit ${size.w}x${size.h}: the zoom floor must not sit above the fit zoom`)
+}
+check(fitView(bigLayout, { w: 960, h: 520 }).z < MIN_ZOOM, 'the 60-task graph needs a fit zoom below the usual floor')
+check(zoomFloor(bigLayout, { w: 960, h: 520 }) === fitView(bigLayout, { w: 960, h: 520 }).z, 'the floor drops to the fit zoom when Fit needs less')
+check(zoomFloor(layout, { w: 960, h: 520 }) === MIN_ZOOM, 'the floor stays at the usual minimum when the graph fits above it')
+
+// card placement stays inside the container
+const inside = (rect: Rect, c: Size) => rect.left >= 0 && rect.top >= 0 && rect.right <= c.w && rect.bottom <= c.h
+const cardSize = { w: CARD_WIDTH, h: 260 }
+const wide = { w: 1100, h: 560 }
+const nodeAt = (left: number, top: number, w = 230, h = 96): Rect => ({ left, top, right: left + w, bottom: top + h })
+for (const [name, node] of [
+  ['centre', nodeAt(400, 200)],
+  ['right edge', nodeAt(900, 200)],
+  ['left edge', nodeAt(10, 200)],
+  ['off the left', nodeAt(-300, 100)],
+  ['off the right', nodeAt(1300, 100)],
+  ['above', nodeAt(400, -500)],
+  ['below', nodeAt(400, 900)],
+] as const) {
+  const placed = placeCard(node, wide, cardSize)
+  check(placed.mode === 'beside', `card ${name}: a wide container places the card beside the node`)
+  if (placed.mode === 'beside') {
+    const rect = { left: placed.left, top: placed.top, right: placed.left + cardSize.w, bottom: placed.top + cardSize.h }
+    check(inside(rect, wide), `card ${name}: the card must sit inside the container`)
+    check(placed.left >= CARD_MARGIN, `card ${name}: the card keeps its margin`)
+  }
+}
+const flipped = placeCard(nodeAt(900, 200), wide, cardSize)
+check(flipped.mode === 'beside' && flipped.left + cardSize.w <= 900, 'a node near the right edge flips the card to its left')
+const sideways = placeCard(nodeAt(100, 200), wide, cardSize)
+check(sideways.mode === 'beside' && sideways.left >= 330, 'a node with room on the right keeps the card on its right')
+check(placeCard(nodeAt(100, 100), { w: 600, h: 500 }, cardSize).mode === 'dock', 'under 640 px wide the card docks')
+check(placeCard(nodeAt(100, 100, 400), { w: 700, h: 500 }, cardSize).mode === 'dock', 'a container narrower than the card plus the node docks the card')
+check(placeCard(nodeAt(100, 100), { w: 640, h: 500 }, cardSize).mode === 'beside', 'a 640 px container that holds card and node places beside')
+
+// dependency edges never take a dash, whatever the status pair
+const statuses: RunStatus[] = ['queued', 'running', 'retrying', 'passed', 'failed', 'needs-you', 'skipped']
+const pairTasks: RunTask[] = []
+const pairEdges: RunEdge[] = []
+for (const a of statuses) {
+  for (const b of statuses) {
+    pairTasks.push(task(`${a}>${b}:s`, 1, a), task(`${a}>${b}:t`, 2, b))
+    pairEdges.push({ from: `${a}>${b}:s`, to: `${a}>${b}:t`, kind: 'dep' })
+  }
+}
+const pairHtml = renderToStaticMarkup(createElement(RunGraph, { run: view(pairTasks, pairEdges), ...props }))
+const depPaths = (pairHtml.match(/<path\b[^>]*>/g) ?? []).filter((p) => p.includes('data-kind="dep"'))
+check(depPaths.length === pairEdges.length, 'every status pair renders a dep edge')
+check(depPaths.every((p) => !/dash|style=/.test(p)), 'no dep edge carries a dash attribute or inline style')
+check(depPaths.some((p) => p.includes('data-flow="true"')), 'a passed task feeding a running one still marks its edge active')
+const css = readFileSync(new URL('../src/run/graph.css', import.meta.url), 'utf8')
+for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const [, selector, body] = rule
+  const dashValue = /stroke-dasharray:\s*([^;]+)/.exec(body)?.[1].trim()
+  const dashed = dashValue !== undefined && dashValue !== 'none'
+  if (dashed && selector.includes('.run-edge') && !selector.includes("[data-kind='order']")) {
+    failures.push(`graph.css: ${selector.trim()} dashes an edge that is not an order edge`)
+  }
+}
+check(!/run-flow/.test(css), 'graph.css: the dashed flow animation is gone')
 
 const emptyHtml = renderToStaticMarkup(createElement(RunGraph, { run: view([], []), ...props }))
 check(emptyHtml.includes('<svg'), 'an empty run still renders an svg')
