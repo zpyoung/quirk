@@ -295,7 +295,7 @@ const scenarios: [string, Scenario][] = [
       let stop: any = null
       for (let i = 0; i < 3 && !stop; i += 1) stop = (await nextEvents(10)).find((event) => event.type === 'run-stop')
       assert(stop, 'next returned no run-stop event')
-      same(stop.payload, { task: 'T2' }, 'run-stop payload')
+      same(stop.payload, { task: 'T2', run_id: RUN_ID }, 'run-stop payload')
       await node(page, 'T2').locator('.run-node-chip', { hasText: 'Stop requested' }).waitFor({ timeout: STEP_MS })
     },
   ],

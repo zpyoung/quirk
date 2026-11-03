@@ -88,7 +88,7 @@
   "stale": null,
   "stale_after_s": 180,
   "started_at": 1793664000.0,
-  "status_text": "Wave 2 running",
+  "status_text": "Dispatching T4, T6 and T7",
   "tasks": [
     {
       "attempt": 1,
