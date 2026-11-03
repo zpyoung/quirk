@@ -1177,7 +1177,10 @@ def test_load_json_reports_deeply_nested_input_instead_of_crashing(tmp_path: Pat
     deeply_nested.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     value, errors = render_spec.load_json(deeply_nested, str(deeply_nested))
     assert value is None
-    assert dict(errors)["/"] == "invalid JSON in " + str(deeply_nested) + ": input is too deeply nested"
+    message = "invalid JSON in " + str(deeply_nested) + ": input is too deeply nested"
+    # before 3.14 the parser raises RecursionError (reported at /); 3.14 parses it and the depth walk reports the pointer
+    too_deep_pointer = "/" + "/".join(["0"] * (render_spec.JSON_MAX_DEPTH + 1))
+    assert errors in ([("/", message)], [(too_deep_pointer, message)])
 
 
 def test_v2_check_export_exits_1_without_a_traceback_on_deeply_nested_export(tmp_path: Path) -> None:

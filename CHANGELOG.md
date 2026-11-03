@@ -5,6 +5,26 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.2.2
+
+### Changes
+- writing-plans: shape task DAGs for low wall-clock time (#63)
+
+## 2026.11.2.1
+
+### Changes
+- feat(sdd): dispatch each task when its own dependencies merge (#61)
+
+## 2026.11.2
+
+### Changes
+- sdd: gate waves on selected tests, run the full suite once at the end (#60)
+
+## 2026.10.26
+
+### Changes
+- Add building-mini-apps skill: interaction-pattern templates for local React apps (#56)
+
 ## 2026.10.23.1
 
 ### Changes

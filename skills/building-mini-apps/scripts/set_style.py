@@ -5,8 +5,10 @@ Usage:
     set_style.py <app_dir> <slug> [--force]
 
 Runs style (overwrites src/styles/mini-tokens.css and adds any font packages the style needs;
-packages are never removed), tokens (rewires the font lines in src/index.css once), build and
-dev, as new_app.py does. Files other than the tokens file are left as the user edited them.
+packages are never removed), tokens (rewires the font lines in src/index.css once), press (adds
+the press marker, src/lib/mini/press.ts and its import in src/main.tsx, once), build and dev, as
+new_app.py does. Files other than the tokens file, the font lines and the press marker are left as
+the user edited them.
 
 A tokens file that was hand-edited (no style header, or a header whose hash no longer matches) is
 not overwritten unless --force is given; --force discards those edits.
@@ -62,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     steps = (
         lambda a: _mini.style_step(a, args.slug),
         lambda a: _mini.tokens_step(a),
+        lambda a: _mini.press_step(a),
         lambda a: _mini.build_step(a),
         lambda a: _mini.dev_step(a),
     )

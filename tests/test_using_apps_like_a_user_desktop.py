@@ -21,7 +21,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import _desktop  # noqa: E402
-from _types import DriverError  # noqa: E402
+from _likeuser_types import DriverError  # noqa: E402
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 

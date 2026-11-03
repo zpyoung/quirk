@@ -8,9 +8,11 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 
+import { selectionLabel } from "./selection"
 import { ShortcutKeys } from "./shortcut-keys"
 import type { ActionPanelProps, PaletteAction, PaletteItem } from "./types"
 
@@ -60,10 +62,13 @@ const displayName = (title: string) => title.replace(/…$/, "")
  * Card of filterable actions for one item. Leaf actions go to `onRun`;
  * actions with `children` replace the card's contents until Esc. Esc at the
  * top level and clicks outside call `onClose`. `initialPath` opens the card
- * already drilled into that chain of sub-menus.
+ * already drilled into that chain of sub-menus. `items` names a multi-item
+ * target: with two or more, the header shows a count chip instead of the
+ * item's title. Running the action on those items is the caller's job.
  */
 export function ActionPanel<T extends PaletteItem>({
   item,
+  items,
   actions,
   initialPath,
   onClose,
@@ -80,7 +85,9 @@ export function ActionPanel<T extends PaletteItem>({
   const current = rows.some((row) => row.action.id === highlight)
     ? highlight
     : (rows[0]?.action.id ?? "")
-  const heading = parent ? displayName(parent.title) : item.title
+  const many = items !== undefined && items.length > 1
+  const chip = many ? selectionLabel(items.length) : undefined
+  const heading = parent ? displayName(parent.title) : many ? (chip ?? item.title) : item.title
 
   function choose(action: PaletteAction<T>) {
     if (action.children) {
@@ -132,7 +139,7 @@ export function ActionPanel<T extends PaletteItem>({
       ref={panelRef}
       role="group"
       data-mini="surface"
-      aria-label={`Actions for ${item.title}`}
+      aria-label={many ? `Actions for ${chip}` : `Actions for ${item.title}`}
       className="absolute right-3 bottom-12 z-20 w-[45%] max-w-sm min-w-64 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
     >
       <Command
@@ -148,12 +155,25 @@ export function ActionPanel<T extends PaletteItem>({
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.preventDefault()
         }}
       >
-        <div
-          className="truncate px-2 pt-1.5 pb-1 text-xs font-medium text-muted-foreground"
-          title={heading}
-        >
-          {heading}
-        </div>
+        {many ? (
+          <div className="flex min-w-0 items-center gap-2 px-2 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
+            <Badge variant="secondary" className="shrink-0">
+              {chip}
+            </Badge>
+            {parent ? (
+              <span className="min-w-0 truncate" title={heading}>
+                {heading}
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <div
+            className="truncate px-2 pt-1.5 pb-1 text-xs font-medium text-muted-foreground"
+            title={heading}
+          >
+            {heading}
+          </div>
+        )}
         <CommandList className="max-h-64">
           {rows.length === 0 ? (
             <div className="px-2 py-3 text-center text-xs text-muted-foreground">

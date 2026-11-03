@@ -2,9 +2,10 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: >3 files across docs, scripts, tests and gallery)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-10-23: SC-9 gains case (b), a storage write failing while refreshed readings are saved: the readings that saved stand, a toast names the failure, and the header reads Stale with Retry; nothing is rolled back. Found in final review after a rollback attempt introduced two regressions. Applied as the recommended default when the review question timed out.
 
 This spec adds one pattern to the skill approved in
 [the building-mini-apps logic spec](../2026-10-22-building-mini-apps/logic.md). Everything that spec
@@ -158,15 +159,16 @@ ended" and the item returns as open.
 
 9. **SC-9 Refresh states**
    - **Given** the app passed a refresh function with a 30-second interval
-   - **When** refreshes succeed, the user pauses, and later a refresh fails
-   - **Then** the header shows "Live, updated 07:05" while refreshing; "Paused" with a Resume control after pausing (no refreshes run); after a failure, an error banner with Retry while the last good tile states stay on screen and the refresh state reads "Stale since 07:05"
+   - **When** refreshes succeed, the user pauses, and later (a) a refresh fails, or (b) the refresh returns readings but one of them fails to save
+   - **Then** the header shows "Live, updated 07:05" while refreshing; "Paused" with a Resume control after pausing (no refreshes run); (a) after a failed refresh, an error banner with Retry while the last good tile states stay on screen and the refresh state reads "Stale since 07:05"; (b) after a failed save, the readings that saved stand, a toast names the failed save, the header reads "Stale since 07:05" with the Retry banner, and nothing is rolled back
    - **Screen states:**
 
      | Situation | Header refresh state | Tiles |
      |---|---|---|
      | Refreshing normally | ✓ "Live · updated 07:05" | current |
      | Paused | ✓ "Paused" plus Resume | last values, unchanged |
-     | Refresh failed | ✓ "Stale since 07:05" plus an error banner with Retry | last good values, not cleared |
+     | (a) Refresh failed | ✓ "Stale since 07:05" plus an error banner with Retry | last good values, not cleared |
+     | (b) A reading failed to save | ✓ "Stale since 07:05" plus an error banner with Retry, and a toast | readings that saved show new values; the rest keep their last good values |
      | No refresh function | ✓ source label only | as given by the app |
 
 10. **SC-10 Keyboard triage**

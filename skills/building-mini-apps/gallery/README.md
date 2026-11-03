@@ -1,6 +1,6 @@
 # Mini-app patterns gallery
 
-A Vite app that runs every pattern block next to its reference, so each demo can be tried, read and adapted. The sidebar lists the ten patterns; each page shows the block's `demo.tsx` and the matching `references/patterns/<pattern>.md`.
+A Vite app that runs every pattern block next to its reference, so each demo can be tried, read and adapted. The sidebar lists every pattern; each page shows the block's `demo.tsx` and the matching `references/patterns/<pattern>.md`.
 
 ```bash
 pnpm install && pnpm dev

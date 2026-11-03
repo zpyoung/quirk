@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { useCollection } from "@/lib/mini/store"
 
 import type { ViewConfig } from "./types"
+import { isDirty, mergeDraft, type ViewDraft } from "./view-draft"
 
 export const DEFAULT_VIEWS: ViewConfig[] = [
   { id: "all", name: "All", layout: "table", filters: [] },
@@ -34,7 +35,8 @@ function reportFailure(cause: unknown) {
 export interface ViewsApi {
   views: ViewConfig[]
   loading: boolean
-  update(id: string, patch: Partial<Omit<ViewConfig, "id">>): void
+  /** Resolves true once the write is stored, false after a rejected write has been reported. */
+  update(id: string, patch: Partial<Omit<ViewConfig, "id">>): Promise<boolean>
   add(view: ViewConfig): Promise<boolean>
   remove(id: string): Promise<boolean>
 }
@@ -65,11 +67,18 @@ export function useViews(
     [base, pending]
   )
 
-  function update(id: string, patch: Partial<Omit<ViewConfig, "id">>) {
+  function update(
+    id: string,
+    patch: Partial<Omit<ViewConfig, "id">>
+  ): Promise<boolean> {
     setPending((p) => ({ ...p, [id]: { ...p[id], ...patch } }))
     inflight.current.set(id, (inflight.current.get(id) ?? 0) + 1)
-    storeUpdate(id, patch)
-      .catch(reportFailure)
+    return storeUpdate(id, patch)
+      .then(() => true)
+      .catch((cause) => {
+        reportFailure(cause)
+        return false
+      })
       .finally(() => {
         const left = (inflight.current.get(id) ?? 1) - 1
         if (left > 0) return inflight.current.set(id, left)
@@ -122,4 +131,42 @@ export function useActiveViewId(
   }
 
   return [active, setActive] as const
+}
+
+export interface DraftsApi {
+  drafts: Record<string, ViewDraft>
+  /** Ids of views whose draft differs from the stored copy. */
+  dirtyIds: ReadonlySet<string>
+  patch(id: string, patch: ViewDraft): void
+  /** Drops a draft; with `only`, drops it only if it is still that exact draft. */
+  clear(id: string, only?: ViewDraft): void
+}
+
+/**
+ * Unsaved query, sort and filter edits per view id, kept in memory. A draft of
+ * a view that no longer exists is ignored, so deleting a view needs no cleanup.
+ */
+export function useDrafts(views: ViewConfig[]): DraftsApi {
+  const [drafts, setDrafts] = useState<Record<string, ViewDraft>>({})
+
+  const patch = useCallback((id: string, next: ViewDraft) => {
+    setDrafts((d) => ({ ...d, [id]: mergeDraft(d[id], next) }))
+  }, [])
+
+  const clear = useCallback((id: string, only?: ViewDraft) => {
+    setDrafts((d) => {
+      if (!(id in d) || (only && d[id] !== only)) return d
+      const next = { ...d }
+      delete next[id]
+      return next
+    })
+  }, [])
+
+  const dirtyIds = useMemo(
+    () =>
+      new Set(views.filter((v) => isDirty(v, drafts[v.id])).map((v) => v.id)),
+    [views, drafts]
+  )
+
+  return { drafts, dirtyIds, patch, clear }
 }

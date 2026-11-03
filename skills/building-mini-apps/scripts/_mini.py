@@ -28,6 +28,13 @@ SHADCN = "shadcn@4.22.1"
 DEV_TIMEOUT = 30
 TAIL_LINES = 20
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+PRESS_REL = Path("src") / "lib" / "mini" / "press.ts"
+PRESS_SOURCE = SKILL_ROOT / "gallery" / PRESS_REL
+PRESS_IMPORT = 'import "./lib/mini/press"'
+PRESS_IMPORT_RE = re.compile(r"""^[ \t]*import[ \t]+["']\./lib/mini/press(?:\.ts|\.js)?["'];?[ \t]*$""", re.MULTILINE)
+NON_CODE_RE = re.compile(
+    r"""/\*.*?\*/|`(?:\\.|[^`\\])*`|//[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'""", re.DOTALL
+)
 TOKENS_IMPORT = '@import "./styles/mini-tokens.css";'
 TOP_LEVEL_IMPORT_RE = re.compile(r"^@import\b")
 THEME_INLINE_RE = re.compile(r"@theme\s+inline\s*\{")
@@ -284,6 +291,46 @@ def tokens_step(app: Path) -> int:
     except OSError as exc:
         return step_failed("tokens", str(exc))
     print(f"+ [tokens] wired {TOKENS_IMPORT} and the font lines into {css}")
+    return 0
+
+
+def blank_non_code(text: str) -> str:
+    """Replace comments and template literals with spaces, keeping newlines so line anchors still work.
+
+    Quoted strings are matched only so a comment marker inside one is not misread; they are kept.
+    """
+    def blank(match: re.Match[str]) -> str:
+        chunk = match.group()
+        return chunk if chunk[0] in "\"'" else re.sub(r"[^\n]", " ", chunk)
+
+    return NON_CODE_RE.sub(blank, text)
+
+
+def press_step(app: Path) -> int:
+    """Install the press marker: copy `src/lib/mini/press.ts` when absent and import it from `src/main.tsx`.
+
+    Idempotent. An existing module is never overwritten and a `main.tsx` that already has an active
+    top-level `import "./lib/mini/press"` line (a comment, template literal, or string mentioning it does not count) is
+    not rewritten. Otherwise the import goes on the first line of the file, which is never inside a comment or
+    template literal.
+    """
+    main = app / "src" / "main.tsx"
+    try:
+        text = main.read_text(encoding="utf-8")
+    except OSError as exc:
+        return step_failed("press", str(exc))
+    target = app / PRESS_REL
+    try:
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(PRESS_SOURCE.read_bytes())
+        code = blank_non_code(text)
+        if PRESS_IMPORT_RE.search(code) is None:
+            updated = PRESS_IMPORT + "\n" + text
+            main.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        return step_failed("press", str(exc))
+    print(f"+ [press] press marker in place: {target} imported from {main}")
     return 0
 
 

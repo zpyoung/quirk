@@ -1,0 +1,6 @@
+{
+  "name": "replay-player",
+  "title": "Replay player",
+  "description": "Playback surface for a recorded sequence of snapshots, with transport controls, a marker lane over a seek slider, a speed stepper and tabs of timed lists that follow the playhead and seek on click.",
+  "registryDependencies": ["button", "input", "tabs"]
+}

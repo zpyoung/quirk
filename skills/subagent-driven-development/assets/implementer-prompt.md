@@ -24,7 +24,9 @@ where it is explicit, follow it exactly.
 
 {{WORKDIR}}
 
-Work **only** here. Do not `cd` elsewhere, and do not edit files outside this directory.
+Work **only** here. Do not `cd` elsewhere, and do not edit files outside this directory. It was
+forked from the integration branch after every task this one depends on had merged, so their work
+is already in it.
 
 ## Scope
 
@@ -61,7 +63,8 @@ resolving it.
 
 `{{ACCEPTANCE}}` is scoped to this task's owned test files and fast targeted checks. Run it exactly
 as written; never run the full repository test suite when it targets specific test files.
-Step 7's wave gate runs the full suite once.
+Step 7's gates run the selected tests after merge, and the full suite once at the end of the
+run.
 
 ## Method
 

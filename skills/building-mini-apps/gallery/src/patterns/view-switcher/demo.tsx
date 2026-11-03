@@ -240,8 +240,22 @@ export default function Demo() {
             reportWrite(workshops.update(id, patch), "update")
           }
           onDelete={(id) => reportWrite(workshops.remove(id), "delete")}
+          trackUnsaved
+          onViewSaved={(view, how) =>
+            toast.success(
+              how === "save"
+                ? `Saved "${view.name}"`
+                : `Saved as new view "${view.name}"`,
+            )
+          }
         />
       </div>
+      <p className="shrink-0 border-t px-3 py-1.5 text-xs text-muted-foreground">
+        1-9 switch view, [ and ] step through views, arrows move, Enter opens,
+        Esc closes, f filter, s sort, / search, n new. Change a filter, the
+        sort or the search to mark a view unsaved, then Save, Save as new view
+        or Reset.
+      </p>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 ---
 name: building-mini-apps
-description: Use when the user asks to "build me a mini app", "a little app to track…", "a local tool with saved data", or to "analyze <app> as a mini app" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard, in one of seven looks. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
+description: Use when the user asks to "build me a mini app", "a little app to track…", "a local tool with saved data", or to "analyze <app> as a mini app" - a small React app they will keep and run on their own machine, built from proven interaction patterns (list-peek, action-palette, view-switcher and others) instead of a generic dashboard, in one of eight looks. Not for single-file HTML pages, reports or dashboards; those go to writing-html-artifacts.
 ---
 
 # Building mini apps
@@ -25,14 +25,23 @@ A pattern is one named interaction. A mini app usually combines two or three. Re
 |---|---|---|---|
 | list-peek | Dense list; j/k move, Space previews the item in a side panel | Linear | [list-peek](references/patterns/list-peek.md) |
 | expand-in-place | A row opens into an editable card; optional fields stay hidden until asked for | Things 3 | [expand-in-place](references/patterns/expand-in-place.md) |
-| action-palette | Search, select, then ⌘K lists the actions for that one item | Raycast | [action-palette](references/patterns/action-palette.md) |
+| action-palette | Search, select, then ⌘K lists the actions for that one item | Raycast, Sentry | [action-palette](references/patterns/action-palette.md) |
 | doc-collections | A document with record tables embedded in it, each record with a free-text body | Craft | [doc-collections](references/patterns/doc-collections.md) |
 | workspace-panes | Tabs and split panes over file-like records, with a structured view and a raw view | Obsidian | [workspace-panes](references/patterns/workspace-panes.md) |
 | staged-table-edit | Inline cell edits stay pending until one commit or discard | TablePlus | [staged-table-edit](references/patterns/staged-table-edit.md) |
 | mini-full | Quick-add with natural-language parsing that opens into a full view | Fantastical | [mini-full](references/patterns/mini-full.md) |
-| view-switcher | Table, board or calendar over the same records; a record opens in a side panel | Notion | [view-switcher](references/patterns/view-switcher.md) |
+| view-switcher | Table, board or calendar over the same records; a record opens in a side panel | Notion, Sentry | [view-switcher](references/patterns/view-switcher.md) |
 | assisted-notes | The user's notes stay primary; generated additions are styled apart and cite their source | Granola | [assisted-notes](references/patterns/assisted-notes.md) |
 | inspector | Navigation tree, canvas, and a properties panel for the selection | Figma | [inspector](references/patterns/inspector.md) |
+| command-center | Status tiles in sections beside a queue of items that need you, to acknowledge, snooze and resolve | Home Assistant, PagerDuty | [command-center](references/patterns/command-center.md) |
+| bulk-select | Dense table where ticking a row turns the header into an action bar with the selected count | Sentry | [bulk-select](references/patterns/bulk-select.md) |
+| query-tokens | Search box where `key:value` filters become removable chips and the query lives in the URL | Sentry | [query-tokens](references/patterns/query-tokens.md) |
+| conditional-status | Split button that changes state now or on a condition; resolved items regress, parked ones return | Sentry | [conditional-status](references/patterns/conditional-status.md) |
+| stack-trace | Collapsible frames with a highlighted source line; runs of library frames fold into one row | Sentry | [stack-trace](references/patterns/stack-trace.md) |
+| event-timeline | Time-ordered typed entries with type filter and search; can follow a playhead and seek to a time | Sentry | [event-timeline](references/patterns/event-timeline.md) |
+| span-waterfall | Tree of timed rows beside a shared time axis of duration bars; a click opens a side panel | Sentry | [span-waterfall](references/patterns/span-waterfall.md) |
+| replay-player | Transport controls and a marker lane over a recorded sequence, with tabs that follow the playhead | Sentry | [replay-player](references/patterns/replay-player.md) |
+| aggregate-builder | Rail that picks what to visualize, group and sort, driving a chart and Samples and Aggregates tabs | Sentry | [aggregate-builder](references/patterns/aggregate-builder.md) |
 
 Each app has a study note in `references/apps/<app>.md` if a reference points to evidence you need.
 
@@ -49,14 +58,15 @@ A style is the look of one app: colors (light and dark), radius, fonts, border a
 | dense-dark | Flat charcoal, steel-blue solid selection, monospace data cells | TablePlus, Obsidian |
 | glass-launcher | Translucent blurred panels, large radius, warm orange accent | Raycast |
 | split-tone | Dark sidebar on a light canvas, rose accent, edge-striped selection | Fantastical |
+| ink-panel | Warm paper, 2px ink outlines and hard offset shadows, cobalt actions, marker-yellow selection, buttons that press in | Sentry |
 
-References: [neutral-house](references/styles/neutral-house.md), [calm-paper](references/styles/calm-paper.md), [airy-white](references/styles/airy-white.md), [cool-tool](references/styles/cool-tool.md), [dense-dark](references/styles/dense-dark.md), [glass-launcher](references/styles/glass-launcher.md), [split-tone](references/styles/split-tone.md).
+References: [neutral-house](references/styles/neutral-house.md), [calm-paper](references/styles/calm-paper.md), [airy-white](references/styles/airy-white.md), [cool-tool](references/styles/cool-tool.md), [dense-dark](references/styles/dense-dark.md), [glass-launcher](references/styles/glass-launcher.md), [split-tone](references/styles/split-tone.md), [ink-panel](references/styles/ink-panel.md).
 
 ## Building a new app
 
 1. **Read the matching references.** Pick the patterns from the index by what the user does with the records, then read each chosen `references/patterns/<p>.md` in full, including its When to use and what it leaves out. For a clone of an analyzed app, read `references/blueprints/<app>.md` first and use the patterns it names.
 2. **Name the patterns and why**, in your reply, before building: one line per pattern tying it to the user's request. Two or three is normal; one is fine; more than three usually means the request is two apps. Then pick the style:
-   - **No look named.** Name one style with one line on why it fits, list the other six names, and say "Say the word to switch." Scaffold with the one you named; do not wait for an answer.
+   - **No look named.** Name one style with one line on why it fits, list the other seven names, and say "Say the word to switch." Scaffold with the one you named; do not wait for an answer.
    - **A studied app named** ("make it look like Linear"). Map it through the Studied from column of the Style index and use that style. Say the style keeps the feel of the app, not its exact look.
    - **A variation** ("like Things 3 but green"). Use the nearest style, then tune the accent in `src/styles/mini-tokens.css` after the scaffold. Run `python3 "$SKILL_DIR/scripts/build_styles.py" --check-file <app>/src/styles/mini-tokens.css` and fix any contrast failure it reports. Tell the user the app no longer matches a shipped style, so a later style switch needs `--force`.
 3. **Scaffold.** The target must not exist and its parent must:
@@ -73,7 +83,7 @@ References: [neutral-house](references/styles/neutral-house.md), [calm-paper](re
 
 ## When no pattern fits
 
-If the request matches none of the ten well (a waveform audio editor, a 3D scene tool), say so. Do not stretch a pattern into a shape it wasn't built for.
+If the request matches none of the patterns well (a waveform audio editor, a 3D scene tool), say so. Do not stretch a pattern into a shape it wasn't built for.
 
 - Offer the base alone: `new_app.py <target_dir>` with no `--patterns` gives the shell, the style tokens, keyboard layer, browser store with JSON export and import, and empty, loading and error states.
 - List the two or three nearest patterns, each with why it falls short, using the pattern's own When to use.

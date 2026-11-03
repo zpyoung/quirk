@@ -40,4 +40,6 @@ export interface ViewConfig {
   sort?: SortRule
   groupBy?: string
   dateField?: string
+  /** Saved search text; read and saved only when `trackUnsaved` is on. */
+  query?: string
 }

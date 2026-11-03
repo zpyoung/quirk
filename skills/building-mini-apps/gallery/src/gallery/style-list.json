@@ -26,5 +26,9 @@
   {
     "slug": "split-tone",
     "name": "Split Tone"
+  },
+  {
+    "slug": "ink-panel",
+    "name": "Ink Panel"
   }
 ]

@@ -5,7 +5,8 @@ Usage:
     new_app.py <target_dir> [--patterns p1,p2,...] [--style <slug>]
 
 Without --patterns only the base is installed. --style picks the look (default neutral-house; one
-of the seven in styles/). Steps run in order: init, add, style, tokens, build, dev.
+of the eight in styles/). Steps run in order: init, add, style, tokens, press (installs the press
+marker), build, dev.
 
 Exits 0 on success (printing the app path, patterns and style), 1 when a step fails (naming it and
 printing the tail of its output), and 2 on a usage error, checked before any command runs: an
@@ -77,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         lambda a: _mini.add_step(a, patterns),
         lambda a: _mini.style_step(a, args.style),
         lambda a: _mini.tokens_step(a),
+        lambda a: _mini.press_step(a),
         _mini.build_step,
         _mini.dev_step,
     )

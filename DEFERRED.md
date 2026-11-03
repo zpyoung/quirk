@@ -227,3 +227,20 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: L
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-28: A panel hook for list containers so heavy styles reach them
+- **Deferred**: 2026-10-26
+- **Session context**: Ink Panel style gallery pass (docs/quirk/specs/2026-10-24-ink-panel-style/)
+- **Why deferred**: Ink Panel draws its 2px ink outline and offset shadow through the `data-mini="panel"` / `"surface"` hooks and shadcn `data-slot` attributes. Some blocks' main list box (list-peek's list, for one) carries neither, so it keeps a thin border while buttons and menus around it are inked. Fixing it means adding a hook role to those containers in gallery/src/patterns/, which the styles work fences off, and checking every style still looks right with the new hook.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-29: SDD Step 5 must pass each plan task's effort hint to the implementer dispatch
+- **Deferred**: 2026-11-02
+- **Session context**: plans-dag-shape: writing-plans task-sizing and effort rules
+- **Why deferred**: writing-plans now requires effort: lower | default | higher on every task, relative to the executor's implementer default. SDD Step 5 pins effort: "high" for every implementer and the Roles table lists Implementer effort as high, so the hint is dropped. The writing-plans change that added the hint kept SDD edits out of scope. Map the hint absolutely, because the Agent tool's relative lower/higher steps from the session effort, not from SDD's pinned high: lower -> medium, default -> high, higher -> xhigh. The pi binding maps to the matching --thinking level, capped by model.json. Fixers stay high. tests/test_adversarial_review_skill.py asserts 'effort: "high"' in sdd_step(5) and needs updating with it.
+- **Estimated effort**: S
+- **Priority**: P2
+- **Proposed owner**: the next SDD change (per-task dispatch landed in #61)
+

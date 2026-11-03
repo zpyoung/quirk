@@ -1,0 +1,6 @@
+{
+  "name": "stack-trace",
+  "title": "Stack trace",
+  "description": "Collapsible frames with numbered source excerpts, library frames folded into Show N more, a relevant/full toggle, an order control and chained exceptions.",
+  "registryDependencies": ["badge", "button", "toggle-group"]
+}
