@@ -273,7 +273,7 @@ def _validate_question(q: Any, known: set[str]) -> None:
         if "description" in opt and not _is_str(opt["description"]):
             raise RunError(f"{p}.description")
     for key in ("recommended", "default"):
-        if key in q and q[key] not in values:
+        if key in q and not (_is_str(q[key]) and q[key] in values):
             raise RunError(key)
 
 
@@ -308,16 +308,16 @@ class RunStore:
 
     def _read_reports(self) -> list[dict]:
         try:
-            text = (self._dir / "reports.jsonl").read_text(encoding="utf-8")
+            raw = (self._dir / "reports.jsonl").read_bytes()
         except FileNotFoundError:
             return []
         out: list[dict] = []
-        for line in text.splitlines():
-            if not line.strip():
+        for chunk in raw.split(b"\n"):
+            if not chunk.strip():
                 continue
             try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
+                item = json.loads(chunk.decode("utf-8"))
+            except ValueError:
                 continue
             if isinstance(item, dict):
                 out.append(item)
