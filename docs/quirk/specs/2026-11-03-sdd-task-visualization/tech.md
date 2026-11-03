@@ -41,7 +41,7 @@ draws no wave bands and shows no wave counter; it shows the tasks and their edge
 | Wave | Not shown. Internally a task's **level** (the longest chain of dependency edges from a root, starting at 1; ordering edges do not raise it; a fix task takes the level after the highest task its round covers) places it in a layout column and drives the missing rule. |
 | Header "wave 2 of 4 · 2 passed · 3 running · 1 queued" | Counts only: "2 of 12 passed · 3 running · 1 queued", plus failed, needs-you and missing when non-zero. |
 | "Waves 2 to 4 faded" (SC-1) | Tasks whose dependencies have not all passed are drawn faded. |
-| Chain | A maximal path of ordering edges between tasks on the same level. Drawn as joined cards. An ordering edge across levels is drawn as a dashed arrow. |
+| Chain | Tasks joined by ordering edges. Drawn as separate cards linked by dashed ordering arrows; nodes never touch. |
 | "Checkpoint after wave 1" | `Checkpoint k`, listing the tasks it covers. Final rounds are `Final round r`. |
 | Missing, "the wave ends" | Nothing heard from either source for the task, its dependencies all passed, and either every other task on its level is terminal or the run ended. |
 | Stop chain | Stop the task and every unpassed task downstream of it through any edge. |
@@ -348,11 +348,15 @@ diff and log calls also pass --no-ext-diff --no-textconv
 Behavior comes from [Behavior and scenarios](logic.md#behavior-and-scenarios). The technical
 contracts are:
 
-- **Layout** (`APP/src/run/layout.ts`, pure): columns are levels, left to right; within a level,
-  chain members stay adjacent and in order, and rows are ordered by two barycenter sweeps. Output is
-  node boxes and edge paths in SVG user units. No layout dependency is added.
-- **Graph** (`graph.tsx`): one SVG with no bands or level labels; dependency arrows (solid), chain joins (cards
-  touching with a link glyph), cross-level ordering edges (dashed). Wheel zoom and drag pan through a
+- **Layout** (`APP/src/run/layout.ts`): ELK, the same vendored `flow` library and settings `q-flow`
+  uses (`SK/vendor/kit/1.0.0/kit.js` `canvasSpacing`, `CANVAS_EDGE_STUB`, `roundedFlowPath`):
+  `layered`, direction `RIGHT`, `ORTHOGONAL` edge routing, a 32-unit straight stub where every edge
+  leaves or enters a node, and node spacing so no two nodes touch. Dependency and ordering edges
+  are both laid out. The shell loads `flow` from `/_quirk/lib/flow/...` (no package dependency). A
+  synchronous fallback layout with the same spacing and stubbed edge paths renders first and in
+  server-side checks. Output is node boxes and edge paths in SVG user units.
+- **Graph** (`graph.tsx`): one SVG with no bands or level labels; dependency arrows (solid) and ordering arrows
+  (dashed), each with rounded orthogonal corners and an arrowhead on a straight final run. Wheel zoom and drag pan through a
   `viewBox` transform; `focusTask(id)` animates the viewBox to center and zoom on a node (SC-6).
   Failed tasks' outgoing edges turn red (SC-9). Tasks with `ready: false` are faded. A stale run
   greys the whole SVG.
