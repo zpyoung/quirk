@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.3
+
+### Changes
+- Companion-first brainstorming: run a whole brainstorm in the browser (#62)
+
 ## 2026.11.2.2
 
 ### Changes
