@@ -49,19 +49,31 @@ export function retryLines(task: RunTask): ConfirmText {
   return { title: `Retry ${task.id}?`, lines }
 }
 
+export type ConfirmTone = 'danger' | 'neutral'
+
+/** Stop chain discards work, so its confirm is styled as a danger; Retry stays neutral. */
+export function confirmTone(kind: 'stop' | 'retry'): ConfirmTone {
+  return kind === 'stop' ? 'danger' : 'neutral'
+}
+
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-/** Modal confirmation: focus moves in, Tab stays inside, Escape cancels and focus returns to the opener. */
+/**
+ * Modal confirmation: focus lands on Cancel (never the confirm button), Tab stays inside, Escape cancels and focus
+ * returns to the opener. `tone="danger"` styles the confirm button red.
+ */
 export function ConfirmDialog({
   title,
   lines,
   confirmLabel,
+  tone = 'neutral',
   onConfirm,
   onCancel,
 }: {
   title: string
   lines: string[]
   confirmLabel: string
+  tone?: ConfirmTone
   onConfirm(): void
   onCancel(): void
 }): JSX.Element {
@@ -69,7 +81,8 @@ export function ConfirmDialog({
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    ref.current?.focus()
+    const cancel = ref.current?.querySelector<HTMLElement>('.run-confirm-cancel')
+    ;(cancel ?? ref.current)?.focus()
     return () => opener?.focus()
   }, [])
 
@@ -112,8 +125,15 @@ export function ConfirmDialog({
           ))}
         </ul>
         <div className="run-confirm-actions">
-          <Button type="button" variant="secondary" size="sm" label="Cancel" onClick={onCancel} />
-          <Button type="button" variant="primary" size="sm" label={confirmLabel} onClick={onConfirm} />
+          <Button type="button" variant="secondary" size="sm" label="Cancel" className="run-confirm-cancel" onClick={onCancel} />
+          <Button
+            type="button"
+            variant={tone === 'danger' ? 'destructive' : 'primary'}
+            size="sm"
+            label={confirmLabel}
+            className={tone === 'danger' ? 'run-confirm-danger' : undefined}
+            onClick={onConfirm}
+          />
         </div>
       </div>
     </div>

@@ -54,6 +54,26 @@ if (timeline.indexOf('T1') > timeline.indexOf('T2')) failures.push('timeline: ro
 const idle = renderToStaticMarkup(createElement(Timeline, { run: makeRun({ tasks: [task('T9')] }), serverNow: 1200_000 }))
 expect('timeline empty', idle, ['No task has started yet.', 'data-run-part="timeline"'], ['<svg'])
 
+// Timeline: in-progress segments are coloured by task status and a legend names the statuses shown
+{
+  const live = makeRun({
+    tasks: [
+      task('T1', { status: 'retrying', attempts: [{ n: 1, start: 1000, end: 1050, outcome: 'retry' }, { n: 2, start: 1060 }] }),
+      task('T2', { status: 'needs-you', attempts: [{ n: 1, start: 1030 }] }),
+      task('T3', { status: 'running', attempts: [{ n: 1, start: 1040 }] }),
+      task('T4', { status: 'failed', attempts: [{ n: 1, start: 1040, end: 1100, outcome: 'failed' }] }),
+    ],
+  })
+  const html = renderToStaticMarkup(createElement(Timeline, { run: live, serverNow: 1200_000 }))
+  const segFor = (taskId: string, n: number) => html.match(new RegExp(`data-task="${taskId}".*?class="run-timeline-seg ([^"]*)" data-attempt="${n}"`))?.[1]
+  expect('timeline retrying seg', segFor('T1', 2) ?? '', ['run-timeline-seg--retrying'])
+  expect('timeline needs-you seg', segFor('T2', 1) ?? '', ['run-timeline-seg--needs-you'])
+  expect('timeline running seg', segFor('T3', 1) ?? '', ['run-timeline-seg--running'])
+  expect('timeline failed seg', segFor('T4', 1) ?? '', ['run-timeline-seg--failed'])
+  expect('timeline legend', html, ['run-timeline-legend', 'data-status="retrying"', 'data-status="needs-you"', 'data-status="running"', 'data-status="failed"'], ['data-status="queued"'])
+  if (html.indexOf('run-timeline-legend') > html.indexOf('run-timeline-axis')) failures.push('timeline: the legend must sit above the axis')
+}
+
 // Reviews
 const reviews = renderToStaticMarkup(createElement(Reviews, { run }))
 expect('reviews', reviews, [

@@ -3,6 +3,40 @@
 }
 
 .run-view {
+  .run-banner-collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+    margin-bottom: 0;
+    transition: grid-template-rows 260ms ease, margin-bottom 260ms ease, opacity 260ms ease;
+  }
+
+  .run-banner-collapse[data-collapsed='true'] {
+    grid-template-rows: 0fr;
+    margin-bottom: calc(-1 * var(--q-space-3));
+    opacity: 0;
+  }
+
+  .run-banner-collapse > .run-banner {
+    min-height: 0;
+    overflow: hidden;
+    transition: padding 260ms ease;
+  }
+
+  .run-banner-collapse[data-collapsed='true'] > .run-banner {
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+  }
+
+  .run-banner-task {
+    margin-right: var(--q-space-2);
+    border-color: var(--q-color-warn);
+    background: transparent;
+    color: var(--q-color-warn);
+    font-family: var(--q-font-mono, monospace);
+    font-weight: 600;
+  }
+
   .run-banner {
     display: flex;
     flex-direction: column;
@@ -311,4 +345,58 @@
     justify-content: flex-end;
     gap: var(--q-space-2);
   }
+}
+
+/* drawer: below 1024px it overlays the page behind a scrim; from 1024px the run view reserves its width instead */
+.run-view .run-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: rgb(0 0 0 / 0.35);
+}
+
+@media (min-width: 1024px) {
+  .run-view .run-drawer-scrim {
+    display: none;
+  }
+
+  .run-view .run-drawer {
+    box-shadow: none;
+  }
+}
+
+.run-view .run-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  padding: var(--q-space-1) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+  text-decoration: none;
+}
+
+.run-view .run-link-button:hover {
+  border-color: var(--q-color-accent);
+  color: var(--q-color-accent);
+}
+
+.run-view .run-link-button:focus-visible {
+  outline: 2px solid var(--q-color-focus);
+  outline-offset: 2px;
+}
+
+/* the stop confirm: red fill with the page background as text, which holds contrast in both themes */
+.run-view .run-confirm button.run-confirm-danger,
+.run-view .run-confirm button.run-confirm-danger:hover:not(:disabled),
+.run-view .run-confirm button.run-confirm-danger:active:not(:disabled) {
+  border-color: var(--q-color-critical);
+  background: var(--q-color-critical);
+  color: var(--q-color-bg);
+}
+
+.run-view .run-confirm button.run-confirm-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--q-color-critical) 85%, var(--q-color-text));
 }

@@ -207,7 +207,7 @@ const scenarios: [string, Scenario][] = [
       await git(wtT1(), 'commit', '-q', '-m', 'T1 work')
       await report({ kind: 'commit', task: 'T1', commit: await git(wtT1(), 'rev-parse', 'HEAD') })
       await waitStatus(page, 'T1', 'passed')
-      same((await page.locator('.run-counts').innerText()).trim(), '1 of 4 passed · 3 queued', 'header counts after the commit')
+      same((await page.locator('.run-counts .sr-only').textContent())?.trim(), '1 of 4 passed · 3 queued', 'header counts after the commit')
     },
   ],
   [
@@ -241,14 +241,14 @@ const scenarios: [string, Scenario][] = [
       same(result.code, 0, 'await exit code')
       same(result.out.answered?.source, 'tab', 'await answer source')
       same(result.out.answered?.pick, 'replan', 'await answer pick')
-      // the next poll swaps the sent note for the answered line, so either one proves the send landed
-      await card.locator('.run-card-note', { hasText: /Sent; waiting for SDD|Already answered in the tab/ }).waitFor({ timeout: STEP_MS })
+      await card.locator('.run-card-note', { hasText: 'Sent: Re-plan the task. SDD will act on it at its next step.' }).waitFor({ timeout: STEP_MS })
 
       const late = await cli(['answer', session, 'q-pick', '--source', 'orca', '--pick', 'widen'])
       same(late.code, 1, 'second answer exit code')
       same(late.out.already, true, 'second answer already flag')
       same(late.out.answered?.source, 'tab', 'the winning answer stays the tab')
-      await card.getByRole('button', { name: 'Close' }).click()
+      // the card also closes itself 4 s after the answer, so a click that misses it is not a failure
+      await card.getByRole('button', { name: 'Close' }).click({ timeout: 2_000 }).catch(() => undefined)
       await card.waitFor({ state: 'detached', timeout: STEP_MS })
     },
   ],

@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NeedsYouBanner } from '../src/run/banner'
-import { retryLines, stopChainLines } from '../src/run/confirm'
+import { ConfirmDialog, confirmTone, retryLines, stopChainLines } from '../src/run/confirm'
 import { TaskDrawer } from '../src/run/drawer'
 import { QuestionCard } from '../src/run/question-card'
 import type { RunEdge, RunQuestion, RunStatus, RunTask, RunView } from '../src/run/types'
@@ -78,8 +78,8 @@ const banner = html(createElement(NeedsYouBanner, { run: open2, onShow: noop }))
 check('banner marker', banner.includes('data-run-part="banner"'))
 check('banner region', banner.includes('role="region"') && banner.includes('aria-label="Needs you"'))
 check('banner live count', banner.includes('aria-live="polite"'))
-check('banner order', banner.indexOf('Earlier one') > -1 && banner.indexOf('Earlier one') < banner.indexOf('T6: Later one'))
-check('banner task prefix', banner.includes('T6: Later one') && !banner.includes('early: '))
+check('banner order', banner.indexOf('Earlier one') > -1 && banner.indexOf('Earlier one') < banner.indexOf('Later one'))
+check('banner task chip', /<span class="run-chip run-banner-task">T6<\/span>/.test(banner) && banner.includes('Later one') && !banner.includes('T6: '))
 check('banner show buttons', banner.split('Show on graph').length - 1 === 2)
 
 const answeredRun = mkRun([t6], [], [
@@ -120,7 +120,66 @@ const answeredCard = html(createElement(QuestionCard, {
 }))
 check('answered card marker', answeredCard.includes('data-run-part="question-card"'))
 check('answered card has no form', !answeredCard.includes('<form'))
-check('answered card line', answeredCard.includes('Already answered in orca ask: Alpha'))
+
+
+// banner: the task id is a chip and the prompt stays as written, so "T8 wrote ..." is not prefixed with "T8:"
+{
+  const dup = mkRun([t6], [], [mkQuestion('d', { task: 'T8', prompt: 'T8 wrote summary.tsx. Widen?' })])
+  const out = html(createElement(NeedsYouBanner, { run: dup, onShow: noop }))
+  check('banner no duplicated id', !out.includes('T8: T8') && !out.includes('T8:') && out.includes('>T8 wrote summary.tsx. Widen?<'))
+  check('banner chip', out.includes('<span class="run-chip run-banner-task">T8</span>'))
+  check('banner collapse wrapper', out.includes('run-banner-collapse') && out.includes('data-collapsed="false"'))
+}
+
+// question card after your own answer
+{
+  const mine = html(createElement(QuestionCard, {
+    question: mkQuestion('m', { state: 'answered', answer: { question: 'm', source: 'tab', label: 'Beta', pick: 'b', at: 1 } }), boot, onClose: noop,
+  }))
+  check('own answer note', mine.includes('Sent: Beta. SDD will act on it at its next step.'), mine)
+  check('own answer is not refusal wording', !mine.includes('Already answered'))
+  check('own answer keeps Close', mine.includes('>Close<'))
+  const typedMine = html(createElement(QuestionCard, {
+    question: mkQuestion('m2', { state: 'answered', answer: { question: 'm2', source: 'tab', text: 'my words', at: 1 } }), boot, onClose: noop,
+  }))
+  check('own typed answer note', typedMine.includes('Sent: my words. SDD will act on it at its next step.'))
+  const sdd = html(createElement(QuestionCard, {
+    question: mkQuestion('m3', { state: 'answered', answer: { question: 'm3', source: 'sdd', label: 'Alpha', pick: 'a', at: 1 } }), boot, onClose: noop,
+  }))
+  check('sdd answer wording unchanged', sdd.includes('Already answered by SDD: Alpha') && !sdd.includes('Sent:'))
+  check('orca answer wording unchanged', answeredCard.includes('Already answered in orca ask: Alpha') && !answeredCard.includes('Sent:'))
+}
+
+// radio accessible names separate the label, the recommended tag and the description
+{
+  const rec = html(createElement(QuestionCard, {
+    question: mkQuestion('r', { recommended: 'b', options: [{ value: 'a', label: 'Alpha', description: 'first one' }, { value: 'b', label: 'Beta', description: 'second one' }] }),
+    boot, onClose: noop,
+  }))
+  check('radio recommended hint', /Beta<span class="sr-only">, recommended<\/span>/.test(rec), rec)
+  check('radio description separated', /<span class="sr-only">\. <\/span><span class="run-card-option-desc">second one<\/span>/.test(rec))
+  check('radio visible tag kept', rec.includes('run-card-tag') && rec.includes('Recommended'))
+}
+
+// confirm: Stop chain is danger, Retry stays neutral, Cancel is the default focus target
+{
+  check('stop tone is danger', confirmTone('stop') === 'danger')
+  check('retry tone is neutral', confirmTone('retry') === 'neutral')
+  const stopDialog = html(createElement(ConfirmDialog, { title: 'T', lines: ['x'], confirmLabel: 'Stop chain', tone: 'danger', onConfirm: noop, onCancel: noop }))
+  const retryDialog = html(createElement(ConfirmDialog, { title: 'T', lines: ['x'], confirmLabel: 'Retry', tone: 'neutral', onConfirm: noop, onCancel: noop }))
+  check('stop confirm has the danger class', /<button[^>]*class="[^"]*run-confirm-danger[^"]*"[^>]*>(?:<[^>]*>)*Stop chain/.test(stopDialog), stopDialog)
+  check('retry confirm has no danger class', !retryDialog.includes('run-confirm-danger'))
+  check('cancel never carries the danger class', !/run-confirm-danger[^>]*>(?:<[^>]*>)*Cancel/.test(stopDialog))
+  check('cancel is marked as the initial focus', stopDialog.includes('run-confirm-cancel'))
+}
+
+// drawer links are clearly links that open a new tab
+{
+  const links = html(createElement(TaskDrawer, { run, task: { ...t7, round: 'CP1' }, boot, serverNow: 0, onClose: noop }))
+  check('drawer link hint', (links.match(/\(opens in a new tab\)/g) ?? []).length === 2)
+  check('drawer link class', (links.match(/class="run-link-button"/g) ?? []).length === 2)
+  check('drawer scrim', links.includes('run-drawer-scrim'))
+}
 
 const drawer = html(createElement(TaskDrawer, { run, task: t7, boot, serverNow: 0, onClose: noop }))
 check('drawer marker', drawer.includes('data-run-part="drawer"'))
