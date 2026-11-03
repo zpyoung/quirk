@@ -2,9 +2,12 @@
 
 ## Status & amendments
 
-**Status**: Approved (2026-11-03, signed off in the companion) · Open: the SC-17 and SC-18 thresholds were left unanswered at sign-off; the tech spec proposes values for the user to confirm
+**Status**: Approved (2026-11-03, signed off in the companion) · Tech spec: [tech.md](tech.md) (tier gate fired: crosses subsystems, touches well over 3 source files)
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-11-03: SC-17's stale threshold is 3 minutes and SC-18's fallback threshold is 2 minutes, both confirmed by the user. The SC-18 threshold also applies while a question is open: if the tab stops checking in for that long, the question goes to orca ask then.
+- 2026-11-03: SDD no longer runs waves (it dispatches each task when its own dependencies merge, since PR #61). The view draws no wave bands and shows no wave counter; the user chose to show just the tasks. The header shows counts only ("2 of 12 passed · 3 running · 1 queued"). Where scenarios say a wave starts, read the plan being registered; "waves 2 to 4 faded" means tasks whose dependencies haven't passed are faded; "Checkpoint after wave 1" is "Checkpoint 1" listing the tasks it covers; a task is missing once its dependencies passed and either every task at its depth has finished or the run ended; a chain is tasks joined by ordering edges (work on the same files that SDD serializes); Stop chain stops the task's unpassed downstream tasks. The tech spec's mapping table holds the details.
 
 `quirk:subagent-driven-development` (SDD) runs tasks in parallel waves and chains, but the only way
 to follow a run today is to read the orchestrator's prose journal in the terminal. This spec adds a
