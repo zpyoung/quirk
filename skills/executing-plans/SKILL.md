@@ -63,6 +63,12 @@ Step 0 is the first half of the stage that authors a tech spec when warranted, t
 3. Only stop for your human partner if the reviewer surfaces a genuine ambiguity you cannot
    resolve (otherwise proceed straight to execution).
 
+When the logic spec has a Screens section, the signed-off mock it links is the UX source of truth
+wherever the text is silent. UI tasks cite the mock screens they implement and carry the Screens
+acceptance items in their acceptance. Rebuild in the project's stack and never lift mock code. A
+deliberate departure from the mock needs a one-line note in the tech spec or the PR, or the
+acceptance item fails.
+
 ### Step 2: Execute Tasks
 
 For each task:
