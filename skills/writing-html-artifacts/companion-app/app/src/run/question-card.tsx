@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type JSX } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type JSX } from 'react'
 import { Button } from '@astryxdesign/core/Button'
 import type { Boot } from '../types'
 import { postRunEvent } from './api'
@@ -6,9 +6,19 @@ import type { RunAnswer, RunQuestion } from './types'
 
 type Status = 'idle' | 'sending' | 'sent' | 'error'
 
+const SENT_CLOSE_MS = 4000
+
+function answerText(answer: RunAnswer): string {
+  return answer.label ?? answer.text ?? answer.pick ?? ''
+}
+
+function sentLine(what: string): string {
+  return `Sent: ${what}. SDD will act on it at its next step.`
+}
+
 function answeredLine(answer: RunAnswer | undefined): string {
   if (!answer) return 'Already answered.'
-  const what = answer.label ?? answer.text ?? answer.pick ?? ''
+  const what = answerText(answer)
   const where = answer.source === 'orca' ? 'in orca ask' : answer.source === 'sdd' ? 'by SDD' : 'in the tab'
   return `Already answered ${where}: ${what}`
 }
@@ -24,6 +34,18 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
   const [text, setText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [lost, setLost] = useState<RunAnswer | null>(null)
+  const [sentWhat, setSentWhat] = useState<string | null>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  const answer = lost ?? question.answer
+  const sentText = sentWhat ?? (answer?.source === 'tab' ? answerText(answer) : null)
+  const sentNote = sentText !== null
+  useEffect(() => {
+    if (!sentNote) return
+    const timer = setTimeout(() => closeRef.current(), SENT_CLOSE_MS)
+    return () => clearTimeout(timer)
+  }, [sentNote])
 
   const closeButton = <Button type="button" variant="secondary" size="sm" label="Close" onClick={onClose} />
   const header = (
@@ -34,13 +56,13 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
     </header>
   )
 
-  if (question.state === 'answered' || lost) {
+  if (question.state === 'answered' || lost || sentWhat !== null) {
     return (
       <section className="run-card" aria-label="Question" data-run-part="question-card" data-question={question.id}>
         {header}
         <p className="run-card-prompt">{question.prompt}</p>
         <p className="run-card-note" role="status">
-          {answeredLine(lost ?? question.answer)}
+          {sentText !== null ? sentLine(sentText) : answeredLine(answer)}
         </p>
       </section>
     )
@@ -57,8 +79,10 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
     setStatus('sending')
     const payload = pick !== null ? { question: question.id, pick } : { question: question.id, text: typed }
     const result = await postRunEvent(boot, 'run-answer', payload)
-    if (result.kind === 'ok' || result.kind === 'duplicate') setStatus('sent')
-    else if (result.kind === 'answered') setLost(result.answer)
+    if (result.kind === 'ok' || result.kind === 'duplicate') {
+      setStatus('sent')
+      setSentWhat(pick !== null ? (question.options.find((option) => option.value === pick)?.label ?? pick) : typed)
+    } else if (result.kind === 'answered') setLost(result.answer)
     else setStatus('error')
   }
 
@@ -83,9 +107,21 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
               <span className="run-card-option-body">
                 <span>
                   {option.label}
-                  {option.value === question.recommended ? <span className="run-card-tag">Recommended</span> : null}
+                  {option.value === question.recommended ? (
+                    <>
+                      <span className="sr-only">, recommended</span>
+                      <span className="run-card-tag" aria-hidden="true">
+                        Recommended
+                      </span>
+                    </>
+                  ) : null}
                 </span>
-                {option.description ? <span className="run-card-option-desc">{option.description}</span> : null}
+                {option.description ? (
+                  <>
+                    <span className="sr-only">. </span>
+                    <span className="run-card-option-desc">{option.description}</span>
+                  </>
+                ) : null}
               </span>
             </label>
           ))}
@@ -102,11 +138,6 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
           </label>
         </fieldset>
         <Button type="submit" variant="primary" size="sm" label="Send" isDisabled={!canSend} />
-        {status === 'sent' ? (
-          <p className="run-card-note" role="status">
-            Sent; waiting for SDD
-          </p>
-        ) : null}
         {status === 'error' ? (
           <p className="run-card-note" data-tone="error" role="alert">
             Could not send your answer. Check the connection and try again.

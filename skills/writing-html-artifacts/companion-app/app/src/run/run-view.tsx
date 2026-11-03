@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useReadySignal } from '../notify'
 import type { Boot, Snapshot } from '../types'
 import { NeedsYouBanner } from './banner'
@@ -9,7 +9,7 @@ import { QuestionCard } from './question-card'
 import { Reviews } from './reviews'
 import { RunSummary } from './summary'
 import { Timeline } from './timeline'
-import type { RunQuestion, RunView } from './types'
+import type { RunQuestion, RunStatus, RunView } from './types'
 
 type Mode = 'graph' | 'timeline'
 
@@ -39,6 +39,68 @@ function newestOpenQuestionId(run: RunView): string | null {
     if (question.state === 'open' && (!newest || question.asked_at >= newest.asked_at)) newest = question
   }
   return newest?.id ?? null
+}
+
+/** Tab title: "Quirk run · <branch>", prefixed "(n) " while n questions are open. */
+export function runTitle(run: RunView): string {
+  const open = run.questions.filter((question) => question.state === 'open').length
+  return `${open > 0 ? `(${open}) ` : ''}Quirk run · ${run.branch}`
+}
+
+/**
+ * Sets the tab title and restores the previous one on unmount. A hidden tab is left alone so the ready signal's
+ * "(1) Your turn" stays up; the latest title is applied when the tab is shown again.
+ */
+function useTabTitle(title: string): void {
+  const previous = useRef<string | null>(null)
+  const first = useRef(true)
+  useEffect(() => {
+    previous.current = document.title
+    return () => {
+      if (previous.current !== null) document.title = previous.current
+    }
+  }, [])
+  useEffect(() => {
+    const apply = () => {
+      if (!document.hidden) document.title = title
+    }
+    if (first.current) {
+      first.current = false
+      document.title = title
+    } else {
+      apply()
+    }
+    window.addEventListener('focus', apply)
+    document.addEventListener('visibilitychange', apply)
+    return () => {
+      window.removeEventListener('focus', apply)
+      document.removeEventListener('visibilitychange', apply)
+    }
+  }, [title])
+}
+
+// attention first, so the chips that need a decision lead the row
+const CHIP_ORDER: [RunStatus, string, boolean][] = [
+  ['needs-you', 'needs you', true],
+  ['failed', 'failed', true],
+  ['retrying', 'retrying', false],
+  ['running', 'running', false],
+  ['queued', 'queued', false],
+  ['stopped', 'stopped', false],
+  ['skipped', 'skipped', false],
+  ['missing', 'missing', false],
+]
+
+/** Header counts split for display: the passed fraction and one entry per non-zero status. */
+export function headerCounts(run: RunView): { passedText: string; chips: { status: RunStatus; text: string; strong: boolean }[] } | null {
+  if (run.tasks.length === 0) return null
+  const tally = new Map<RunStatus, number>()
+  for (const task of run.tasks) tally.set(task.status, (tally.get(task.status) ?? 0) + 1)
+  const chips = CHIP_ORDER.flatMap(([status, label, strong]) => {
+    const n = tally.get(status) ?? 0
+    return n > 0 ? [{ status, text: `${n} ${label}`, strong }] : []
+  })
+  return { passedText: `${tally.get('passed') ?? 0} of ${run.tasks.length} passed`, chips }
 }
 
 /** The live run page: header, needs-you banner, graph or timeline, reviews and the selected task's drawer. */
@@ -74,10 +136,12 @@ function RunPageBody({
   const staleSeconds = staleSince(run, serverNow)
   const stale = staleSeconds !== null
   const counts = countsLine(run)
+  const header = headerCounts(run)
   const lostConnection = paused && !run.ended
   const hasTasks = run.tasks.length > 0
 
   useReadySignal(newestOpenQuestionId(run))
+  useTabTitle(runTitle(run))
 
   const cardQuestion = cardQuestionId ? (run.questions.find((question) => question.id === cardQuestionId) ?? null) : null
   const closeCard = () => {
@@ -100,12 +164,26 @@ function RunPageBody({
   const card = cardQuestion ? <QuestionCard question={cardQuestion} boot={boot} onClose={closeCard} /> : null
 
   return (
-    <div className="run-view" data-stale={stale ? 'true' : undefined}>
+    <div className="run-view" data-stale={stale ? 'true' : undefined} data-drawer={selectedTask && !run.ended ? 'open' : undefined}>
       <header className="run-header">
         <div className="run-header-main">
           <span className="brand">Quirk run</span>
           <span className="run-branch">{run.branch}</span>
-          {counts ? <span className="run-counts">{counts}</span> : null}
+          {header ? (
+            <span className="run-counts">
+              <span className="sr-only">{counts}</span>
+              <span className="run-counts-passed" aria-hidden="true">
+                {header.passedText}
+              </span>
+              <span className="run-counts-chips" aria-hidden="true">
+                {header.chips.map((chip) => (
+                  <span key={chip.status} className="run-chip" data-status={chip.status} data-strong={chip.strong ? 'true' : undefined}>
+                    {chip.text}
+                  </span>
+                ))}
+              </span>
+            </span>
+          ) : null}
           {headerExtras}
         </div>
         <div className="run-header-status" role="status" aria-live="polite">
@@ -123,10 +201,10 @@ function RunPageBody({
           {hasTasks ? (
             <>
               <div className="run-switch" role="group" aria-label="View">
-                <button type="button" aria-pressed={mode === 'graph'} onClick={() => setMode('graph')}>
+                <button type="button" className="run-switch-seg" aria-pressed={mode === 'graph'} onClick={() => setMode('graph')}>
                   Graph
                 </button>
-                <button type="button" aria-pressed={mode === 'timeline'} onClick={() => setMode('timeline')}>
+                <button type="button" className="run-switch-seg" aria-pressed={mode === 'timeline'} onClick={() => setMode('timeline')}>
                   Timeline
                 </button>
               </div>

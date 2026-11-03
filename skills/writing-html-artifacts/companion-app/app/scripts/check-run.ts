@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { fetchDiff, postRunEvent } from '../src/run/api'
 import { countsLine, formatElapsed, pickPage, serverOffsetMs, staleSince, staleText, taskElapsedMs } from '../src/run/format'
-import { RunPage, showOnGraphState } from '../src/run/run-view'
+import { RunPage, runTitle, showOnGraphState } from '../src/run/run-view'
 import type { RunStatus, RunTask, RunView } from '../src/run/types'
 import type { Boot, Snapshot } from '../src/types'
 
@@ -77,6 +77,42 @@ const hasPart = (html: string, name: string) =>
   check(html.includes('1 of 3 passed · 1 running · 1 queued'), 'header lacks the counts line')
   check(hasPart(html, 'graph'), 'a live run does not render the graph')
   check(!html.includes('data-stale'), 'a fresh run is marked stale')
+}
+
+// header counts as status chips: one per non-zero status, none for zero, the sentence stays as accessible text
+{
+  const run = baseRun({
+    tasks: [task('a', 'passed'), task('b', 'needs-you'), task('c', 'failed'), task('d', 'failed'), task('e', 'running'), task('f', 'queued')],
+  })
+  const html = page(run)
+  const chip = (status: string) => html.match(new RegExp(`<span class="run-chip[^"]*" data-status="${status}"[^>]*>(.*?)</span>`))
+  check(chip('failed')?.[1] === '2 failed', `failed chip = ${chip('failed')?.[1]}`)
+  check(chip('needs-you')?.[1] === '1 needs you', `needs-you chip = ${chip('needs-you')?.[1]}`)
+  check(chip('running')?.[1] === '1 running', 'running chip is missing')
+  check(chip('queued')?.[1] === '1 queued', 'queued chip is missing')
+  for (const absent of ['retrying', 'stopped', 'skipped', 'missing']) check(chip(absent) === null, `a zero ${absent} count renders a chip`)
+  check(html.includes('1 of 6 passed'), 'header lacks the passed text')
+  check(html.includes(countsLine(run)), 'header lost the counts sentence as accessible text')
+  check(/data-status="failed" data-strong="true"/.test(html) && /data-status="needs-you" data-strong="true"/.test(html), 'failed and needs-you chips are not marked strong')
+  check(!/data-status="running" data-strong/.test(html), 'a running chip is marked strong')
+  check(!page(baseRun()).includes('run-chip'), 'a run with no tasks renders chips')
+}
+
+// Graph/Timeline switch is a segmented control that keeps aria-pressed
+{
+  const html = page(liveRun())
+  check(/class="run-switch"[^>]*role="group"/.test(html) || /role="group"[^>]*class="run-switch"/.test(html), 'switch lacks the group role')
+  check(html.includes('aria-pressed="true"') && html.includes('aria-pressed="false"'), 'switch lacks aria-pressed on both segments')
+  check(/<button[^>]*class="run-switch-seg"[^>]*aria-pressed="true"[^>]*>Graph<\/button>/.test(html), 'the Graph segment is not pressed by default')
+  check(/<button[^>]*class="run-switch-seg"[^>]*aria-pressed="false"[^>]*>Timeline<\/button>/.test(html), 'the Timeline segment is not a segment button')
+}
+
+// tab title
+check(runTitle(baseRun()) === 'Quirk run · feature/live-view', `runTitle = ${runTitle(baseRun())}`)
+{
+  const q = (id: string, state: 'open' | 'answered') => ({ id, prompt: 'p', options: [], asked_at: T0, state })
+  check(runTitle(baseRun({ questions: [q('a', 'open'), q('b', 'open'), q('c', 'answered')] })) === '(2) Quirk run · feature/live-view', 'runTitle does not count open questions')
+  check(runTitle(baseRun({ questions: [q('c', 'answered')] })) === 'Quirk run · feature/live-view', 'runTitle prefixes with no open question')
 }
 
 // preflight: header and status line only

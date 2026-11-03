@@ -3,9 +3,17 @@ import { Button } from '@astryxdesign/core/Button'
 import { renderMarkdown } from '../markdown'
 import type { Boot } from '../types'
 import { postRunEvent } from './api'
-import { ConfirmDialog, retryLines, stopChainLines, type ConfirmText } from './confirm'
+import { ConfirmDialog, confirmTone, retryLines, stopChainLines, type ConfirmText } from './confirm'
 import { formatElapsed } from './format'
 import type { RunTask, RunView } from './types'
+
+function ExternalIcon(): JSX.Element {
+  return (
+    <svg className="run-link-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+      <path d="M9 2h5v5M14 2 7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
 
 const STOPPABLE = new Set(['queued', 'running', 'retrying', 'needs-you', 'failed'])
 
@@ -61,105 +69,113 @@ export function TaskDrawer({
   const canRetry = task.status === 'failed'
 
   return (
-    <aside ref={root} className="run-drawer" aria-label={`Task ${task.id}`} tabIndex={-1} data-run-part="drawer" data-task={task.id}>
-      <header className="run-drawer-head">
-        <div>
-          <h2 className="run-drawer-title">{task.title}</h2>
-          <p className="run-drawer-id">{task.id}</p>
-        </div>
-        <Button type="button" variant="secondary" size="sm" label="Close" onClick={onClose} />
-      </header>
+    <>
+    <div className="run-drawer-scrim" aria-hidden="true" onClick={onClose} />
+      <aside ref={root} className="run-drawer" aria-label={`Task ${task.id}`} tabIndex={-1} data-run-part="drawer" data-task={task.id}>
+        <header className="run-drawer-head">
+          <div>
+            <h2 className="run-drawer-title">{task.title}</h2>
+            <p className="run-drawer-id">{task.id}</p>
+          </div>
+          <Button type="button" variant="secondary" size="sm" label="Close" onClick={onClose} />
+        </header>
 
-      <p className="run-drawer-status" data-status={task.status}>
-        <span className="run-drawer-status-word">{task.status}</span>
-        {task.reason ? <span className="run-drawer-reason">{task.reason}</span> : null}
-      </p>
+        <p className="run-drawer-status" data-status={task.status}>
+          <span className="run-drawer-status-word">{task.status}</span>
+          {task.reason ? <span className="run-drawer-reason">{task.reason}</span> : null}
+        </p>
 
-      {task.attempts.length > 0 ? (
-        <section aria-label="Attempts">
-          <h3>Attempts</h3>
-          <ol className="run-drawer-attempts">
-            {task.attempts.map((attempt) => (
-              <li key={attempt.n}>
-                {`Attempt ${attempt.n}`}
-                <span className="run-drawer-elapsed">
-                  {formatElapsed((attempt.end === undefined ? serverNow : attempt.end * 1000) - attempt.start * 1000)}
-                </span>
-                <span className="run-drawer-outcome">{attempt.outcome ?? 'running'}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-      ) : null}
-
-      {contract ? (
-        <section aria-label="Contract">
-          <h3>Contract</h3>
-          <div className="md run-drawer-contract" dangerouslySetInnerHTML={{ __html: contract }} />
-        </section>
-      ) : null}
-
-      {task.labels.length > 0 ? (
-        <ul className="run-drawer-labels" aria-label="Labels">
-          {task.labels.map((label) => (
-            <li key={label}>{label}</li>
-          ))}
-        </ul>
-      ) : null}
-      {task.mismatch ? <p className="run-drawer-mismatch">{task.mismatch.text}</p> : null}
-
-      <p className="run-drawer-links">
-        <a href={`/?view=diff&task=${encodeURIComponent(task.id)}`} target="_blank" rel="noreferrer">
-          Diff
-        </a>
-        {task.round ? (
-          <a href={`/?view=findings&round=${encodeURIComponent(task.round)}`} target="_blank" rel="noreferrer">
-            Findings
-          </a>
+        {task.attempts.length > 0 ? (
+          <section aria-label="Attempts">
+            <h3>Attempts</h3>
+            <ol className="run-drawer-attempts">
+              {task.attempts.map((attempt) => (
+                <li key={attempt.n}>
+                  {`Attempt ${attempt.n}`}
+                  <span className="run-drawer-elapsed">
+                    {formatElapsed((attempt.end === undefined ? serverNow : attempt.end * 1000) - attempt.start * 1000)}
+                  </span>
+                  <span className="run-drawer-outcome">{attempt.outcome ?? 'running'}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
         ) : null}
-      </p>
 
-      {task.pending_action ? (
-        <p className="run-drawer-pending" role="status">
-          {task.pending_action === 'stop' ? 'Stop requested, waiting for SDD' : 'Retry requested, waiting for SDD'}
-        </p>
-      ) : (
-        <div className="run-drawer-actions">
-          {canStop ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              label="Stop chain"
-              onClick={() => setConfirm({ kind: 'stop', text: stopChainLines(run, task.id) })}
-            />
-          ) : null}
-          {canRetry ? (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              label="Retry"
-              onClick={() => setConfirm({ kind: 'retry', text: retryLines(task) })}
-            />
-          ) : null}
-        </div>
-      )}
-      {problem ? (
-        <p className="run-drawer-problem" role="alert">
-          {problem}
-        </p>
-      ) : null}
+        {contract ? (
+          <section aria-label="Contract">
+            <h3>Contract</h3>
+            <div className="md run-drawer-contract" dangerouslySetInnerHTML={{ __html: contract }} />
+          </section>
+        ) : null}
 
-      {confirm ? (
-        <ConfirmDialog
-          title={confirm.text.title}
-          lines={confirm.text.lines}
-          confirmLabel={confirm.kind === 'stop' ? 'Stop chain' : 'Retry'}
-          onConfirm={() => void submit()}
-          onCancel={() => setConfirm(null)}
-        />
-      ) : null}
-    </aside>
+        {task.labels.length > 0 ? (
+          <ul className="run-drawer-labels" aria-label="Labels">
+            {task.labels.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        ) : null}
+        {task.mismatch ? <p className="run-drawer-mismatch">{task.mismatch.text}</p> : null}
+
+        <p className="run-drawer-links">
+          <a className="run-link-button" href={`/?view=diff&task=${encodeURIComponent(task.id)}`} target="_blank" rel="noreferrer">
+            Diff
+            <ExternalIcon />
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+          {task.round ? (
+            <a className="run-link-button" href={`/?view=findings&round=${encodeURIComponent(task.round)}`} target="_blank" rel="noreferrer">
+              Findings
+              <ExternalIcon />
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          ) : null}
+        </p>
+
+        {task.pending_action ? (
+          <p className="run-drawer-pending" role="status">
+            {task.pending_action === 'stop' ? 'Stop requested, waiting for SDD' : 'Retry requested, waiting for SDD'}
+          </p>
+        ) : (
+          <div className="run-drawer-actions">
+            {canStop ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                label="Stop chain"
+                onClick={() => setConfirm({ kind: 'stop', text: stopChainLines(run, task.id) })}
+              />
+            ) : null}
+            {canRetry ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                label="Retry"
+                onClick={() => setConfirm({ kind: 'retry', text: retryLines(task) })}
+              />
+            ) : null}
+          </div>
+        )}
+        {problem ? (
+          <p className="run-drawer-problem" role="alert">
+            {problem}
+          </p>
+        ) : null}
+
+        {confirm ? (
+          <ConfirmDialog
+            title={confirm.text.title}
+            lines={confirm.text.lines}
+            confirmLabel={confirm.kind === 'stop' ? 'Stop chain' : 'Retry'}
+            tone={confirmTone(confirm.kind)}
+            onConfirm={() => void submit()}
+            onCancel={() => setConfirm(null)}
+          />
+        ) : null}
+      </aside>
+    </>
   )
 }
