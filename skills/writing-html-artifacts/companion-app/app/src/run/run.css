@@ -1,0 +1,63 @@
+@import './graph.css';
+@import './panels.css';
+@import './pages.css';
+
+.run-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-3);
+  min-height: 100vh;
+  padding: var(--q-space-4);
+  color: var(--q-color-text);
+  background: var(--q-color-bg);
+
+  .run-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--q-space-2);
+  }
+
+  .run-header-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--q-space-3);
+  }
+
+  .run-branch {
+    font-family: var(--q-font-mono, monospace);
+    color: var(--q-color-text-muted);
+  }
+
+  .run-counts {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .run-status-line,
+  .run-stale,
+  .run-lost {
+    margin: 0;
+  }
+
+  .run-stale,
+  .run-lost {
+    color: var(--q-color-warn);
+  }
+
+  .run-main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--q-space-3);
+  }
+
+  .run-switch {
+    display: inline-flex;
+    align-self: flex-start;
+    gap: var(--q-space-1);
+  }
+
+  .run-switch button[aria-pressed='true'] {
+    background: var(--q-color-accent);
+    color: var(--q-color-accent-text);
+  }
+}
