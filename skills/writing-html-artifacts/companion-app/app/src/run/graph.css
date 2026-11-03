@@ -52,7 +52,20 @@
   z-index: 3;
   width: 22rem;
   max-width: calc(100% - var(--q-space-4));
+  max-height: calc(100% - var(--q-space-4));
+  overflow-y: auto;
   animation: run-card-in 0.25s ease-out;
+}
+
+/* narrow graphs dock the card as a full-width panel instead of floating it beside the node */
+.run-view .run-graph-card[data-dock='true'] {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: auto;
+  max-width: none;
+  max-height: 70%;
 }
 
 /* status colours: one custom property per status, read by the card, stripe and glyph */
@@ -262,10 +275,12 @@
 .run-view .run-edge[data-failed='true'] {
   stroke: var(--q-color-critical);
 }
+/* dependency edges stay solid; the active feed is colour, weight and a pulsing glow */
 .run-view .run-edge[data-flow='true'] {
   stroke: var(--q-color-accent);
-  stroke-dasharray: 7 6;
-  animation: run-flow 0.8s linear infinite;
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 3px var(--q-color-accent));
+  animation: run-edge-glow 1.2s ease-in-out infinite;
 }
 .run-view .run-graph[data-hot] .run-edge:not([data-hot='true']) {
   opacity: 0.3;
@@ -326,9 +341,9 @@
     transform: translateX(170%);
   }
 }
-@keyframes run-flow {
-  to {
-    stroke-dashoffset: -13;
+@keyframes run-edge-glow {
+  50% {
+    filter: drop-shadow(0 0 6px var(--q-color-accent));
   }
 }
 
