@@ -228,8 +228,12 @@ def _validate_report(report: Any, known: set[str] | None) -> None:
     for name, ok in _OPTIONAL_REPORT_FIELDS.get(kind, ()):
         if name in report and not ok(report[name]):
             raise RunError(name)
-    if kind != "task-add" and "task" in report and known is not None and report["task"] not in known:
-        raise RunError("task")
+    if kind != "task-add" and "task" in report:
+        # kinds that do not require task still carry one; a non-string would be unhashable below
+        if not isinstance(report["task"], str):
+            raise RunError("task")
+        if known is not None and report["task"] not in known:
+            raise RunError("task")
     if kind == "task-add":
         _validate_task(report.get("task"), "task", known)
         if known is not None and report["task"]["id"] in known:

@@ -286,7 +286,9 @@ def fold(
 
     last_report_at = max((r["at"] for r in reports), default=None)
     candidates = [x for x in (last_report_at, (git or {}).get("changed_at") if git else None) if x is not None]
-    last_update_at = max(candidates) if candidates else None
+    # a registered run with no reports and no git facts is as fresh as the moment it is viewed; the
+    # stored run carries no registration time to fold
+    last_update_at = max(candidates) if candidates else now
     stale = None
     if ended is None and last_update_at is not None and now - last_update_at > stale_after_s:
         stale = {"since": now - last_update_at}

@@ -510,9 +510,16 @@ def test_status_text_is_the_latest_status_report_and_ended_comes_only_from_run_e
 
 def test_no_reports_means_no_status_text_start_or_staleness():
     view = run_fold(make_run(), now=T0 + 10_000)
-    assert view["started_at"] is None and view["last_update_at"] is None and view["stale"] is None
+    assert view["started_at"] is None and view["last_update_at"] == T0 + 10_000 and view["stale"] is None
     assert view["tasks"] == [] and view["edges"] == [] and view["chains"] == []
     assert "status_text" not in view
+
+
+def test_a_freshly_registered_run_has_a_last_update_and_is_not_stale():
+    run = make_run(task("A"))
+    view = run_fold(run, now=T0 + 7)
+    assert view["last_update_at"] == T0 + 7 and view["stale"] is None
+    assert run_fold(run, git=git_facts(T0 + 9, changed_at=T0 + 8), now=T0 + 10)["last_update_at"] == T0 + 8
 
 
 def test_last_update_is_the_later_of_the_last_report_and_git_changed_at():
