@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 import { Button } from '@astryxdesign/core/Button'
+import type { Boot } from '../types'
+import { QuestionCard } from './question-card'
 import type { RunQuestion, RunView } from './types'
 
 const DISMISSED_KEY = 'quirk-run-dismissed'
@@ -46,10 +48,21 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * Pinned list of what SDD is waiting on, oldest first, plus answers made outside the tab that it has not dismissed.
+ * Pinned list of what SDD is waiting on, oldest first, each answerable in place unless its card is open beside the
+ * node (`cardQuestionId`), plus answers made outside the tab that it has not dismissed.
  * When the last entry goes away the banner collapses to nothing over a short height transition (instant with reduced motion).
  */
-export function NeedsYouBanner({ run, onShow }: { run: RunView; onShow(question: RunQuestion): void }): JSX.Element | null {
+export function NeedsYouBanner({
+  run,
+  boot,
+  onShow,
+  cardQuestionId = null,
+}: {
+  run: RunView
+  boot: Boot
+  onShow(question: RunQuestion): void
+  cardQuestionId?: string | null
+}): JSX.Element | null {
   const [dismissed, setDismissed] = useState<string[]>(readDismissed)
   const [, setSettled] = useState(0)
   const lastBody = useRef<ReactNode>(null)
@@ -75,11 +88,14 @@ export function NeedsYouBanner({ run, onShow }: { run: RunView; onShow(question:
         <ul className="run-banner-list">
           {open.map((question) => (
             <li key={question.id} className="run-banner-item" data-kind="open">
-              <span className="run-banner-text">
-                {question.task ? <span className="run-chip run-banner-task">{question.task}</span> : null}
-                {question.prompt}
-              </span>
-              <Button type="button" variant="secondary" size="sm" label="Show on graph" onClick={() => onShow(question)} />
+              <div className="run-banner-row">
+                <span className="run-banner-text">
+                  {question.task ? <span className="run-chip run-banner-task">{question.task}</span> : null}
+                  {question.prompt}
+                </span>
+                <Button type="button" variant="secondary" size="sm" label="Show on graph" onClick={() => onShow(question)} />
+              </div>
+              {question.id === cardQuestionId ? null : <QuestionCard question={question} boot={boot} inline hidePrompt />}
             </li>
           ))}
           {elsewhere.map((question) => (

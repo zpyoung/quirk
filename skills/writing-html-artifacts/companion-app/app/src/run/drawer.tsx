@@ -5,6 +5,7 @@ import type { Boot } from '../types'
 import { postRunEvent } from './api'
 import { ConfirmDialog, confirmTone, retryLines, stopChainLines, type ConfirmText } from './confirm'
 import { formatElapsed } from './format'
+import { QuestionCard } from './question-card'
 import type { RunTask, RunView } from './types'
 
 function ExternalIcon(): JSX.Element {
@@ -19,7 +20,7 @@ const STOPPABLE = new Set(['queued', 'running', 'retrying', 'needs-you', 'failed
 
 type Pending = { kind: 'stop' | 'retry'; text: ConfirmText }
 
-/** Side panel for one task: status, attempts, contract, links to its diff and findings, and the Stop chain and Retry actions. */
+/** Side panel for one task: its open questions to answer, status, attempts, contract, links to its diff and findings, and the Stop chain and Retry actions. */
 export function TaskDrawer({
   run,
   task,
@@ -64,6 +65,7 @@ export function TaskDrawer({
     else setProblem(null)
   }
 
+  const openQuestions = run.questions.filter((question) => question.state === 'open' && question.task === task.id)
   const contract = renderMarkdown(task.contract_md)
   const canStop = STOPPABLE.has(task.status)
   const canRetry = task.status === 'failed'
@@ -84,6 +86,13 @@ export function TaskDrawer({
           <span className="run-drawer-status-word">{task.status}</span>
           {task.reason ? <span className="run-drawer-reason">{task.reason}</span> : null}
         </p>
+
+        {openQuestions.map((question) => (
+          <section key={question.id} className="run-drawer-question" aria-label="Needs you">
+            <h3>Needs you</h3>
+            <QuestionCard question={question} boot={boot} inline />
+          </section>
+        ))}
 
         {task.attempts.length > 0 ? (
           <section aria-label="Attempts">

@@ -253,6 +253,55 @@ const scenarios: [string, Scenario][] = [
     },
   ],
   [
+    'c2. a question answered from the banner, and one answered from its task drawer, reach await',
+    async (env) => {
+      const page = env.page
+      await ask({
+        id: 'q-banner',
+        task: 'T3',
+        prompt: 'T3 found a flaky test. Quarantine it or fix it here?',
+        options: [
+          { value: 'quarantine', label: 'Quarantine the test' },
+          { value: 'fix', label: 'Fix it in T3' },
+        ],
+      })
+      const item = page.locator('.run-banner-item[data-kind="open"]', { hasText: 'T3 found a flaky test' })
+      await item.waitFor({ timeout: STEP_MS })
+      const inBanner = item.locator('[data-run-part="question-answer"][data-question="q-banner"]')
+      const fromBanner = cli(['await', session, 'q-banner', '--quiet-after', 0, '--timeout', 10])
+      await inBanner.getByLabel('Fix it in T3').check()
+      await inBanner.getByRole('button', { name: 'Send' }).click()
+      const bannerResult = await fromBanner
+      same(bannerResult.out.answered?.source, 'tab', 'banner answer source')
+      same(bannerResult.out.answered?.pick, 'fix', 'banner answer pick')
+      await item.waitFor({ state: 'detached', timeout: STEP_MS })
+
+      await ask({
+        id: 'q-drawer',
+        task: 'T4',
+        prompt: 'T4 needs a new route name. Use /runs or /run?',
+        options: [
+          { value: 'runs', label: 'Use /runs' },
+          { value: 'run', label: 'Use /run' },
+        ],
+      })
+      await waitStatus(page, 'T4', 'needs-you')
+      await node(page, 'T4').click()
+      const drawer = page.locator('[data-run-part="drawer"][data-task="T4"]')
+      await drawer.waitFor({ timeout: STEP_MS })
+      const inDrawer = drawer.locator('[data-run-part="question-answer"][data-question="q-drawer"]')
+      const fromDrawer = cli(['await', session, 'q-drawer', '--quiet-after', 0, '--timeout', 10])
+      await inDrawer.getByRole('textbox').fill('Use /api/runs')
+      await inDrawer.getByRole('button', { name: 'Send' }).click()
+      const drawerResult = await fromDrawer
+      same(drawerResult.out.answered?.source, 'tab', 'drawer answer source')
+      same(drawerResult.out.answered?.text, 'Use /api/runs', 'drawer answer text')
+      await inDrawer.waitFor({ state: 'detached', timeout: STEP_MS })
+      await drawer.getByRole('button', { name: 'Close' }).click()
+      await drawer.waitFor({ state: 'detached', timeout: STEP_MS })
+    },
+  ],
+  [
     'd. an answer given in orca ask shows in the tab',
     async (env) => {
       const page = env.page

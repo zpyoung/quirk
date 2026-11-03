@@ -23,12 +23,23 @@ function answeredLine(answer: RunAnswer | undefined): string {
   return `Already answered ${where}: ${what}`
 }
 
+export interface QuestionCardProps {
+  question: RunQuestion
+  boot: Boot
+  /** Card mode only: closes the card; also called a few seconds after a sent answer. */
+  onClose?(): void
+  /** Answer form without the card chrome, for hosts that already show the task (banner, drawer). */
+  inline?: boolean
+  /** Inline only: keep the prompt for screen readers but hide it, when the host already shows it. */
+  hidePrompt?: boolean
+}
+
 /** One open question: its options as radios plus an Other box; sends exactly one of a pick or typed text. */
-export function QuestionCard(props: { question: RunQuestion; boot: Boot; onClose(): void }): JSX.Element {
+export function QuestionCard(props: QuestionCardProps): JSX.Element {
   return <QuestionCardBody key={props.question.id} {...props} />
 }
 
-function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; boot: Boot; onClose(): void }): JSX.Element {
+function QuestionCardBody({ question, boot, onClose, inline = false, hidePrompt = false }: QuestionCardProps): JSX.Element {
   const groupName = useId()
   const [pick, setPick] = useState<string | null>(null)
   const [text, setText] = useState('')
@@ -43,24 +54,31 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
   const sentNote = sentText !== null
   useEffect(() => {
     if (!sentNote) return
-    const timer = setTimeout(() => closeRef.current(), SENT_CLOSE_MS)
+    const timer = setTimeout(() => closeRef.current?.(), SENT_CLOSE_MS)
     return () => clearTimeout(timer)
   }, [sentNote])
 
-  const closeButton = <Button type="button" variant="secondary" size="sm" label="Close" onClick={onClose} />
-  const header = (
+  const header = inline ? null : (
     <header className="run-card-head">
       {question.task ? <span className="run-card-task">{question.task}</span> : null}
       {question.header ? <span className="run-card-header">{question.header}</span> : null}
-      {closeButton}
+      {onClose ? <Button type="button" variant="secondary" size="sm" label="Close" onClick={onClose} /> : null}
     </header>
   )
+  // inline forms use their own marker so a card beside the node and the banner's form never share a locator
+  const shell = {
+    className: inline ? 'run-card run-card--inline' : 'run-card',
+    'aria-label': inline ? `Answer ${question.task ?? 'question'}` : 'Question',
+    'data-run-part': inline ? 'question-answer' : 'question-card',
+    'data-question': question.id,
+  }
+  const promptClass = hidePrompt ? 'run-card-prompt sr-only' : 'run-card-prompt'
 
   if (question.state === 'answered' || lost || sentWhat !== null) {
     return (
-      <section className="run-card" aria-label="Question" data-run-part="question-card" data-question={question.id}>
+      <section {...shell}>
         {header}
-        <p className="run-card-prompt">{question.prompt}</p>
+        {hidePrompt ? null : <p className="run-card-prompt">{question.prompt}</p>}
         <p className="run-card-note" role="status">
           {sentText !== null ? sentLine(sentText) : answeredLine(answer)}
         </p>
@@ -87,11 +105,11 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
   }
 
   return (
-    <section className="run-card" aria-label="Question" data-run-part="question-card" data-question={question.id}>
+    <section {...shell}>
       {header}
-      <form onSubmit={send}>
+      <form onSubmit={send} className="run-card-form">
         <fieldset className="run-card-fields" disabled={locked}>
-          <legend className="run-card-prompt">{question.prompt}</legend>
+          <legend className={promptClass}>{question.prompt}</legend>
           {ordered.map((option) => (
             <label key={option.value} className="run-card-option">
               <input
@@ -129,6 +147,7 @@ function QuestionCardBody({ question, boot, onClose }: { question: RunQuestion; 
             <span>Other</span>
             <input
               type="text"
+              placeholder={inline ? 'Type another answer' : undefined}
               value={text}
               onChange={(event) => {
                 setText(event.target.value)

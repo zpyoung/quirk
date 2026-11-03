@@ -196,7 +196,7 @@ function RunPageBody({
         <RunSummary run={run} companionStopped={paused} />
       ) : (
         <main id="main" className="run-main" tabIndex={-1}>
-          <NeedsYouBanner run={run} onShow={showOnGraph} />
+          <NeedsYouBanner run={run} boot={boot} onShow={showOnGraph} cardQuestionId={cardQuestion ? cardQuestion.id : null} />
           {cardQuestion && (!cardQuestion.task || !hasTasks) ? <section className="run-card-panel">{card}</section> : null}
           {hasTasks ? (
             <>

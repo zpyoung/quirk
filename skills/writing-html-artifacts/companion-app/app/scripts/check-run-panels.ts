@@ -74,36 +74,41 @@ const open2 = mkRun([t6], [], [
   mkQuestion('late', { task: 'T6', prompt: 'Later one', asked_at: 20 }),
   mkQuestion('early', { prompt: 'Earlier one', asked_at: 10 }),
 ])
-const banner = html(createElement(NeedsYouBanner, { run: open2, onShow: noop }))
+const banner = html(createElement(NeedsYouBanner, { run: open2, boot, onShow: noop }))
 check('banner marker', banner.includes('data-run-part="banner"'))
 check('banner region', banner.includes('role="region"') && banner.includes('aria-label="Needs you"'))
 check('banner live count', banner.includes('aria-live="polite"'))
 check('banner order', banner.indexOf('Earlier one') > -1 && banner.indexOf('Earlier one') < banner.indexOf('Later one'))
 check('banner task chip', /<span class="run-chip run-banner-task">T6<\/span>/.test(banner) && banner.includes('Later one') && !banner.includes('T6: '))
 check('banner show buttons', banner.split('Show on graph').length - 1 === 2)
+check('banner answers in place', (banner.match(/data-run-part="question-answer"/g) ?? []).length === 2 && !banner.includes('data-run-part="question-card"'))
+check('banner answer form', (banner.match(/<form/g) ?? []).length === 2 && banner.includes('Send'))
+check('banner prompt not repeated visibly', banner.includes('class="run-card-prompt sr-only"'))
+const bannerWithCard = html(createElement(NeedsYouBanner, { run: open2, boot, onShow: noop, cardQuestionId: 'late' }))
+check('banner hides the form whose card is open', (bannerWithCard.match(/data-run-part="question-answer"/g) ?? []).length === 1 && bannerWithCard.includes('data-question="early"'))
 
 const answeredRun = mkRun([t6], [], [
   mkQuestion('o', { state: 'answered', answer: { question: 'o', source: 'orca', text: 'widen scope', at: 1 } }),
   mkQuestion('s', { state: 'answered', answer: { question: 's', source: 'sdd', label: 'Alpha', pick: 'a', at: 1 } }),
   mkQuestion('t', { state: 'answered', answer: { question: 't', source: 'tab', label: 'Beta', pick: 'b', at: 1 } }),
 ])
-const answeredBanner = html(createElement(NeedsYouBanner, { run: answeredRun, onShow: noop }))
+const answeredBanner = html(createElement(NeedsYouBanner, { run: answeredRun, boot, onShow: noop }))
 check('banner orca answer', answeredBanner.includes('Answered in orca ask: widen scope'))
 check('banner sdd answer', answeredBanner.includes('SDD assumed: Alpha'))
 check('banner skips tab answer', !answeredBanner.includes('Beta'))
 check('banner dismiss', answeredBanner.split('Dismiss').length - 1 === 2)
-check('banner empty', html(createElement(NeedsYouBanner, { run: mkRun([t6], [], []), onShow: noop })) === '')
+check('banner empty', html(createElement(NeedsYouBanner, { run: mkRun([t6], [], []), boot, onShow: noop })) === '')
 
 const store = new Map<string, string>([['quirk-run-dismissed', JSON.stringify([`${answeredRun.run_id}:o`])]])
 Object.assign(globalThis, {
   sessionStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) },
 })
-const dismissedBanner = html(createElement(NeedsYouBanner, { run: answeredRun, onShow: noop }))
+const dismissedBanner = html(createElement(NeedsYouBanner, { run: answeredRun, boot, onShow: noop }))
 check('banner dismissed hidden', !dismissedBanner.includes('widen scope') && dismissedBanner.includes('SDD assumed: Alpha'))
 const otherRun = { ...answeredRun, run_id: `${answeredRun.run_id}-other` }
-check('banner dismissal scoped to run', html(createElement(NeedsYouBanner, { run: otherRun, onShow: noop })).includes('widen scope'))
+check('banner dismissal scoped to run', html(createElement(NeedsYouBanner, { run: otherRun, boot, onShow: noop })).includes('widen scope'))
 Object.assign(globalThis, { sessionStorage: { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } } })
-check('banner survives blocked storage', html(createElement(NeedsYouBanner, { run: answeredRun, onShow: noop })).includes('widen scope'))
+check('banner survives blocked storage', html(createElement(NeedsYouBanner, { run: answeredRun, boot, onShow: noop })).includes('widen scope'))
 delete (globalThis as { sessionStorage?: unknown }).sessionStorage
 
 const card = html(createElement(QuestionCard, { question: mkQuestion('q', { recommended: 'b', default: 'a' }), boot, onClose: noop }))
@@ -125,7 +130,7 @@ check('answered card has no form', !answeredCard.includes('<form'))
 // banner: the task id is a chip and the prompt stays as written, so "T8 wrote ..." is not prefixed with "T8:"
 {
   const dup = mkRun([t6], [], [mkQuestion('d', { task: 'T8', prompt: 'T8 wrote summary.tsx. Widen?' })])
-  const out = html(createElement(NeedsYouBanner, { run: dup, onShow: noop }))
+  const out = html(createElement(NeedsYouBanner, { run: dup, boot, onShow: noop }))
   check('banner no duplicated id', !out.includes('T8: T8') && !out.includes('T8:') && out.includes('>T8 wrote summary.tsx. Widen?<'))
   check('banner chip', out.includes('<span class="run-chip run-banner-task">T8</span>'))
   check('banner collapse wrapper', out.includes('run-banner-collapse') && out.includes('data-collapsed="false"'))
@@ -204,6 +209,16 @@ const evil = html(createElement(TaskDrawer, {
 check('drawer escapes contract html', !evil.includes('<script>') && evil.includes('&lt;script&gt;'))
 check('drawer renders markdown', evil.includes('<strong>bold</strong>'))
 check('drawer escapes title', !evil.includes('<img'))
+
+// a task waiting on you can be answered from its drawer
+{
+  const asking = { ...run, questions: [mkQuestion('dq', { task: 'T7', prompt: 'Drawer prompt' }), mkQuestion('other', { task: 'T6', prompt: 'Not this task' })] }
+  const out = html(createElement(TaskDrawer, { run: asking, task: t7, boot, serverNow: 0, onClose: noop }))
+  check('drawer answer form', out.includes('data-run-part="question-answer"') && out.includes('data-question="dq"') && out.includes('<form'))
+  check('drawer answer prompt visible', out.includes('Drawer prompt') && !out.includes('run-card-prompt sr-only'))
+  check('drawer only its own question', !out.includes('Not this task'))
+  check('drawer without a question has no form', !drawer.includes('question-answer'))
+}
 
 if (failures.length) {
   console.error(`run-panels-check failed:\n- ${failures.join('\n- ')}`)
