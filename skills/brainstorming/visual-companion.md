@@ -43,12 +43,13 @@ python3 "$COMPANION" step "$SESSION" "$SESSION/layout.json"
 
 The open tab switches to it in place. A background tab gets the "(1) Your turn" title, a favicon badge and a sound. An invalid step exits `2` with `{"error","field"}` and nothing becomes current: fix the field and send again. Never reuse a step; each `step` call creates a new numbered one, so revise by sending a new step.
 
-Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `approaches`, `design`, `spec` or `hand-off`) and `title`, plus optional `intro_md` or `intro_html`. Unknown keys and kinds are rejected. Ids match `[a-z0-9-]{1,40}`.
+Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `approaches`, `ux-review`, `design`, `spec` or `hand-off`) and `title`, plus optional `intro_md` or `intro_html`. Unknown keys and kinds are rejected. Ids match `[a-z0-9-]{1,40}`.
 
 | Kind | Body | The user does |
 |---|---|---|
 | `questions` | 1 to 4 questions: `type` (`single`, `multi`, `text`), `prompt`, optional `header`, `recommended` (an option id), 2 to 4 `options` (`label`, `description`, `preview_html`), per-question `content_html` or Mermaid `diagram` | answers, skips, comments, submits once |
 | `approaches` | 2 to 3 cards: `title`, `summary_md`, `recommended`, `pros`, `cons`, `sources` (`title`, `url`) | picks one, optionally with a comment |
+| `mock-review` | `version` (a registered mock version, see [Mock review](#mock-review)) | clicks through the mock, pins comments, then picks Looks right, Needs changes or Skip review |
 | `design-section` | `index`, `total`, 1 to 3 `sections` (`title`, `body_md` or `body_html`, Mermaid `diagram`) | Looks right, or Needs changes plus a comment |
 | `spec-review` | `format: "markdown"` with `spec_path` and `sections`; or `format: "interactive"` | comments per section and signs off, or uses the review page |
 | `edit-card` | `decision_id`, `from`, `to`, `invalidates` (`label`, `step_id`), `origin` (`rail` or `chat`) | Confirms or cancels |
@@ -110,7 +111,7 @@ Events, and what each one means for you:
 
 | Event | Payload | Act |
 |---|---|---|
-| `submit` | by step kind: `questions` `{answers: {qid: {selected, other, text, skipped}}}`, `approaches` `{pick}`, `design-section` `{verdict}`, `spec-review` `{verdict: "sign-off"\|"changes"}`, `hand-off` `{pick}`; plus an optional `comment` | record the decisions and send the next step. A skip is logged as an open item, and re-asked only if a later step depends on it. |
+| `submit` | by step kind: `questions` `{answers: {qid: {selected, other, text, skipped}}}`, `approaches` `{pick}`, `mock-review` `{verdict: "looks-right"\|"needs-changes"\|"skip", comment?, visited, marks}`, `design-section` `{verdict}`, `spec-review` `{verdict: "sign-off"\|"changes"}`, `hand-off` `{pick}`; plus an optional `comment` | record the decisions and send the next step. A skip is logged as an open item, and re-asked only if a later step depends on it. |
 | `continue` | `{}` | "Continue without the rest" during research: stop the outstanding researchers, proceed with what returned, and mark the unfinished options "(research pending)" in the spec's Industry Insights |
 | `chat` | `{text}` | answer with `say`; leave the current step untouched. A chat message that changes a decision gets an edit card, never a silent change. |
 | `comment` | `{block_id, text, thread_id?}` | answer with `reply` |
@@ -154,6 +155,19 @@ Each decision is `{id, stage, area, label, value, status, note?}` with `status` 
   Use `--file F` for longer text. Chat text and comments render as plain text, so skip markup.
 - **Reply in the thread.** A `comment` event opens a thread pinned to its block (the thread id is on the event, and `snapshot` lists every thread). Answer with `python3 "$COMPANION" reply "$SESSION" THREAD_ID --text "..."`. When a revision addresses the comment, add `--resolve addressed`; use `--resolve not-addressed` when you decided against it.
 - **Edits go through an edit card.** For a rail Change or a chat request, send an `edit-card` step naming the decision, the old and new values, and everything it invalidates, then wait for `edit-decision`. On `confirm`, update `decide` and redo only the invalidated work.
+
+## Mock review
+
+For UI work, the UX review step shows a clickable mock inside the tab. Register each mock version, then send a `mock-review` step naming it:
+
+```bash
+python3 "$COMPANION" mock "$SESSION" mock-v1.html --version 1 --screens screens.json [--changed changed.json]
+# {"version": 1, "mock_url": "/_quirk/mock/1"}
+python3 "$COMPANION" mock-export "$SESSION" --version 3 --out docs/quirk/specs/<date-slug>/mock
+# {"files": ["...mock.html", "...screens.md", "...review.json"]}
+```
+
+Pins arrive as ordinary `comment` events and get a `reply` in their thread. The screens file, the mock's `data-*` keys, the review loop and the export are in [references/ux-review.md](references/ux-review.md); the full contract is in `docs/quirk/specs/2026-11-03-ux-review-step/tech.md`.
 
 ## Interactive spec review
 
