@@ -18,6 +18,19 @@ export interface RunPageProps {
   boot: Boot
   paused: boolean
   headerExtras?: ReactNode
+  /** Opens the card for this question on first render; lets the static checks reach the post-selection state. */
+  initialCardQuestionId?: string | null
+}
+
+export interface ShowState {
+  mode: Mode
+  cardQuestionId: string | null
+  focus: { task: string; nonce: number } | null
+}
+
+/** State after "Show on graph": always back on the graph so the card and focused node are visible. */
+export function showOnGraphState(question: RunQuestion, nonce: number): ShowState {
+  return { mode: 'graph', cardQuestionId: question.id, focus: question.task ? { task: question.task, nonce } : null }
 }
 
 function newestOpenQuestionId(run: RunView): string | null {
@@ -29,17 +42,31 @@ function newestOpenQuestionId(run: RunView): string | null {
 }
 
 /** The live run page: header, needs-you banner, graph or timeline, reviews and the selected task's drawer. */
-export function RunPage({ snapshot, boot, paused, headerExtras }: RunPageProps) {
+export function RunPage({ snapshot, boot, paused, headerExtras, initialCardQuestionId }: RunPageProps) {
   const run = snapshot.run
   if (!run) return null
-  return <RunPageBody run={run} boot={boot} paused={paused} headerExtras={headerExtras} />
+  return (
+    <RunPageBody run={run} boot={boot} paused={paused} headerExtras={headerExtras} initialCardQuestionId={initialCardQuestionId} />
+  )
 }
 
-function RunPageBody({ run, boot, paused, headerExtras }: { run: RunView; boot: Boot; paused: boolean; headerExtras?: ReactNode }) {
+function RunPageBody({
+  run,
+  boot,
+  paused,
+  headerExtras,
+  initialCardQuestionId = null,
+}: {
+  run: RunView
+  boot: Boot
+  paused: boolean
+  headerExtras?: ReactNode
+  initialCardQuestionId?: string | null
+}) {
   const [mode, setMode] = useState<Mode>('graph')
   const [selected, setSelected] = useState<string | null>(null)
   const [focus, setFocus] = useState<{ task: string; nonce: number } | null>(null)
-  const [cardQuestionId, setCardQuestionId] = useState<string | null>(null)
+  const [cardQuestionId, setCardQuestionId] = useState<string | null>(initialCardQuestionId)
 
   const clientNow = useNow()
   const offset = useMemo(() => serverOffsetMs(run, Date.now()), [run.now])
@@ -62,8 +89,10 @@ function RunPageBody({ run, boot, paused, headerExtras }: { run: RunView; boot: 
   }, [cardQuestionId, cardQuestion])
 
   const showOnGraph = (question: RunQuestion) => {
-    setCardQuestionId(question.id)
-    setFocus(question.task ? { task: question.task, nonce: Date.now() } : null)
+    const next = showOnGraphState(question, Date.now())
+    setMode(next.mode)
+    setCardQuestionId(next.cardQuestionId)
+    setFocus(next.focus)
   }
 
   const selectedTask = selected ? (run.tasks.find((task) => task.id === selected) ?? null) : null
@@ -87,43 +116,47 @@ function RunPageBody({ run, boot, paused, headerExtras }: { run: RunView; boot: 
       </header>
       {run.ended ? (
         <RunSummary run={run} companionStopped={paused} />
-      ) : hasTasks ? (
+      ) : (
         <main id="main" className="run-main" tabIndex={-1}>
           <NeedsYouBanner run={run} onShow={showOnGraph} />
-          {cardQuestion && !cardQuestion.task ? <section className="run-card-panel">{card}</section> : null}
-          <div className="run-switch" role="group" aria-label="View">
-            <button type="button" aria-pressed={mode === 'graph'} onClick={() => setMode('graph')}>
-              Graph
-            </button>
-            <button type="button" aria-pressed={mode === 'timeline'} onClick={() => setMode('timeline')}>
-              Timeline
-            </button>
-          </div>
-          {mode === 'graph' ? (
-            <RunGraph
-              run={run}
-              serverNow={serverNow}
-              selected={selected}
-              focus={focus}
-              cardTask={cardTask}
-              card={card}
-              stale={stale}
-              onSelect={setSelected}
-            />
-          ) : (
-            <Timeline run={run} serverNow={serverNow} />
-          )}
-          {run.rounds.length > 0 ? (
-            <section className="run-reviews" aria-labelledby="run-reviews-title">
-              <h2 id="run-reviews-title">Reviews</h2>
-              <Reviews run={run} />
-            </section>
-          ) : null}
-          {selectedTask ? (
-            <TaskDrawer run={run} task={selectedTask} boot={boot} serverNow={serverNow} onClose={() => setSelected(null)} />
+          {cardQuestion && (!cardQuestion.task || !hasTasks) ? <section className="run-card-panel">{card}</section> : null}
+          {hasTasks ? (
+            <>
+              <div className="run-switch" role="group" aria-label="View">
+                <button type="button" aria-pressed={mode === 'graph'} onClick={() => setMode('graph')}>
+                  Graph
+                </button>
+                <button type="button" aria-pressed={mode === 'timeline'} onClick={() => setMode('timeline')}>
+                  Timeline
+                </button>
+              </div>
+              {mode === 'graph' ? (
+                <RunGraph
+                  run={run}
+                  serverNow={serverNow}
+                  selected={selected}
+                  focus={focus}
+                  cardTask={cardTask}
+                  card={card}
+                  stale={stale}
+                  onSelect={setSelected}
+                />
+              ) : (
+                <Timeline run={run} serverNow={serverNow} />
+              )}
+              {run.rounds.length > 0 ? (
+                <section className="run-reviews" aria-labelledby="run-reviews-title">
+                  <h2 id="run-reviews-title">Reviews</h2>
+                  <Reviews run={run} />
+                </section>
+              ) : null}
+              {selectedTask ? (
+                <TaskDrawer run={run} task={selectedTask} boot={boot} serverNow={serverNow} onClose={() => setSelected(null)} />
+              ) : null}
+            </>
           ) : null}
         </main>
-      ) : null}
+      )}
     </div>
   )
 }

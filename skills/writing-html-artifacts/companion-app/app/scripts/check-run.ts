@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { fetchDiff, postRunEvent } from '../src/run/api'
 import { countsLine, formatElapsed, pickPage, serverOffsetMs, staleSince, staleText, taskElapsedMs } from '../src/run/format'
-import { RunPage } from '../src/run/run-view'
+import { RunPage, showOnGraphState } from '../src/run/run-view'
 import type { RunStatus, RunTask, RunView } from '../src/run/types'
 import type { Boot, Snapshot } from '../src/types'
 
@@ -63,8 +63,8 @@ const snapshot = (run: RunView): Snapshot => ({
   rev: 1, mode: 'app', step: null, step_state: 'open', status: null, stages: [], decisions: [], chat: [], threads: [],
   review_registered: false, run,
 })
-const page = (run: RunView, paused = false) =>
-  renderToStaticMarkup(createElement(RunPage, { snapshot: snapshot(run), boot, paused }))
+const page = (run: RunView, paused = false, initialCardQuestionId: string | null = null) =>
+  renderToStaticMarkup(createElement(RunPage, { snapshot: snapshot(run), boot, paused, initialCardQuestionId }))
 
 const hasPart = (html: string, name: string) =>
   html.includes(`data-run-part="${name}"`) || html.includes(`data-stub="${name}"`)
@@ -85,6 +85,34 @@ const hasPart = (html: string, name: string) =>
   check(html.includes('Preflight: checking backends'), 'preflight lacks the status line')
   check(!hasPart(html, 'graph'), 'preflight rendered the graph')
   check(!hasPart(html, 'timeline'), 'preflight rendered the timeline')
+}
+
+// preflight question: zero tasks still shows the banner, and selecting it opens the card in the task-less panel
+{
+  const run = baseRun({
+    status_text: 'Preflight: checking backends',
+    questions: [{ id: 'q1', prompt: 'Which backend?', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], asked_at: T0 + 8, state: 'open' }],
+  })
+  const before = page(run)
+  check(hasPart(before, 'banner'), 'a zero-task run with an open question lacks the banner')
+  check(before.includes('Which backend?'), 'the zero-task banner lacks the question')
+  check(!before.includes('run-card-panel'), 'the card shows before the question is selected')
+  check(!hasPart(before, 'graph') && !hasPart(before, 'timeline'), 'a zero-task run with a question rendered the graph or timeline')
+  const after = page(run, false, 'q1')
+  check(after.includes('run-card-panel'), 'selecting the zero-task question does not open the card panel')
+  check(after.includes('data-run-part="question-card"'), 'the card panel lacks the question card')
+  check(!hasPart(page(baseRun()), 'banner'), 'a zero-task run with no questions renders the banner')
+}
+
+// Show on graph from the timeline switches back to the graph and opens the card
+{
+  const question = { id: 'q1', task: 'T2', prompt: 'Which?', options: [], asked_at: T0 + 8, state: 'open' as const }
+  const next = showOnGraphState(question, 42)
+  check(next.mode === 'graph', 'Show on graph does not switch the view to the graph')
+  check(next.cardQuestionId === 'q1', 'Show on graph does not select the question')
+  check(next.focus?.task === 'T2' && next.focus.nonce === 42, 'Show on graph does not focus the question task')
+  const taskless = showOnGraphState({ id: 'q2', prompt: 'Which?', options: [], asked_at: T0, state: 'open' }, 7)
+  check(taskless.mode === 'graph' && taskless.focus === null, 'Show on graph for a task-less question is wrong')
 }
 
 // ended run renders the summary instead of the live layout
@@ -160,6 +188,9 @@ check(staleText(125) === 'No update for 2 min', `staleText(125) = ${staleText(12
   check(staleSince(run, run.now * 1000) === 240, `staleSince = ${staleSince(run, run.now * 1000)}`)
   check(staleSince(liveRun({ last_update_at: T0, now: T0 + 100 }), (T0 + 100) * 1000) === null, 'staleSince under the threshold is not null')
   check(staleSince(liveRun({ last_update_at: T0, ended: { at: T0, outcome: 'clean' } }), (T0 + 999) * 1000) === null, 'staleSince of an ended run is not null')
+  const nullUpdate = { ...liveRun({ now: T0 + 9999 }), last_update_at: null } as unknown as RunView
+  check(staleSince(nullUpdate, (T0 + 9999) * 1000) === null, 'staleSince of a run with a null last_update_at is not null')
+  check(!page(nullUpdate).includes('data-stale'), 'a run with a null last_update_at renders stale')
   const t = task('T9', 'running', { started_at: T0 })
   check(taskElapsedMs(t, (T0 + 12) * 1000) === 12_000, 'taskElapsedMs of a running task')
   check(taskElapsedMs(task('T9', 'passed', { started_at: T0, ended_at: T0 + 3 }), (T0 + 99) * 1000) === 3_000, 'taskElapsedMs freezes at ended_at')
