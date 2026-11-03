@@ -49,10 +49,10 @@ const round = (n: number) => Math.round(n * 100) / 100
  * by two barycenter sweeps over dependency edges, ties broken by plan order. Pure and deterministic.
  */
 export function layoutRun(run: RunView, opts: LayoutOptions = {}): GraphLayout {
-  const w = opts.nodeW ?? 230
+  const w = opts.nodeW ?? 248
   const h = opts.nodeH ?? 96
-  const colGap = opts.colGap ?? 90
-  const rowGap = opts.rowGap ?? 28
+  const colGap = opts.colGap ?? 72
+  const rowGap = opts.rowGap ?? 16
 
   const plan = new Map(run.tasks.map((task, index) => [task.id, index]))
   const levels = [...new Set(run.tasks.map((task) => task.level))].sort((a, b) => a - b)
@@ -208,6 +208,18 @@ export function zoomFloor(layout: GraphLayout, size: Size): number {
 
 export function clampZoom(z: number, floor: number = MIN_ZOOM): number {
   return Math.min(MAX_ZOOM, Math.max(floor, z))
+}
+
+/** The on-screen size in px of text drawn at `fontPx` user units once the view sits at the fit zoom. */
+export function effectiveFontPx(layout: GraphLayout, size: Size, fontPx: number): number {
+  return fontPx * fitZoom(layout, size)
+}
+
+/** True when the view has been panned or zoomed off the fit view, beyond a few px of drift. */
+export function isZoomedAway(view: View, layout: GraphLayout, size: Size): boolean {
+  const fit = fitView(layout, size)
+  if (Math.abs(view.z / fit.z - 1) > 0.02) return true
+  return Math.hypot(view.cx - fit.cx, view.cy - fit.cy) * view.z > 6
 }
 
 /** The view that shows every node box, centred. */

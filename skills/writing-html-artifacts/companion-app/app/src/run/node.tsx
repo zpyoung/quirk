@@ -42,10 +42,12 @@ const STATUS_GLYPH: Record<RunStatus, string> = {
 
 const REASON_STATUSES = new Set<RunStatus>(['failed', 'stopped', 'skipped', 'retrying'])
 const RADIUS = 8
-const CHIP_H = 16
+const CHIP_H = 20
+const STRIPE_W = 5
 
+const filesText = (n: number) => (n === 1 ? '1 file' : `${n} files`)
 const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`)
-const chipWidth = (text: string) => Math.ceil(text.length * 5.6 + 12)
+const chipWidth = (text: string) => Math.ceil(text.length * 7 + 14)
 
 function cardPath(w: number, h: number, top: boolean, bottom: boolean): string {
   const rt = top ? RADIUS : 0
@@ -104,12 +106,12 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
 
   const meta = [task.id]
   if (elapsed !== null) meta.push(formatElapsed(elapsed))
-  if (task.files > 0) meta.push(task.files === 1 ? '1 file' : `${task.files} files`)
+  if (task.files > 0) meta.push(filesText(task.files))
 
   const chips = chipsFor(task)
   const shown: { chip: Chip; x: number }[] = []
-  let cursor = 12
-  const room = w - 12
+  let cursor = 14
+  const room = w - 14
   for (const chip of chips) {
     const width = chipWidth(chip.text)
     const remaining = chips.length - shown.length - 1
@@ -125,7 +127,7 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
     `${task.id} ${task.title}`,
     STATUS_WORD[status],
     elapsed === null ? null : formatElapsed(elapsed),
-    task.files > 0 ? `${task.files} files` : null,
+    task.files > 0 ? filesText(task.files) : null,
     task.attempt > 1 ? `try ${task.attempt}` : null,
     task.reason ?? null,
     ...task.labels,
@@ -168,31 +170,31 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
       <path className="run-node-card" d={shape} />
       {status === 'needs-you' ? <path className="run-node-pulse" d={shape} /> : null}
       {flash > 0 ? <path key={flash} className="run-node-flash" d={shape} /> : null}
+      <rect className="run-node-stripe" x={0} y={joinedAbove ? 0 : 2} width={STRIPE_W} height={joinedBelow ? h : h - 2} />
       {status === 'running' ? (
-        <svg className="run-node-shimmer" width={w} height={h} aria-hidden="true">
-          <rect className="run-node-sweep" x={0} y={0} width={w * 0.6} height={h} fill="url(#run-shimmer-grad)" />
+        <svg className="run-node-shimmer" x={0} y={joinedAbove ? 0 : 2} width={STRIPE_W} height={joinedBelow ? h : h - 2} aria-hidden="true">
+          <rect className="run-node-sweep" x={0} y={0} width={STRIPE_W} height={h * 0.45} />
         </svg>
       ) : null}
-      <rect className="run-node-stripe" x={0} y={joinedAbove ? 0 : 2} width={5} height={joinedBelow ? h : h - 2} />
-      <text className="run-node-title" x={14} y={24}>
-        {clip(task.title, Math.floor((w - 56) / 6.8))}
+      <text className="run-node-title" x={16} y={26}>
+        {clip(task.title, Math.floor((w - 60) / 8.8))}
       </text>
-      <text className="run-node-meta" x={14} y={42}>
-        {clip(meta.join(' · '), Math.floor((w - 28) / 6))}
+      <text className="run-node-meta" x={16} y={46}>
+        {clip(meta.join(' · '), Math.floor((w - 32) / 7.9))}
       </text>
       {showReason ? (
-        <text className="run-node-reason" x={14} y={58}>
-          {clip(task.reason ?? '', Math.floor((w - 28) / 5.8))}
+        <text className="run-node-reason" x={16} y={63}>
+          {clip(task.reason ?? '', Math.floor((w - 32) / 6.4))}
         </text>
       ) : null}
-      <g className="run-node-status" transform={`translate(${w - 18} 18)`} aria-hidden="true">
-        {status === 'retrying' ? <circle className="run-node-ring" r={9} /> : <circle className="run-node-dot" r={9} />}
+      <g className="run-node-status" transform={`translate(${w - 20} 20)`} aria-hidden="true">
+        {status === 'retrying' ? <circle className="run-node-ring" r={10} /> : <circle className="run-node-dot" r={10} />}
         <text className="run-node-glyph" textAnchor="middle" dy="0.35em">
           {STATUS_GLYPH[status]}
         </text>
       </g>
       {shown.map(({ chip, x }) => (
-        <g key={`${chip.kind}-${chip.text}`} className="run-node-chip" data-kind={chip.kind} transform={`translate(${x} ${h - CHIP_H - 10})`}>
+        <g key={`${chip.kind}-${chip.text}`} className="run-node-chip" data-kind={chip.kind} transform={`translate(${x} ${h - CHIP_H - 8})`}>
           <rect width={chipWidth(chip.text)} height={CHIP_H} rx={CHIP_H / 2} />
           <text x={chipWidth(chip.text) / 2} y={CHIP_H / 2} textAnchor="middle" dy="0.35em">
             {chip.text}
@@ -200,7 +202,7 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
         </g>
       ))}
       {hidden > 0 ? (
-        <g className="run-node-chip" data-kind="more" transform={`translate(${cursor} ${h - CHIP_H - 10})`}>
+        <g className="run-node-chip" data-kind="more" transform={`translate(${cursor} ${h - CHIP_H - 8})`}>
           <rect width={chipWidth(`+${hidden}`)} height={CHIP_H} rx={CHIP_H / 2} />
           <text x={chipWidth(`+${hidden}`) / 2} y={CHIP_H / 2} textAnchor="middle" dy="0.35em">
             {`+${hidden}`}
@@ -215,7 +217,7 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
           onPointerLeave={() => onTip?.(null)}
         >
           <title>{task.mismatch.text}</title>
-          <circle r={9} />
+          <circle r={10} />
           <text textAnchor="middle" dy="0.35em">
             !
           </text>
