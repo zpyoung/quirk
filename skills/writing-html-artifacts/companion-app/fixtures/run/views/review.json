@@ -1,0 +1,186 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [],
+  "counts": {
+    "failed": 0,
+    "missing": 0,
+    "needs-you": 0,
+    "passed": 3,
+    "queued": 1,
+    "retrying": 0,
+    "running": 1,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T3",
+      "kind": "dep",
+      "to": "F1"
+    }
+  ],
+  "last_update_at": 1793664431.0,
+  "now": 1793664445.0,
+  "questions": [],
+  "rounds": [
+    {
+      "covers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "findings": [
+        {
+          "fix_task": "F1",
+          "id": "CP1-X1",
+          "lens": "types",
+          "reason": "T3 type checks fail on the watcher result shape",
+          "ruling": "accepted",
+          "severity": "high"
+        },
+        {
+          "id": "CP1-S1",
+          "lens": "scope",
+          "reason": "covered by T4",
+          "ruling": "dismissed",
+          "severity": "low"
+        }
+      ],
+      "id": "CP1",
+      "kind": "checkpoint",
+      "outcome": "fixes",
+      "title": "Checkpoint 1"
+    }
+  ],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664020.0,
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T4"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T4"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664340.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664030.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "F1"
+      ],
+      "ended_at": 1793664340.0,
+      "files": 1,
+      "held_by": "CP1",
+      "id": "T3",
+      "labels": [
+        "merge held by CP1"
+      ],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664030.0,
+      "status": "passed",
+      "title": "Git watcher"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 0,
+      "id": "T4",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "status": "queued",
+      "title": "Report command"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664430.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 1,
+      "id": "F1",
+      "labels": [
+        "fix T3 \u00b7 CP1"
+      ],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "round": "CP1",
+      "started_at": 1793664430.0,
+      "status": "running",
+      "title": "Fix type checks in the git watcher"
+    }
+  ]
+}

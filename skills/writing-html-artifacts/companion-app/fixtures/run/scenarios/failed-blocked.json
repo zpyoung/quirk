@@ -1,0 +1,212 @@
+{
+  "actions": [],
+  "git": {
+    "changed_at": 1793664605.0,
+    "observed_at": 1793664620.0,
+    "tasks": {
+      "T1": {
+        "commits": 1,
+        "files": [
+          "a.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T2": {
+        "commits": 1,
+        "files": [
+          "b.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T6": {
+        "commits": 0,
+        "files": [
+          "f.py"
+        ],
+        "merged": false,
+        "worktree_present": true
+      },
+      "T7": {
+        "commits": 0,
+        "files": [
+          "i.py",
+          "appstate.py"
+        ],
+        "merged": false,
+        "worktree_present": true
+      }
+    }
+  },
+  "now": 1793664630.0,
+  "questions": [],
+  "reports": [
+    {
+      "at": 1793664020.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T1",
+      "kind": "dispatch",
+      "n": 1,
+      "task": "T1",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "at": 1793664300.0,
+      "commit": "0101010101010101010101010101010101010101",
+      "kind": "commit",
+      "n": 2,
+      "task": "T1"
+    },
+    {
+      "at": 1793664305.0,
+      "head": "0101010101010101010101010101010101010101",
+      "kind": "merge",
+      "n": 3,
+      "task": "T1"
+    },
+    {
+      "at": 1793664025.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T2",
+      "kind": "dispatch",
+      "n": 4,
+      "task": "T2",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "at": 1793664320.0,
+      "commit": "0202020202020202020202020202020202020202",
+      "kind": "commit",
+      "n": 5,
+      "task": "T2"
+    },
+    {
+      "at": 1793664325.0,
+      "head": "0202020202020202020202020202020202020202",
+      "kind": "merge",
+      "n": 6,
+      "task": "T2"
+    },
+    {
+      "at": 1793664400.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T6",
+      "kind": "dispatch",
+      "n": 7,
+      "task": "T6",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "at": 1793664400.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T7",
+      "kind": "dispatch",
+      "n": 8,
+      "task": "T7",
+      "worktree": "/work/recharge/.worktrees/T7"
+    },
+    {
+      "at": 1793664500.0,
+      "attempt": 1,
+      "kind": "return",
+      "n": 9,
+      "task": "T7",
+      "word": "FAILED"
+    },
+    {
+      "at": 1793664505.0,
+      "attempt": 2,
+      "kind": "retry",
+      "n": 10,
+      "reason": "acceptance check failed",
+      "task": "T7"
+    },
+    {
+      "at": 1793664510.0,
+      "attempt": 2,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T7",
+      "kind": "dispatch",
+      "n": 11,
+      "task": "T7",
+      "worktree": "/work/recharge/.worktrees/T7"
+    },
+    {
+      "at": 1793664600.0,
+      "attempt": 2,
+      "kind": "return",
+      "n": 12,
+      "task": "T7",
+      "word": "FAILED"
+    },
+    {
+      "at": 1793664605.0,
+      "kind": "fail",
+      "n": 13,
+      "reason": "wrote appstate.py (out of scope)",
+      "task": "T7"
+    }
+  ],
+  "run": {
+    "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+    "branch": "feature/sdd-run-view",
+    "branch_pattern": "sdd/{run}/{task}",
+    "repo": "/work/recharge",
+    "run_id": "sdd-run-view",
+    "tasks": [
+      {
+        "deps": [],
+        "id": "T1",
+        "order_after": [],
+        "title": "Run store"
+      },
+      {
+        "deps": [],
+        "id": "T2",
+        "order_after": [],
+        "title": "Run fold"
+      },
+      {
+        "deps": [
+          "T1",
+          "T2"
+        ],
+        "id": "T6",
+        "order_after": [],
+        "title": "Snapshot run key"
+      },
+      {
+        "contract_md": "Accept `run-stop` and `run-retry` on `/_quirk/app/event`.",
+        "deps": [
+          "T1",
+          "T2"
+        ],
+        "id": "T7",
+        "order_after": [],
+        "title": "Run events route"
+      },
+      {
+        "deps": [
+          "T6"
+        ],
+        "id": "T9",
+        "order_after": [],
+        "title": "Shell run view"
+      },
+      {
+        "deps": [
+          "T7"
+        ],
+        "id": "T10",
+        "order_after": [],
+        "title": "Summary page"
+      }
+    ],
+    "v": 1
+  }
+}
