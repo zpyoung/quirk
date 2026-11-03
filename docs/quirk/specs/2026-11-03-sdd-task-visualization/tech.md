@@ -217,7 +217,7 @@ skip          {task, reason}
 supersede     {task, round, reason}                                back to queued
 hold          {task, round}
 task-add      {task: <RUN.json task>, round}                       a fix task
-round-open    {round: [A-Za-z0-9-]{1,20}, kind: "checkpoint"|"final", title, covers: [task id]}
+round-open    {round: [A-Za-z0-9-]{1,20}, round_kind: "checkpoint"|"final", title, covers: [task id]}
 round-close   {round, outcome: "clean"|"fixes"|"blocked",
                findings: [{id, lens, severity, ruling: "accepted"|"dismissed", reason, fix_task?}]}
 question      {question, task?}                                    written by ask, not by SDD
