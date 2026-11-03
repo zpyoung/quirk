@@ -47,9 +47,9 @@ Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `a
 
 | Kind | Body | The user does |
 |---|---|---|
-| `questions` | 1 to 4 questions: `type` (`single`, `multi`, `text`), `prompt`, optional `header`, `recommended` (an option id), 2 to 4 `options` (`label`, `description`, `preview_html`), per-question `content_html` or `diagram` | answers, skips, comments, submits once |
+| `questions` | 1 to 4 questions: `type` (`single`, `multi`, `text`), `prompt`, optional `header`, `recommended` (an option id), 2 to 4 `options` (`label`, `description`, `preview_html`), per-question `content_html` or Mermaid `diagram` | answers, skips, comments, submits once |
 | `approaches` | 2 to 3 cards: `title`, `summary_md`, `recommended`, `pros`, `cons`, `sources` (`title`, `url`) | picks one, optionally with a comment |
-| `design-section` | `index`, `total`, 1 to 3 `sections` (`title`, `body_md` or `body_html`, `diagram`) | Looks right, or Needs changes plus a comment |
+| `design-section` | `index`, `total`, 1 to 3 `sections` (`title`, `body_md` or `body_html`, Mermaid `diagram`) | Looks right, or Needs changes plus a comment |
 | `spec-review` | `format: "markdown"` with `spec_path` and `sections`; or `format: "interactive"` | comments per section and signs off, or uses the review page |
 | `edit-card` | `decision_id`, `from`, `to`, `invalidates` (`label`, `step_id`), `origin` (`rail` or `chat`) | Confirms or cancels |
 | `hand-off` | 2 to 3 `choices` (`label`, `description`, `recommended`) | picks the execution skill |
@@ -57,9 +57,21 @@ Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `a
 
 Rules that hold for every step:
 
-- **Recommended means labeled and first, never preselected.** The shell renders the option marked by `recommended` labeled and first; each answer stays a deliberate pick. Every `single` or `multi` question shows its own Other box, `text` questions carry no options, and the batch has one comment box. Skipping is always allowed.
+- **Recommended means labeled and first, never preselected.** The shell renders the option marked by `recommended` first, with its own "(Recommended)" tag, so leave that suffix out of the label. Each answer stays a deliberate pick. Every `single` or `multi` question shows its own Other box, `text` questions carry no options, and the batch has one comment box. Skipping is always allowed.
 - **A revision sets `changed`** (`{summary, blocks}`): the shell highlights the named blocks and shows your one-line summary of what changed.
-- **Use a picture where it explains better.** Any step can carry `content_html` with the `q-flow`, `q-schema`, `q-sequence` and `q-chart` elements, or a Mermaid `diagram` for state charts. Which diagram fits which job is in the writing-html-artifacts components reference. Users can comment on any block, so label the nodes and options you expect them to react to.
+- **Show options visually** whenever they differ in anything the user could see or feel. See [Showing options](#showing-options).
+
+## Showing options
+
+Default to a picture. When the options in a question differ visibly (layout, density, a state, how something moves or responds), give **every** option a `preview_html`; the shell then lays that question's options out as a side-by-side gallery instead of a list. Keep text-only options for choices with nothing to see, such as a policy or a default. A question-level `content_html` or `diagram` shows what all the options share, such as the structure they plug into. `diagram` takes Mermaid source only; put a `<q-flow>`, `<q-schema>` or `<q-sequence>` in `content_html` (or a design section's `body_html`), because the shell rejects HTML in `diagram`.
+
+What a preview can hold, cheapest first:
+
+- **A static mockup.** Inline HTML styled with the `--q-color-*` and `--q-space-*` tokens so it follows the theme, inline SVG, or an `<img>` with a `data:` URI. Draw an SVG's `viewBox` in real pixels and set `width` to the viewBox width, never `100%`: a fluid SVG scales to the column, so a 300-unit diagram on a wide screen renders its text several times too big. The shell still shrinks it on narrow screens. Show the real content the user will see (task names, statuses, counts), not lorem ipsum.
+- **Motion,** for anything that changes over time: a status ticking from running to passed, a row arriving, a fix loop retrying. Put a `<style>` block with `@keyframes` in the preview. The shell stops animations for users who ask for reduced motion, so the final frame must make sense on its own.
+- **Interaction,** when the difference is in how it feels to use. Kit elements (`q-tabs`, `q-board`, `q-flow`, `q-chart`, `q-compare`, `q-table`) are interactive and load on their own. For anything that needs script, use `<iframe sandbox="allow-scripts" srcdoc="...">` with a set `height`, because a `<script>` placed directly in `preview_html` never runs. An iframe does not inherit the page's theme, so give it colors that work in both schemes.
+
+A `<style>` block applies to the whole page, so scope every selector and keyframe name under a class unique to the step, such as `.s3-board`. Users can comment on any block, so label the nodes and options you expect them to react to. Which diagram fits which job is in the writing-html-artifacts components reference.
 
 Example, a first question batch (the adhd offer and the gray-area pick together):
 

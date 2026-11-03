@@ -31,3 +31,8 @@ export function formatElapsed(ms: number): string {
   const seconds = total % 60
   return minutes ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${seconds}s`
 }
+
+/** Drops a trailing "(Recommended)" an agent typed into a label, since the shell shows its own Recommended tag. */
+export function stripRecommended(label: string): string {
+  return label.replace(/\s*\(recommended\)\s*$/i, '')
+}

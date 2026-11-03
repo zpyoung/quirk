@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type FormEvent } from 'react'
 import type { Draft, Step } from '../types'
 import { pickDraft, restorePick } from './draft'
 import { CommentField, FormError, StepFrame, SubmitButton, Tag, blockAttrs, useDraftSync, type ViewProps } from './common'
+import { stripRecommended } from '../format'
 
 type HandOffStep = Extract<Step, { kind: 'hand-off' }>
 
@@ -42,7 +43,7 @@ export function HandOffView({ step, changed, draft, actions }: ViewProps<HandOff
                   <input id={inputId} type="radio" name={name} value={choice.id} checked={pick === choice.id} onChange={() => setPick(choice.id)} />
                   <span className="option-text">
                     <span className="option-label">
-                      {choice.label}
+                      {stripRecommended(choice.label)}
                       {choice.recommended ? <>{' '}<Tag>Recommended</Tag></> : null}
                     </span>
                     <span className="option-description">{choice.description}</span>

@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { ChatPanel } from './chat'
 import { CommentsProvider, useComments } from './comments'
 import { DecisionsPanel } from './decisions'
 import { Recap, Rail } from './rail'
+import { SidePanel, useSideLayout } from './side'
 import type { Actions, Snapshot, StageId } from './types'
 import { StepArea } from './views/step-area'
 
@@ -27,8 +28,10 @@ function StepRoot({ children }: { children: ReactNode }) {
   )
 }
 
-/** The four-region layout: rail, main step area, and a right column that holds the Chat and Decisions panels. */
+/** The four-region layout: rail, main step area, and a collapsible, resizable right sidebar that holds the Chat and Decisions panels. */
 export function ShellView({ snapshot, token, actions, paused, submittedStepId, openStage, onOpenStage, headerExtras }: ShellViewProps) {
+  const side = useSideLayout()
+  const gridStyle = { '--side-w': side.layout.collapsed ? 'auto' : `${side.layout.width}px` } as CSSProperties
   return (
     <CommentsProvider threads={snapshot.threads} stepId={snapshot.step?.id ?? null} actions={actions}>
       <div className="shell">
@@ -39,7 +42,7 @@ export function ShellView({ snapshot, token, actions, paused, submittedStepId, o
           </div>
           {headerExtras}
         </header>
-        <div className="shell-grid">
+        <div className="shell-grid" style={gridStyle} data-side={side.layout.collapsed ? 'collapsed' : 'open'}>
           <Rail stages={snapshot.stages} openStage={openStage} onOpen={(stage) => onOpenStage(openStage === stage ? null : stage)} />
           <main id="main" className="main" tabIndex={-1}>
             {openStage ? <Recap key={openStage} stage={openStage} decisions={snapshot.decisions} actions={actions} onClose={() => onOpenStage(null)} /> : null}
@@ -49,10 +52,10 @@ export function ShellView({ snapshot, token, actions, paused, submittedStepId, o
               </StepRoot>
             </div>
           </main>
-          <aside className="side" aria-label="Session">
+          <SidePanel chat={snapshot.chat} layout={side.layout} setWidth={side.setWidth} toggle={side.toggle}>
             <ChatPanel chat={snapshot.chat} actions={actions} />
             <DecisionsPanel decisions={snapshot.decisions} />
-          </aside>
+          </SidePanel>
         </div>
       </div>
     </CommentsProvider>

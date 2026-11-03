@@ -84,7 +84,7 @@ body {
 .shell-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: 12rem minmax(0, 1fr) 20rem;
+  grid-template-columns: 12rem minmax(0, 1fr) var(--side-w, 20rem);
   gap: var(--q-space-4);
   padding: var(--q-space-4);
   align-items: start;
@@ -95,6 +95,11 @@ body {
   }
   .side {
     grid-column: 1 / -1;
+    position: static;
+    max-height: none;
+  }
+  .side-resize {
+    display: none;
   }
 }
 @media (max-width: 680px) {
@@ -158,10 +163,93 @@ body {
 }
 
 .side {
+  position: sticky;
+  top: var(--q-space-4);
   display: flex;
   flex-direction: column;
   gap: var(--q-space-4);
   min-width: 0;
+  max-height: calc(100vh - 2 * var(--q-space-4));
+  overflow-y: auto;
+  padding-left: var(--q-space-2);
+}
+.side[data-collapsed] {
+  overflow: visible;
+  padding-left: 0;
+}
+.side-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: calc(-1 * var(--q-space-2));
+}
+.side-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--q-space-2);
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.side-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 120ms;
+}
+.side-resize:hover::after,
+.side-resize:focus-visible::after,
+body[data-resizing='side'] .side-resize::after {
+  background: var(--q-color-accent);
+}
+body[data-resizing='side'] {
+  cursor: col-resize;
+  user-select: none;
+}
+.side-expand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--q-space-2);
+  padding: var(--q-space-3) var(--q-space-1);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.side-expand:hover {
+  border-color: var(--q-color-accent);
+}
+.side-expand-label {
+  writing-mode: vertical-rl;
+  font-size: var(--q-size-small);
+}
+.side-unread {
+  min-width: 1.4rem;
+  padding: 0 var(--q-space-1);
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-accent);
+  color: var(--q-color-accent-text);
+  font-size: var(--q-size-small);
+  text-align: center;
+}
+@media (max-width: 980px) {
+  .side-expand {
+    flex-direction: row;
+    width: 100%;
+    justify-content: center;
+  }
+  .side-expand-label {
+    writing-mode: horizontal-tb;
+  }
 }
 .panel {
   border: 1px solid var(--q-color-border);
@@ -341,6 +429,53 @@ body {
 }
 .option-preview {
   margin-top: var(--q-space-2);
+}
+.options[data-visual] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  align-items: stretch;
+}
+.options[data-visual] .option-card {
+  display: flex;
+  flex-direction: column;
+}
+.options[data-visual] .option-preview {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  padding: var(--q-space-3);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  overflow: auto;
+}
+.agent-html img,
+.agent-html video {
+  max-width: 100%;
+  height: auto;
+}
+/* kit elements size their own svg, and height:auto collapses an attribute-less one to 150px */
+.agent-html svg:not(:is(q-board, q-chart, q-code, q-compare, q-diff, q-flow, q-schema, q-sequence, q-stat, q-table, q-tabs, q-timeline) svg) {
+  max-width: 100%;
+  height: auto;
+  /* a fluid svg scales its viewBox to the column, so a 300-unit diagram on a wide screen renders 70px text */
+  &:not([width]),
+  &[width$='%'] {
+    max-width: min(100%, 40rem);
+  }
+}
+.agent-html iframe {
+  width: 100%;
+  border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-html *,
+  .agent-html *::before,
+  .agent-html *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 input[type='radio'],
 input[type='checkbox'] {
@@ -555,7 +690,7 @@ textarea {
   font-weight: 600;
 }
 .chat-log {
-  max-height: 20rem;
+  max-height: max(20rem, 50vh);
   overflow-y: auto;
   margin-bottom: var(--q-space-3);
 }

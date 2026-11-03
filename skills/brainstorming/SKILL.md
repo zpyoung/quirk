@@ -92,7 +92,7 @@ Inside a companion brainstorm:
 - **Spec:** ask the format as a question on screen. Markdown goes in a `spec-review` step, where Sign off is the review gate's approval and per-section comments get a `reply`. Interactive registers the page with `review`, sends a `spec-review` interactive step, and reads exports from `review-export` events.
 - **Edits.** A rail Change or a chat request arrives as an `edit-request`. Send an `edit-card` listing what it invalidates and apply it only on an `edit-decision` confirm, then update `decide`. Never change a decision from chat without that card.
 - **Chat and comments.** Answer chat questions with `say` and leave the current step as it is. Answer each comment with `reply` in its thread, and mark it addressed when a revision covers it.
-- **Diagrams.** Use the writing-html-artifacts kit (`q-flow`, `q-schema`, `q-sequence`, `q-chart`, Mermaid `diagram` for state charts) in any step where a picture explains better.
+- **Show options, don't just describe them.** When options differ in anything the user could see or feel, every option gets a `preview_html`: a mockup for layouts, densities and states, motion for behavior over time, and an interactive element when the difference is in how it feels to use. Use the writing-html-artifacts kit (`q-flow`, `q-schema`, `q-sequence`, `q-chart`, Mermaid `diagram` for state charts) wherever a picture explains the structure better. Text-only options are for choices with nothing to see, such as a policy or a default. [visual-companion.md](visual-companion.md#showing-options) has the mechanics.
 - **Hand-off.** A `hand-off` step picks the execution skill, a `done` step follows, then `stop` the companion.
 
 ## Research Agents
@@ -232,7 +232,7 @@ For each selected gray area, generate 3–7 focused questions that progress from
 
 Per-question rules:
 - `single` choice per question
-- 2–4 concrete options, with the **recommended option first** and `(Recommended)` appended to its label
+- 2–4 concrete options, with the **recommended option first** and `(Recommended)` appended to its label (on screen, set `recommended` and the shell adds the tag)
 - `description` ≥ 1 sentence explaining implications and trade-offs
 - `header` is a short category label (e.g., "Layout", "Auth", "Errors")
 - **Order by forking power**: ask first whatever answer eliminates the most downstream options, then progress foundational → edge-case

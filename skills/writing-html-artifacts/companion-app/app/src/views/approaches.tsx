@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type FormEvent } from 'react'
 import { AgentHtml, Md, blockKey } from '../blocks'
 import type { Draft, Step } from '../types'
+import { stripRecommended } from '../format'
 import { pickDraft, restorePick } from './draft'
 import { CommentField, FormError, StepFrame, SubmitButton, Tag, blockAttrs, useDraftSync, type ViewProps } from './common'
 
@@ -41,7 +42,7 @@ export function ApproachesView({ step, changed, draft, actions }: ViewProps<Appr
               <div key={approach.id} className="approach-card" data-recommended={approach.recommended || undefined} {...blockAttrs(`approach:${approach.id}`, changed)}>
                 <label htmlFor={inputId} className="approach-pick">
                   <input id={inputId} type="radio" name={name} value={approach.id} checked={pick === approach.id} onChange={() => setPick(approach.id)} />
-                  <span className="approach-title">{approach.title}</span>
+                  <span className="approach-title">{stripRecommended(approach.title)}</span>
                   {approach.recommended ? <Tag>Recommended</Tag> : null}
                 </label>
                 <Md source={approach.summary_md} className="approach-summary" />

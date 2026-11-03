@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type FormEvent } from 'react'
 import { AgentHtml, Diagram, blockKey } from '../blocks'
 import type { AnswerState, Draft, Question, Step } from '../types'
+import { stripRecommended } from '../format'
 import { CommentField, FormError, StepFrame, SubmitButton, Tag, blockAttrs, useDraftSync, type ViewProps } from './common'
 
 type QuestionsStep = Extract<Step, { kind: 'questions' }>
@@ -152,7 +153,7 @@ function QuestionBlock({ stepId, question, answer, changed, patch }: QuestionBlo
         </div>
       ) : (
         <>
-          <div className="options">
+          <div className="options" data-visual={options.some((option) => option.preview_html) || undefined}>
             {options.map((option) => {
               const inputId = `${name}-${option.id}`
               const recommended = option.id === question.recommended
@@ -169,7 +170,7 @@ function QuestionBlock({ stepId, question, answer, changed, patch }: QuestionBlo
                     />
                     <span className="option-text">
                       <span className="option-label">
-                        {option.label}
+                        {stripRecommended(option.label)}
                         {recommended ? <>{' '}<Tag>(Recommended)</Tag></> : null}
                       </span>
                       {option.description ? <span className="option-description">{option.description}</span> : null}
