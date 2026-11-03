@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved (2026-11-03, signed off in the companion) · Open: the SC-17 and SC-18 thresholds were left unanswered at sign-off; the tech spec proposes values for the user to confirm
 
 **Amendments:** none yet.
 
