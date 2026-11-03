@@ -24,7 +24,7 @@ from typing import Any, ContextManager, Iterable, Iterator
 
 from .fsutil import atomic_write
 
-STAGES = ("context", "gray-areas", "questions", "approaches", "design", "spec", "hand-off")
+STAGES = ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
 EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export")
 
 _SENDERS = ("agent", "user", "system")
