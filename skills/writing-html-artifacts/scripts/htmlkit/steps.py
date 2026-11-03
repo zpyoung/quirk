@@ -96,6 +96,13 @@ def _optional_string(obj: dict, key: str, path: str, out: dict) -> None:
         out[key] = value
 
 
+def _mermaid(obj: dict, path: str, out: dict, html_key: str) -> None:
+    """Copy an optional Mermaid ``diagram``, rejecting markup that belongs in an HTML field."""
+    _optional_string(obj, "diagram", path, out)
+    if out.get("diagram", "").lstrip().startswith("<"):
+        raise _fail(_join(path, "diagram"), f"is Mermaid source only; put HTML such as <q-flow> in {html_key}")
+
+
 def _id(obj: dict, key: str, path: str) -> str:
     value = _required(obj, key, path)
     if not isinstance(value, str) or not ID_PATTERN.fullmatch(value):
@@ -149,8 +156,9 @@ def _question(raw: dict, path: str) -> dict:
         raise _fail(_join(path, "type"), f"must be one of {', '.join(QUESTION_TYPES)}")
     out["type"] = qtype
     out["prompt"] = _string(raw, "prompt", path)
-    for key in ("header", "content_html", "diagram"):
+    for key in ("header", "content_html"):
         _optional_string(raw, key, path, out)
+    _mermaid(raw, path, out, "content_html")
     if qtype == "text":
         for key in ("options", "recommended"):
             if key in raw:
@@ -210,8 +218,9 @@ def _exactly_one_recommended(items: list, path: str, noun: str) -> None:
 def _design_section(raw: dict, path: str) -> dict:
     _check_keys(raw, {"id", "title", "body_md", "body_html", "diagram"}, path)
     out = {"id": _id(raw, "id", path), "title": _string(raw, "title", path)}
-    for key in ("body_md", "body_html", "diagram"):
+    for key in ("body_md", "body_html"):
         _optional_string(raw, key, path, out)
+    _mermaid(raw, path, out, "body_html")
     if "body_md" not in out and "body_html" not in out:
         raise _fail(path, "needs body_md or body_html")
     return out

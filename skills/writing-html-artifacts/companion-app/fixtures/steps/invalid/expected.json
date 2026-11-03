@@ -52,5 +52,7 @@
   "hand-off-no-recommended.json": "choices",
   "hand-off-recommended-not-bool.json": "choices[0].recommended",
   "done-no-message.json": "message_md",
-  "done-empty-message.json": "message_md"
+  "done-empty-message.json": "message_md",
+  "design-diagram-html.json": "sections[0].diagram",
+  "question-diagram-html.json": "questions[0].diagram"
 }
