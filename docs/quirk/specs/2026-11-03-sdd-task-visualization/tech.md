@@ -164,8 +164,20 @@ POST /_quirk/app/event            new types, token required, no nonce:
        run-stop    payload {task}                                  204 | 200 {"duplicate":true} | 409 {"refused": reason} | 400
        run-retry   payload {task}                                  204 | 200 {"duplicate":true} | 409 {"refused": reason} | 400
 GET  /_quirk/run/diff?task=ID     200 Diff | 404 unknown task or no run
+POST /_quirk/run/open            token required; body {run_id, task}:
+       200 {"action": "switched"|"created"} | 400 | 403 bad token | 404 unknown task or no dispatch worktree
+       | 409 run_id is not the current run | 410 worktree no longer listed | 502 {"error": "orca-failed", "detail"}
+       | 503 {"error": "orca-unavailable"}
 GET  /?view=diff&task=ID, /?view=findings&round=ID   the same shell; App.tsx routes on the query
 ```
+
+- `run/open` runs the Orca CLI as an argv list with no shell and a 10 s timeout. The executable is
+  `ORCA_CLI_COMMAND`, else `orca-ide` on Linux (a bare `orca` there is a screen reader), else `orca`;
+  one not found on PATH is 503. It runs `terminal list --worktree path:<wt> --json`; when
+  `result.terminals` is non-empty it runs `terminal switch --terminal <handle> --json` with the first
+  terminal's `handle`, else `terminal create --worktree path:<wt> --title "<task id> <title>" --focus --json`.
+  A non-zero exit or `ok: false` is 502 with the first line of the error, cut to 200 characters. `<wt>` is the
+  `dispatch` report's worktree and is used only when `git worktree list` lists it (410 otherwise).
 
 - `run-answer` on an answered question returns 409 with the winning answer, and the card shows
   "Answered in orca ask: <label>" (SC-18, SC-19). Exactly one of `pick` and `text`; `pick` must be
@@ -254,7 +266,7 @@ SCHEMA (RunView, `snapshot.run`; pinned by `APP/src/run/types.ts` and the view f
  counts: {<status>: int},
  last_update_at, stale: null | {since: seconds}, stale_after_s, now,
  tasks: [{id, title, contract_md?, level, chain?: chain id, status, attempt, reason?,
-          attempts: [{n, start, end?, outcome?}], started_at?, ended_at?,
+          attempts: [{n, start, end?, outcome?}], started_at?, ended_at?, worktree?: abs path (latest dispatch),
           files: int, ready: bool, blocked_by: [id], downstream: [id], round?: round id,
           labels: [str], mismatch: null | {sdd: str, git: str, text: str},
           question?: id, pending_action?: "stop"|"retry", held_by?: round id}],
@@ -374,7 +386,9 @@ contracts are:
   Other text box, Send. A 409 shows the winning answer. The same component renders the inline form
   in the banner and the drawer.
 - **Drawer** (`drawer.tsx`): the task's open questions as inline answer forms, contract (markdown-it, as text-safe as `APP/src/markdown.ts`), status,
-  attempts, Diff link and Findings link (`target="_blank"` to `/?view=...`), Stop chain and Retry.
+  attempts, Diff link and Findings link (`target="_blank"` to `/?view=...`), Open in Orca (shown when the task has a
+  `worktree` and the run has not ended; posts to `/_quirk/run/open` and shows "Opened in Orca", "Opened a new
+  terminal in Orca" or the error), Stop chain and Retry.
 - **Confirm** (`confirm.tsx`): Stop chain lists the task's fate, each `downstream` task that will be
   marked stopped, the committed predecessors that stay, and that other chains keep going (SC-10).
   Retry names the next attempt number and the last `reason` (SC-11).
@@ -474,6 +488,7 @@ Traces to [Key decisions and rationale](logic.md#key-decisions-and-rationale).
 - Write state with `htmlkit.fsutil.atomic_write`; append JSONL under the app lock.
 - Keep `fold` pure: no clock, no I/O, `now` passed in.
 - Run every git call through `gitwatch.git()`.
+- Run only the fixed `orca terminal list`, `switch` and `create` argv, and only on a worktree the repo lists.
 - Render user and report text as text.
 
 **Ask**

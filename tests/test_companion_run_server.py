@@ -688,6 +688,140 @@ def test_diff_route_does_not_exist_in_screen_mode(tmp_path: Path) -> None:
         proc.stderr.close()
 
 
+# ---- open in orca ------------------------------------------------------------------------------
+
+FAKE_ORCA = """#!{python}
+import json, pathlib, sys
+here = pathlib.Path(__file__).parent
+with open(here / "argv.log", "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\\n")
+canned = here / ("canned-" + sys.argv[2] + ".json")
+if (here / "fail").exists():
+    sys.stderr.write("orca is not running\\nsecond line\\n")
+    sys.exit(1)
+print(canned.read_text() if canned.exists() else json.dumps({{"ok": True, "result": {{}}}}))
+"""
+
+
+class FakeOrca:
+    """An executable stand-in for the Orca CLI that logs its argv and prints canned JSON per subcommand."""
+
+    def __init__(self, directory: Path) -> None:
+        self.dir = directory
+        directory.mkdir(parents=True, exist_ok=True)
+        self.exe = directory / "orca-fake"
+        self.exe.write_text(FAKE_ORCA.format(python=sys.executable))
+        self.exe.chmod(0o755)
+
+    def can(self, sub: str, payload: dict) -> None:
+        (self.dir / f"canned-{sub}.json").write_text(json.dumps(payload))
+
+    def calls(self) -> list[list[str]]:
+        log = self.dir / "argv.log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+@pytest.fixture
+def fake_orca(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeOrca:
+    fake = FakeOrca(tmp_path / "fake-orca")
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(fake.exe))
+    return fake
+
+
+@pytest.fixture
+def worktree_app(tmp_path: Path, session: Path, repo: Repo, fake_orca: FakeOrca):
+    """A run whose T1 was dispatched into a real listed worktree, T2 into an unlisted path, T3 nowhere."""
+    wt = tmp_path / "wt-T1"
+    g(repo.path, "worktree", "add", "-q", "-b", "sdd/r1/T1", str(wt), "feat")
+    srv = start_app(tmp_path / "root", session, repo=repo)
+    try:
+        srv.run_start(run_doc(repo, tk("T1"), tk("T2"), tk("T3")))
+        srv.report({**dispatch("T1"), "worktree": str(wt)})
+        srv.report({**dispatch("T2"), "worktree": str(tmp_path / "gone")})
+        srv.wt = wt
+        yield srv
+    finally:
+        stop_app(srv)
+
+
+def open_task(app: App, task: str = "T1", run_id: str = "r1", **kw):
+    status, data = app.post("/_quirk/run/open", {"run_id": run_id, "task": task}, **kw)
+    return status, (json.loads(data) if data else None)
+
+
+def test_open_requires_the_token(worktree_app: App, fake_orca: FakeOrca) -> None:
+    assert open_task(worktree_app, token=None)[0] == 403
+    assert open_task(worktree_app, token="wrong")[0] == 403
+    assert fake_orca.calls() == []
+
+
+def test_open_refuses_another_run_an_unknown_task_and_a_task_without_a_worktree(
+    worktree_app: App, fake_orca: FakeOrca
+) -> None:
+    assert open_task(worktree_app, run_id="other")[0] == 409
+    assert open_task(worktree_app, "NOPE")[0] == 404
+    assert open_task(worktree_app, "T3")[0] == 404
+    assert fake_orca.calls() == []
+
+
+def test_open_never_acts_on_an_unlisted_worktree(worktree_app: App, fake_orca: FakeOrca) -> None:
+    assert open_task(worktree_app, "T2")[0] == 410
+    assert fake_orca.calls() == []
+
+
+def test_open_switches_to_the_first_existing_terminal(worktree_app: App, fake_orca: FakeOrca) -> None:
+    fake_orca.can("list", {"ok": True, "result": {"terminals": [{"handle": "term_a"}, {"handle": "term_b"}]}})
+    assert open_task(worktree_app) == (200, {"action": "switched"})
+    wt = os.path.realpath(worktree_app.wt)
+    assert fake_orca.calls() == [
+        ["terminal", "list", "--worktree", f"path:{wt}", "--json"],
+        ["terminal", "switch", "--terminal", "term_a", "--json"],
+    ]
+
+
+def test_open_creates_a_focused_terminal_when_none_exists(worktree_app: App, fake_orca: FakeOrca) -> None:
+    fake_orca.can("list", {"ok": True, "result": {"terminals": []}})
+    assert open_task(worktree_app) == (200, {"action": "created"})
+    wt = os.path.realpath(worktree_app.wt)
+    assert fake_orca.calls()[1] == [
+        "terminal", "create", "--worktree", f"path:{wt}", "--title", "T1 Task T1", "--focus", "--json",
+    ]
+
+
+def test_open_is_503_when_orca_is_not_installed(worktree_app: App, fake_orca: FakeOrca) -> None:
+    fake_orca.exe.unlink()
+    assert open_task(worktree_app) == (503, {"error": "orca-unavailable"})
+
+
+def test_open_is_502_when_orca_fails(worktree_app: App, fake_orca: FakeOrca) -> None:
+    (fake_orca.dir / "fail").write_text("")
+    assert open_task(worktree_app) == (502, {"error": "orca-failed", "detail": "orca is not running"})
+    (fake_orca.dir / "fail").unlink()
+    fake_orca.can("list", {"ok": False, "error": {"code": "selector_not_found", "message": "no such worktree"}})
+    assert open_task(worktree_app) == (502, {"error": "orca-failed", "detail": "no such worktree"})
+
+
+def test_open_route_does_not_exist_in_screen_mode(tmp_path: Path) -> None:
+    session = tmp_path / "scr"
+    proc = subprocess.Popen(
+        [sys.executable, str(CLI), "start", str(session), "--foreground", "--port", "0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        info = json.loads(proc.stdout.readline())
+        conn = http.client.HTTPConnection("127.0.0.1", info["port"], timeout=10)
+        conn.request("POST", "/_quirk/run/open", body=b"{}", headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 404
+        conn.close()
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        proc.stderr.close()
+
+
 # ---- watcher and idle --------------------------------------------------------------------------
 
 

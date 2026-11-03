@@ -23,6 +23,7 @@ export interface RunTask {
   title: string
   contract_md?: string
   level: number
+  worktree?: string
   chain?: string
   status: RunStatus
   attempt: number

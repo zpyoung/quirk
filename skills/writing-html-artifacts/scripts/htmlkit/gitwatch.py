@@ -131,6 +131,27 @@ def _listed_worktree(repo: str, reports: list[dict], task_id: str, listed: set[s
     return real if real in listed else None
 
 
+def task_open_target(run: dict, reports: list[dict], task_id: str) -> tuple[str, str | None, str]:
+    """Where to open a task's worktree: ``(state, realpath, title)``.
+
+    ``state`` is ``unknown`` (no such task), ``no-worktree`` (no dispatch worktree reported),
+    ``unlisted`` (the repo no longer lists it) or ``ok``; ``realpath`` is set only for ``ok``.
+    Raises GitError when the repo's worktree list cannot be read.
+    """
+    task = next((t for t in _all_tasks(run, reports) if t["id"] == task_id), None)
+    if task is None:
+        return "unknown", None, ""
+    title = f"{task_id} {task.get('title') or ''}".strip()
+    disp = _latest(reports, "dispatch", task_id)
+    wt = disp[1].get("worktree") if disp else None
+    if not isinstance(wt, str) or not os.path.isabs(wt):
+        return "no-worktree", None, title
+    real = os.path.realpath(wt)
+    if real not in listed_worktrees(run["repo"]):
+        return "unlisted", None, title
+    return "ok", real, title
+
+
 def _is_running(reports: list[dict], task_id: str) -> bool:
     """True while the latest dispatch has no later commit report."""
     disp = _latest(reports, "dispatch", task_id)

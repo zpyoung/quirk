@@ -408,3 +408,4 @@ Not in scope:
 - **Stale**: the view has had no update from SDD or git for longer than the threshold.
 - **Blocked by**: the label on a queued task whose dependency failed.
 - **Needs-you banner**: the strip under the header listing every question waiting on you.
+- 2026-11-03: The task drawer opens the task's worktree in Orca: it switches to a terminal already open there, or creates one. The button is hidden when the task has no worktree or the run has ended. Requested by the user.

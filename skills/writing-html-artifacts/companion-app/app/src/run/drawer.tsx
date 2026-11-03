@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import { Button } from '@astryxdesign/core/Button'
 import { renderMarkdown } from '../markdown'
 import type { Boot } from '../types'
-import { postRunEvent } from './api'
+import { openInOrca, postRunEvent } from './api'
 import { ConfirmDialog, confirmTone, retryLines, stopChainLines, type ConfirmText } from './confirm'
 import { formatElapsed } from './format'
 import { QuestionCard } from './question-card'
@@ -37,12 +37,15 @@ export function TaskDrawer({
   const [confirm, setConfirm] = useState<Pending | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const [opening, setOpening] = useState(false)
+  const [opened, setOpened] = useState<{ ok: boolean; text: string } | null>(null)
   const root = useRef<HTMLElement>(null)
   const confirming = confirm !== null
 
   useEffect(() => {
     setConfirm(null)
     setProblem(null)
+    setOpened(null)
     root.current?.focus()
   }, [task.id])
 
@@ -65,10 +68,24 @@ export function TaskDrawer({
     else setProblem(null)
   }
 
+  const openWorktree = async () => {
+    if (opening) return
+    setOpening(true)
+    setOpened(null)
+    const result = await openInOrca(boot, run.run_id, task.id)
+    setOpening(false)
+    if (result.kind === 'opened') {
+      setOpened({ ok: true, text: result.action === 'switched' ? 'Opened in Orca' : 'Opened a new terminal in Orca' })
+    } else {
+      setOpened({ ok: false, text: result.message })
+    }
+  }
+
   const openQuestions = run.questions.filter((question) => question.state === 'open' && question.task === task.id)
   const contract = renderMarkdown(task.contract_md)
   const canStop = STOPPABLE.has(task.status)
   const canRetry = task.status === 'failed'
+  const canOpen = Boolean(task.worktree) && !run.ended
 
   return (
     <>
@@ -140,7 +157,27 @@ export function TaskDrawer({
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
           ) : null}
+          {canOpen ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              label="Open in Orca"
+              isDisabled={opening}
+              onClick={() => void openWorktree()}
+            />
+          ) : null}
         </p>
+        {opened?.ok ? (
+          <p className="run-drawer-opened" role="status">
+            {opened.text}
+          </p>
+        ) : null}
+        {opened && !opened.ok ? (
+          <p className="run-drawer-problem" role="alert">
+            {opened.text}
+          </p>
+        ) : null}
 
         {task.pending_action ? (
           <p className="run-drawer-pending" role="status">

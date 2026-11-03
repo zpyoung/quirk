@@ -66,3 +66,42 @@ export async function fetchDiff(task: string, fetchImpl: typeof fetch = defaultF
     return null
   }
 }
+
+export type OpenInOrcaResult =
+  | { kind: 'opened'; action: 'switched' | 'created' }
+  | { kind: 'failed'; message: string }
+
+const OPEN_ERRORS: Record<number, string> = {
+  403: 'This tab is no longer allowed to do that. Reload the page.',
+  409: 'This run has been replaced. Reload the page.',
+  404: 'This task has no worktree to open.',
+  410: 'That worktree no longer exists.',
+}
+
+/** Asks the server to open the task's worktree in Orca; every failure comes back as a plain-words message. */
+export async function openInOrca(
+  boot: Boot,
+  runId: string,
+  task: string,
+  fetchImpl: typeof fetch = defaultFetch,
+): Promise<OpenInOrcaResult> {
+  try {
+    const response = await fetchImpl('/_quirk/run/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Quirk-Token': boot.token },
+      body: JSON.stringify({ run_id: runId, task }),
+    })
+    const body = await readJson(response)
+    if (response.status === 200 && (body?.action === 'switched' || body?.action === 'created')) {
+      return { kind: 'opened', action: body.action }
+    }
+    if (response.status === 503) return { kind: 'failed', message: "Orca isn't installed or isn't on the PATH." }
+    if (response.status === 502) {
+      const detail = typeof body?.detail === 'string' && body.detail ? ` (${body.detail})` : ''
+      return { kind: 'failed', message: `Orca couldn't open it. Is Orca running?${detail}` }
+    }
+    return { kind: 'failed', message: OPEN_ERRORS[response.status] ?? 'Could not open it in Orca.' }
+  } catch {
+    return { kind: 'failed', message: 'Could not reach the companion server. Check the connection and try again.' }
+  }
+}

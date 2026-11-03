@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htmlkit import SKILL_DIR, assemble, resolve  # noqa: E402
 from htmlkit.appstate import AppState, AppStateError  # noqa: E402
-from htmlkit import gitwatch  # noqa: E402
+from htmlkit import gitwatch, orca  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
 from htmlkit.header import read_header, render_header  # noqa: E402
 from htmlkit.layouts import validate_layout  # noqa: E402
@@ -514,6 +514,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if self.server.app and path == "/_quirk/app/event":
             self._accept_app_event()
+        elif self.server.app and path == "/_quirk/run/open":
+            self._open_in_orca()
         elif self.server.app and path == "/_quirk/review/export":
             self._accept_review_export()
         elif not self.server.app and path == "/_quirk/event":
@@ -581,6 +583,47 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(404, b"not found\n")
         else:
             self._json(200, diff)
+
+    def _open_in_orca(self) -> None:
+        """Open a task's listed dispatch worktree in Orca; the statuses are in tech.md's HTTP contract."""
+        if not self._check_token():
+            return
+        body = self._read_object(MAX_BODY, 400)
+        if body is None:
+            return
+        run_id, task = body.get("run_id"), body.get("task")
+        if not isinstance(run_id, str) or not isinstance(task, str) or not task:
+            self._json(400, {"error": "run_id and task must be strings"})
+            return
+        store = RunStore(self.server.session, self.server.app_state)
+        try:
+            run_doc = store.run()
+            if run_doc is None or run_doc.get("run_id") != run_id:
+                self._json(409, {"error": "not the current run"})
+                return
+            state, worktree, title = gitwatch.task_open_target(run_doc, store.reports(), task)
+        except gitwatch.GitError as exc:
+            self._json(500, {"error": str(exc)})
+            return
+        except (OSError, ValueError):
+            self._json(404, {"error": "no such task"})
+            return
+        if state == "unknown" or state == "no-worktree":
+            self._json(404, {"error": "no worktree for that task"})
+            return
+        if worktree is None:
+            self._json(410, {"error": "worktree-gone"})
+            return
+        exe = orca.orca_command()
+        if exe is None:
+            self._json(503, {"error": "orca-unavailable"})
+            return
+        try:
+            action = orca.open_worktree(exe, worktree, title)
+        except orca.OrcaError as exc:
+            self._json(502, {"error": "orca-failed", "detail": exc.detail})
+            return
+        self._json(200, {"action": action})
 
     def _serve_review(self) -> None:
         path = self.server.app_state.review_path()

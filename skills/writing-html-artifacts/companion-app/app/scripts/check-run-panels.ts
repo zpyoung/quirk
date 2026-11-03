@@ -203,6 +203,12 @@ const pendingRetry = html(createElement(TaskDrawer, { run, task: { ...t7, pendin
 check('drawer pending retry text', pendingRetry.includes('Retry requested, waiting for SDD'))
 const passedDrawer = html(createElement(TaskDrawer, { run, task: mkTask('T4', 'passed'), boot, serverNow: 0, onClose: noop }))
 check('drawer passed has no actions', !passedDrawer.includes('Stop chain') && !passedDrawer.includes('>Retry<'))
+const withTree = html(createElement(TaskDrawer, { run, task: { ...t7, worktree: '/wt/T7' }, boot, serverNow: 0, onClose: noop }))
+check('drawer open in orca with a worktree', withTree.includes('Open in Orca'))
+check('drawer no open in orca without a worktree', !drawer.includes('Open in Orca'))
+const endedRun = { ...run, ended: { at: 1, outcome: 'clean' as const } }
+const endedTree = html(createElement(TaskDrawer, { run: endedRun, task: { ...t7, worktree: '/wt/T7' }, boot, serverNow: 0, onClose: noop }))
+check('drawer no open in orca after the run ended', !endedTree.includes('Open in Orca'))
 const evil = html(createElement(TaskDrawer, {
   run, task: mkTask('T1', 'running', { contract_md: '<script>alert(1)</script>\n\n**bold**', title: '<img src=x>' }), boot, serverNow: 0, onClose: noop,
 }))
