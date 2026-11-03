@@ -59,7 +59,7 @@ from htmlkit import gitwatch  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
 from htmlkit.header import read_header, render_header  # noqa: E402
 from htmlkit.layouts import validate_layout  # noqa: E402
-from htmlkit.runfold import STALE_AFTER_S, TAB_FALLBACK_AFTER_S, fold, run_view  # noqa: E402
+from htmlkit.runfold import STALE_AFTER_S, TAB_FALLBACK_AFTER_S, current_run_actions, fold, run_view  # noqa: E402
 from htmlkit.runstate import RunError, RunStore  # noqa: E402
 from htmlkit.steps import StepError, validate_step  # noqa: E402
 from htmlkit.vendor import VendorError, VendorStore, shell_block  # noqa: E402
@@ -552,10 +552,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _serve_snapshot(self) -> None:
         app = self.server.app_state
-        try:
-            RunStore(self.server.session, app).touch_tab()
-        except OSError:
-            pass
+        if self._has_token():
+            try:
+                RunStore(self.server.session, app).touch_tab()
+            except OSError:
+                pass
         snapshot = app.snapshot()
         snapshot["run"] = _run_or_none(self.server.session)
         wanted = parse_qs(urlsplit(self.path).query).get("rev", [""])[0]
@@ -672,6 +673,11 @@ class _Handler(BaseHTTPRequestHandler):
             with open(_state_dir(self.server.session) / "events", "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record) + "\n")
         self._reply(204)
+
+    def _has_token(self) -> bool:
+        """Whether the request carries the session token; the snapshot GET only counts a tab check-in then."""
+        given = self.headers.get(TOKEN_HEADER, "")
+        return secrets.compare_digest(given.encode("utf-8"), self.server.token.encode("utf-8"))
 
     def _check_token(self) -> bool:
         """Refuse an app POST that lacks the session token; the unread body is drained first."""
@@ -791,7 +797,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         None of them needs a current step or a nonce. A stop or retry is judged against the task's
         folded status, which is computed from this server's own AppState: a second AppState on the
-        same lock file would wait on the lock this thread already holds.
+        same lock file would wait on the lock this thread already holds. Every accepted event stores
+        the current ``run_id``, because the event log outlives a run and only current-run events count.
         """
         store = RunStore(self.server.session, app)
         try:
@@ -799,7 +806,7 @@ class _Handler(BaseHTTPRequestHandler):
             if run_doc is None:
                 return 400, {"error": "no run"}
             if kind == "run-answer":
-                return self._record_run_answer(app, store, client_id, payload)
+                return self._record_run_answer(app, store, run_doc, client_id, payload)
             return self._record_run_action(app, store, run_doc, kind, client_id, payload)
         except RunError as exc:
             return 400, {"error": str(exc), "field": exc.field}
@@ -812,7 +819,7 @@ class _Handler(BaseHTTPRequestHandler):
         task = payload.get("task")
         if not (isinstance(task, str) and task):
             return 400, {"error": "task must be a task id", "field": "task"}
-        actions = [e for e in app.events_after(0) if e.get("type") in ("run-stop", "run-retry")]
+        actions = current_run_actions(app.events_after(0), run_doc.get("run_id"))
         view = fold(run_doc, store.reports(), store.git_facts(), store.questions(), actions, time.time(), STALE_AFTER_S)
         entry = next((t for t in view["tasks"] if t["id"] == task), None)
         if entry is None:
@@ -822,12 +829,12 @@ class _Handler(BaseHTTPRequestHandler):
             return 409, {"refused": entry["status"]}
         if entry.get("pending_action") == kind.removeprefix("run-"):
             return 200, {"duplicate": True}
-        if app.append_event(kind, {"task": task}, client_id, step=None) is None:
+        if app.append_event(kind, {"task": task, "run_id": run_doc.get("run_id")}, client_id, step=None) is None:
             return 200, {"duplicate": True}
         return 204, None
 
     def _record_run_answer(
-        self, app: AppState, store: RunStore, client_id: str, payload: dict
+        self, app: AppState, store: RunStore, run_doc: dict, client_id: str, payload: dict
     ) -> tuple[int, Optional[dict]]:
         pick, text = payload.get("pick"), payload.get("text")
         if not isinstance(payload.get("question"), str) or any(
@@ -837,7 +844,11 @@ class _Handler(BaseHTTPRequestHandler):
         answer, recorded = store.answer(payload["question"], "tab", pick=pick, text=text)
         if not recorded:
             return 409, {"answered": answer}
-        clean = {"question": payload["question"], **({"pick": pick} if pick is not None else {"text": text})}
+        clean = {
+            "question": payload["question"],
+            **({"pick": pick} if pick is not None else {"text": text}),
+            "run_id": run_doc.get("run_id"),
+        }
         if app.append_event("run-answer", clean, client_id, step=None) is None:
             return 200, {"duplicate": True}
         return 204, None
@@ -1097,10 +1108,20 @@ def _start_watcher(httpd: _Server) -> gitwatch.Watcher:
     """Start the thread that polls git facts into the run store while a run is registered."""
     store = RunStore(httpd.session, httpd.app_state)
 
-    def load() -> tuple[Optional[dict], list[dict], Optional[dict]]:
-        return store.run(), store.reports(), store.git_facts()
+    loaded_run: list[Optional[str]] = [None]
 
-    watcher = gitwatch.Watcher(load, store.write_git_facts)
+    def load() -> tuple[Optional[dict], list[dict], Optional[dict]]:
+        run = store.run()
+        loaded_run[0] = run.get("run_id") if run else None
+        return run, store.reports(), store.git_facts()
+
+    def save(facts: dict) -> None:
+        # the watcher is one thread, so loaded_run is the run this tick observed
+        run_id = loaded_run[0]
+        if run_id is not None:
+            store.write_git_facts(facts, run_id=run_id)
+
+    watcher = gitwatch.Watcher(load, save)
     watcher.start()
     return watcher
 

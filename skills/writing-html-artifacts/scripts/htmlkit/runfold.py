@@ -164,8 +164,8 @@ def fold(
     """Turn a run's stored state into the RunView the tab renders.
 
     ``reports`` are the run's report lines, ``git`` the watcher's facts (or None), ``questions`` the
-    stored questions with their state, ``actions`` the ``run-stop`` and ``run-retry`` events from the
-    app event log. Pure: the caller supplies ``now``.
+    stored questions with their state, ``actions`` the current run's ``run-stop`` and ``run-retry``
+    events from the app event log (see ``current_run_actions``). Pure: the caller supplies ``now``.
     """
     reports = sorted(reports, key=lambda r: r.get("n", 0))
     git_tasks: dict[str, dict] = (git or {}).get("tasks", {}) if git else {}
@@ -369,6 +369,18 @@ def _fix_labels(task_round: dict[str, str], rounds: dict[str, dict]) -> dict[str
     return labels
 
 
+def current_run_actions(events: Iterable[dict], run_id: Any) -> list[dict]:
+    """The ``run-stop`` and ``run-retry`` events recorded for ``run_id``.
+
+    The app event log outlives a run, so an event counts only when its payload names this run;
+    one without a ``run_id`` is ignored.
+    """
+    return [
+        e for e in events
+        if e.get("type") in ("run-stop", "run-retry") and (e.get("payload") or {}).get("run_id") == run_id
+    ]
+
+
 def _pending_actions(actions: Iterable[dict], reports: list[dict], task_ids: set[str]) -> dict[str, str]:
     """Tab actions SDD has not yet answered, as ``task id -> "stop" | "retry"`` (latest event wins)."""
     handled = {r.get("seq") for r in reports if r["kind"] == "action"}
@@ -423,7 +435,7 @@ def run_view(session: os.PathLike) -> dict | None:
     run = store.run()
     if run is None:
         return None
-    actions = [e for e in AppState(session).events_after(0) if e.get("type") in ("run-stop", "run-retry")]
+    actions = current_run_actions(AppState(session).events_after(0), run.get("run_id"))
     return fold(
         run, store.reports(), store.git_facts(), store.questions(), actions,
         now=time.time(), stale_after_s=_stale_after_from_env(),
