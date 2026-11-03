@@ -24,6 +24,17 @@
     gap: var(--q-space-3);
   }
 
+  /* the counts take the leftover width and wrap inside it, so the toggle stays right-aligned on the first row */
+  .run-header-main > .run-counts {
+    flex: 1 1 0;
+    min-width: 8rem;
+  }
+
+  .run-header-main > .theme-toggle {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
   .run-branch {
     font-family: var(--q-font-mono, monospace);
     color: var(--q-color-text-muted);

@@ -276,6 +276,76 @@ const scenarios: [string, Scenario][] = [
     },
   ],
   [
+    'd2. the wheel scrolls the page, ctrl+wheel zooms, and the card stays reachable in a 720 px window',
+    async (env) => {
+      const page = env.page
+      await page.setViewportSize({ width: 1280, height: 720 })
+      await ask({
+        id: 'q-view',
+        task: 'T4',
+        header: 'T4 plan',
+        prompt: 'T4 depends on two reworked tasks. Continue as planned?',
+        options: [
+          { value: 'go', label: 'Continue as planned' },
+          { value: 'stop', label: 'Stop T4' },
+        ],
+      })
+      const item = page.locator('.run-banner-item[data-kind="open"]', { hasText: 'T4 depends on two reworked tasks' })
+      await item.waitFor({ timeout: STEP_MS })
+      await page.evaluate(() => window.scrollTo(0, 0))
+
+      const svg = page.locator('svg.run-graph')
+      const viewBox = () => svg.getAttribute('viewBox')
+      const box = await svg.boundingBox()
+      assert(box, 'the graph has no box')
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      const before = await viewBox()
+      const startY = await page.evaluate(() => window.scrollY)
+      await page.mouse.wheel(0, 300)
+      await page.locator('.run-graph-hint', { hasText: 'Use ⌘ or Ctrl + scroll to zoom' }).waitFor({ timeout: STEP_MS })
+      await page.waitForFunction((y) => window.scrollY > y, startY, { timeout: STEP_MS })
+      same(await viewBox(), before, 'viewBox after a plain wheel')
+      await page.locator('.run-graph-hint').waitFor({ state: 'detached', timeout: STEP_MS })
+
+      await page.evaluate(() => window.scrollTo(0, 0))
+      const over = await svg.boundingBox()
+      assert(over, 'the graph has no box after scrolling')
+      await page.mouse.move(over.x + over.width / 2, over.y + over.height / 2)
+      await page.keyboard.down('Control')
+      await page.mouse.wheel(0, -300)
+      await page.keyboard.up('Control')
+      await page.waitForFunction((was) => document.querySelector('svg.run-graph')?.getAttribute('viewBox') !== was, before, { timeout: STEP_MS })
+      await page.evaluate(() => window.scrollTo(0, 0))
+
+      await item.getByRole('button', { name: 'Show on graph' }).click()
+      const card = page.locator('[data-run-part="question-card"][data-question="q-view"]')
+      await card.waitFor({ state: 'visible', timeout: STEP_MS })
+      await sleep(700)
+      const send = await card.getByRole('button', { name: 'Send' }).boundingBox()
+      assert(send, 'Send has no box')
+      const view = page.viewportSize()!
+      assert(
+        send.x >= 0 && send.y >= 0 && send.x + send.width <= view.width && send.y + send.height <= view.height,
+        `Send is outside the ${view.width}x${view.height} viewport: ${JSON.stringify(send)}`,
+      )
+      const panel = await page.locator('[data-run-part="graph"]').boundingBox()
+      assert(panel && send.y + send.height <= panel.y + panel.height, 'Send is clipped by the graph panel')
+      same(await page.evaluate(() => window.scrollY), 0, 'page scroll while reaching Send')
+
+      const keyed = await viewBox()
+      await node(page, 'T1').focus()
+      await page.keyboard.press('-')
+      await page.waitForFunction((was) => document.querySelector('svg.run-graph')?.getAttribute('viewBox') !== was, keyed, { timeout: STEP_MS })
+
+      await cli(['answer', session, 'q-view', '--source', 'orca', '--pick', 'go'])
+      await card.waitFor({ state: 'detached', timeout: STEP_MS }).catch(() => undefined)
+      await page.locator('.run-banner-item[data-kind="open"]').first().waitFor({ state: 'detached', timeout: STEP_MS })
+      // later scenarios click nodes at the fit view
+      await page.getByRole('button', { name: 'Fit', exact: true }).click()
+      await sleep(700)
+    },
+  ],
+  [
     'e. stop chain from a failed task',
     async (env) => {
       const page = env.page
@@ -306,6 +376,9 @@ const scenarios: [string, Scenario][] = [
       await node(page, 'T1').click()
       const drawer = page.locator('[data-run-part="drawer"][data-task="T1"]')
       await drawer.waitFor({ state: 'visible', timeout: STEP_MS })
+      const brandBox = await page.locator('.run-header .brand').boundingBox()
+      const toggleBox = await page.locator('.run-header .theme-toggle').boundingBox()
+      assert(brandBox && toggleBox && Math.abs(toggleBox.y - brandBox.y) < 12, `the theme toggle left the first header row: ${JSON.stringify([brandBox, toggleBox])}`)
       const opened = env.context.waitForEvent('page', { timeout: STEP_MS })
       await drawer.getByRole('link', { name: 'Diff' }).click()
       const diff = await opened

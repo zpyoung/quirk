@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { CARD_MARGIN, CARD_WIDTH, clampZoom, fitView, isZoomedAway, layoutRun, placeCard, viewBoxOf, zoomFloor, type Size, type View } from './layout'
+import {
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type CSSProperties, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
+} from 'react'
+import { clampZoom, fitView, isZoomedAway, layoutRun, panelHeight, placeCardForView, viewBoxOf, wheelIntent, zoomFloor, type Size, type View } from './layout'
 import { mismatchLines, TaskNode } from './node'
 import type { RunView } from './types'
 
@@ -20,6 +23,11 @@ const FOCUS_ZOOM = 1
 const FOCUS_MS = 400
 const DEFAULT_SIZE: Size = { w: 960, h: 520 }
 const DEFAULT_CARD_H = 280
+const HINT_MS = 1500
+const HINT_TEXT = 'Use ⌘ or Ctrl + scroll to zoom'
+
+// the hint explains the wheel once per page load, however many graphs mount
+let hintShown = false
 
 const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -39,7 +47,10 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   const [tip, setTip] = useState<string | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [hint, setHint] = useState(false)
+  const [panelH, setPanelH] = useState<number | null>(null)
 
+  const rootRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const viewRef = useRef(view)
   const sizeRef = useRef(size)
@@ -61,6 +72,30 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
     if (frame.current) cancelAnimationFrame(frame.current)
     frame.current = 0
   }, [])
+
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const measure = () => {
+      const next = panelHeight(window.innerHeight, root.getBoundingClientRect().top + window.scrollY)
+      setPanelH((prev) => (prev === next ? prev : next))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    // the banner and status lines above the panel change its top edge without a window resize
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(root.closest('.run-view') ?? document.body)
+    return () => {
+      window.removeEventListener('resize', measure)
+      observer?.disconnect()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hint) return
+    const timer = setTimeout(() => setHint(false), HINT_MS)
+    return () => clearTimeout(timer)
+  }, [hint])
 
   useEffect(() => {
     const el = svgRef.current
@@ -94,11 +129,20 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
     const el = svgRef.current
     if (!el) return
     const onWheel = (event: WheelEvent) => {
+      if (wheelIntent(event) === 'scroll') {
+        if (!hintShown) {
+          hintShown = true
+          setHint(true)
+        }
+        return
+      }
       event.preventDefault()
       stopAnimation()
       autoFit.current = false
+      // pinch gestures arrive as small deltas, so they get a steeper curve than a mouse wheel notch
+      const dy = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY
       const rect = el.getBoundingClientRect()
-      zoomAround(Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top)
+      zoomAround(Math.exp(-dy * (Math.abs(dy) < 40 ? 0.01 : 0.0015)), event.clientX - rect.left, event.clientY - rect.top)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -185,6 +229,16 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
     zoomAround(factor, sizeRef.current.w / 2, sizeRef.current.h / 2)
   }
 
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    // the question card lives in this container and its text box must keep + and -
+    if ((event.target as Element).closest?.('.run-graph-card')) return
+    if (event.key === '+' || event.key === '=') zoomBy(1.25)
+    else if (event.key === '-' || event.key === '_') zoomBy(0.8)
+    else return
+    event.preventDefault()
+  }
+
   const select = useCallback(
     (id: string) => {
       if (moved.current) return
@@ -236,13 +290,7 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   const tipBox = tip ? layout.nodes.find((n) => n.id === tip) : undefined
   const cardBox = cardTask ? layout.nodes.find((n) => n.id === cardTask) : undefined
 
-  let placement: ReturnType<typeof placeCard> | null = null
-  if (cardBox) {
-    const left = (cardBox.x - vb.x) * view.z
-    const top = (cardBox.y - vb.y) * view.z
-    const cardSize = { w: Math.min(CARD_WIDTH, size.w - 2 * CARD_MARGIN), h: Math.min(cardH, size.h - 2 * CARD_MARGIN) }
-    placement = placeCard({ left, top, right: left + cardBox.w * view.z, bottom: top + cardBox.h * view.z }, size, cardSize)
-  }
+  const placement = cardBox ? placeCardForView(view, size, cardBox, cardH) : null
   const docked = placement?.mode === 'dock'
 
   useEffect(() => {
@@ -251,7 +299,13 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   })
 
   return (
-    <div className="run-graph-root" data-run-part="graph">
+    <div
+      ref={rootRef}
+      className="run-graph-root"
+      data-run-part="graph"
+      style={panelH === null ? undefined : ({ '--run-graph-h': `${panelH}px` } as CSSProperties)}
+      onKeyDown={onKeyDown}
+    >
       <div className="run-graph-tools" role="group" aria-label="Graph view">
         {away ? (
           <button type="button" className="run-graph-show-all" onClick={fit}>
@@ -318,6 +372,11 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
         <g className="run-nodes">{nodeLayer}</g>
         {tipTask?.mismatch && tipBox ? <MismatchTip text={tipTask.mismatch.text} x={tipBox.x} y={tipBox.y} /> : null}
       </svg>
+      {hint ? (
+        <div className="run-graph-hint" role="status">
+          {HINT_TEXT}
+        </div>
+      ) : null}
       {placement ? (
         <div
           ref={cardRef}
