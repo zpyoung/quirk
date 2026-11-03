@@ -180,7 +180,7 @@
 .run-view .run-node-meta {
   fill: var(--q-color-text-muted);
   font-family: var(--q-font-mono, monospace);
-  font-size: 13px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 .run-view .run-node-reason {
@@ -261,7 +261,7 @@
 }
 .run-view .run-node-chip text {
   fill: var(--q-color-text);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 .run-view .run-node-chip[data-kind='try'] rect {
   fill: color-mix(in srgb, var(--q-color-warn) 30%, var(--q-color-surface));
@@ -305,12 +305,6 @@
 }
 .run-view .run-edge[data-kind='order'] {
   stroke-dasharray: 6 5;
-}
-.run-view .run-edge-join {
-  stroke-dasharray: none;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .run-view .run-edge[data-failed='true'] {
   stroke: var(--q-color-critical);

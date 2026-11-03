@@ -9,9 +9,6 @@ export interface TaskNodeProps {
   serverNow: number
   selected: boolean
   onSelect(id: string): void
-  /** The card touches a chain neighbour on that side, so its corners square off. */
-  joinedAbove?: boolean
-  joinedBelow?: boolean
   /** Reports which node's mismatch tooltip should show; the graph draws it above every card. */
   onTip?(id: string | null): void
 }
@@ -47,16 +44,11 @@ const STRIPE_W = 5
 
 const filesText = (n: number) => (n === 1 ? '1 file' : `${n} files`)
 const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`)
-const chipWidth = (text: string) => Math.ceil(text.length * 7 + 14)
+const chipWidth = (text: string) => Math.ceil(text.length * 7.4 + 14)
 
-function cardPath(w: number, h: number, top: boolean, bottom: boolean): string {
-  const rt = top ? RADIUS : 0
-  const rb = bottom ? RADIUS : 0
-  return (
-    `M${rt},0 H${w - rt} ${rt ? `A${rt},${rt} 0 0 1 ${w},${rt}` : ''} V${h - rb} ` +
-    `${rb ? `A${rb},${rb} 0 0 1 ${w - rb},${h}` : ''} H${rb} ${rb ? `A${rb},${rb} 0 0 1 0,${h - rb}` : ''} V${rt} ` +
-    `${rt ? `A${rt},${rt} 0 0 1 ${rt},0` : ''} Z`
-  )
+function cardPath(w: number, h: number): string {
+  const r = RADIUS
+  return `M${r},0 H${w - r} A${r},${r} 0 0 1 ${w},${r} V${h - r} A${r},${r} 0 0 1 ${w - r},${h} H${r} A${r},${r} 0 0 1 0,${h - r} V${r} A${r},${r} 0 0 1 ${r},0 Z`
 }
 
 interface Chip {
@@ -91,7 +83,7 @@ function tooltipLines(text: string, width = 40): string[] {
 export const mismatchLines = (text: string) => tooltipLines(text)
 
 /** One task as a card: status colour and glyph, live elapsed, files, attempt, labels and the mismatch mark. */
-export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove, joinedBelow, onTip }: TaskNodeProps): JSX.Element {
+export function TaskNode({ task, box, serverNow, selected, onSelect, onTip }: TaskNodeProps): JSX.Element {
   const { w, h } = box
   const elapsed = taskElapsedMs(task, serverNow)
   const status = task.status
@@ -144,7 +136,7 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
       onSelect(task.id)
     }
   }
-  const shape = cardPath(w, h, !joinedAbove, !joinedBelow)
+  const shape = cardPath(w, h)
 
   return (
     <g
@@ -154,8 +146,6 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
       data-ready={task.ready ? 'true' : 'false'}
       data-selected={selected ? 'true' : undefined}
       data-attempt={task.attempt > 1 ? String(task.attempt) : undefined}
-      data-joined-above={joinedAbove ? 'true' : undefined}
-      data-joined-below={joinedBelow ? 'true' : undefined}
       transform={`translate(${box.x} ${box.y})`}
       tabIndex={0}
       role="button"
@@ -170,9 +160,9 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
       <path className="run-node-card" d={shape} />
       {status === 'needs-you' ? <path className="run-node-pulse" d={shape} /> : null}
       {flash > 0 ? <path key={flash} className="run-node-flash" d={shape} /> : null}
-      <rect className="run-node-stripe" x={0} y={joinedAbove ? 0 : 2} width={STRIPE_W} height={joinedBelow ? h : h - 2} />
+      <rect className="run-node-stripe" x={0} y={2} width={STRIPE_W} height={h - 4} />
       {status === 'running' ? (
-        <svg className="run-node-shimmer" x={0} y={joinedAbove ? 0 : 2} width={STRIPE_W} height={joinedBelow ? h : h - 2} aria-hidden="true">
+        <svg className="run-node-shimmer" x={0} y={2} width={STRIPE_W} height={h - 4} aria-hidden="true">
           <rect className="run-node-sweep" x={0} y={0} width={STRIPE_W} height={h * 0.45} />
         </svg>
       ) : null}
@@ -180,7 +170,7 @@ export function TaskNode({ task, box, serverNow, selected, onSelect, joinedAbove
         {clip(task.title, Math.floor((w - 60) / 8.8))}
       </text>
       <text className="run-node-meta" x={16} y={46}>
-        {clip(meta.join(' · '), Math.floor((w - 32) / 7.9))}
+        {clip(meta.join(' · '), Math.floor((w - 32) / 8.2))}
       </text>
       {showReason ? (
         <text className="run-node-reason" x={16} y={63}>
