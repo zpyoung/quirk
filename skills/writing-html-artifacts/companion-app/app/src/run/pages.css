@@ -4,7 +4,7 @@
 
 .run-timeline {
   display: block;
-  max-width: 100%;
+  max-width: none;
   font-size: 12px;
   fill: var(--q-color-text);
 }
@@ -17,6 +17,52 @@
 .run-timeline-grid {
   stroke: var(--q-color-border);
   stroke-width: 1;
+}
+
+.run-timeline-vgrid {
+  stroke: var(--q-color-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+}
+
+.run-timeline-link path {
+  stroke: var(--q-color-text-muted);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.run-timeline-link--order path:not(.run-timeline-arrow) {
+  stroke-dasharray: 3 3;
+}
+
+.run-timeline-arrow {
+  fill: var(--q-color-text-muted);
+  stroke: none;
+}
+
+.run-timeline-queued {
+  fill: none;
+  stroke: var(--q-color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.run-timeline-elapsed {
+  fill: var(--q-color-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-timeline-now line {
+  stroke: var(--q-color-accent);
+  stroke-width: 1;
+}
+
+.run-timeline-now text {
+  fill: var(--q-color-accent);
+  font-size: 11px;
 }
 
 .run-timeline-id {
@@ -46,6 +92,7 @@
 }
 
 .run-timeline-wrap {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--q-space-2);

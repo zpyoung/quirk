@@ -46,11 +46,39 @@ function makeRun(patch: Partial<RunView> = {}): RunView {
 const run = makeRun()
 
 // Timeline
-const timeline = renderToStaticMarkup(createElement(Timeline, { run, serverNow: 1200_000 }))
-expect('timeline', timeline, ['data-run-part="timeline"', 'data-attempt="1"', 'data-attempt="2"', 'T1', 'Title of T1', 'T2', '0m 00s', '3m 20s'], [
-  'T3', 'Level', 'Wave',
+const waterfallRun = makeRun({
+  tasks: [
+    task('T1', {
+      status: 'passed',
+      attempts: [{ n: 1, start: 1000, end: 1050, outcome: 'failed' }, { n: 2, start: 1060, end: 1100, outcome: 'passed' }],
+    }),
+    task('T2', { status: 'running', attempts: [{ n: 1, start: 1030 }] }),
+    task('T3', { blocked_by: ['T2'] }),
+  ],
+  edges: [{ from: 'T1', to: 'T2', kind: 'dep' }, { from: 'T2', to: 'T3', kind: 'dep' }],
+})
+const timeline = renderToStaticMarkup(createElement(Timeline, { run: waterfallRun, serverNow: 1200_000 }))
+expect('timeline', timeline, ['data-run-part="timeline"', 'data-attempt="1"', 'data-attempt="2"', 'T1', 'Title of T1', 'T2', '0m 50s', '2m 50s', 'run-timeline-now'], [
+  'Level', 'Wave',
 ])
 if (timeline.indexOf('T1') > timeline.indexOf('T2')) failures.push('timeline: rows must follow first attempt start')
+expect('timeline true size', timeline, ['viewBox="0 0 880 ', 'width="880"'])
+expect('timeline queued row', timeline, ['data-task="T3" data-queued="true"', 'blocked by T2', 'run-timeline-queued'])
+if (timeline.indexOf('data-task="T3"') < timeline.indexOf('data-task="T2"')) failures.push('timeline: queued rows must sit below started rows')
+expect('timeline dep connector', timeline, ['run-timeline-link run-timeline-link--dep" data-from="T1" data-to="T2"'], ['data-from="T2" data-to="T3"'])
+expect('timeline axis ticks', timeline, ['data-tick="0"', 'data-tick="30"', '>0<', '>+30s<'])
+{
+  const ordered = makeRun({
+    tasks: [
+      task('T1', { status: 'passed', attempts: [{ n: 1, start: 1000, end: 1050, outcome: 'passed' }] }),
+      task('T2', { status: 'passed', attempts: [{ n: 1, start: 1060, end: 1100, outcome: 'passed' }] }),
+    ],
+    edges: [{ from: 'T1', to: 'T2', kind: 'order' }],
+    ended: { at: 1100, outcome: 'clean' },
+  })
+  const html = renderToStaticMarkup(createElement(Timeline, { run: ordered, serverNow: 1200_000 }))
+  expect('timeline order connector', html, ['run-timeline-link--order" data-from="T1" data-to="T2"'], ['run-timeline-now'])
+}
 const idle = renderToStaticMarkup(createElement(Timeline, { run: makeRun({ tasks: [task('T9')] }), serverNow: 1200_000 }))
 expect('timeline empty', idle, ['No task has started yet.', 'data-run-part="timeline"'], ['<svg'])
 
