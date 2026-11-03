@@ -20,6 +20,7 @@ STATUSES = (
     "queued", "running", "needs-you", "retrying", "passed", "failed", "skipped", "stopped", "missing",
 )
 _TERMINAL = frozenset({"passed", "failed", "skipped", "stopped"})
+_WORKING = frozenset({"running", "retrying", "needs-you"})
 _TASK_KINDS = frozenset({
     "dispatch", "return", "retry", "commit", "merge", "fail", "stop", "skip", "supersede", "hold",
 })
@@ -225,6 +226,11 @@ def fold(
     def deps_passed(tid: str) -> bool:
         return all(status.get(d) == "passed" for d in by_id[tid].get("deps", []) if d in by_id)
 
+    open_question: dict[str, dict] = {}
+    for q in sorted(questions, key=lambda q: q.get("asked_at", 0)):
+        if q.get("state") == "open" and q.get("task") in per_task:
+            open_question.setdefault(q["task"], q)
+
     unheard = {
         tid for tid in order
         if not replay[tid]["reported"] and tid not in git_tasks and tid not in git_only and deps_passed(tid)
@@ -232,18 +238,16 @@ def fold(
     by_level: dict[int, list[str]] = {}
     for tid in order:
         by_level.setdefault(level[tid], []).append(tid)
+    # a ready task nobody has dispatched is only missing once the run is quiet: with no level-mate to compare
+    # against, or any task still working, it may simply not have been dispatched yet
+    working = any(status[tid] in _WORKING for tid in order) or bool(open_question)
     for tid in sorted(unheard, key=order.index):
         others = [o for o in by_level[level[tid]] if o != tid]
-        # a dependency-free task alone on its level has no sibling to wait on, so only run end can call it missing
-        level_done = all(status[o] in _TERMINAL for o in others) and (bool(by_id[tid].get("deps")) or bool(others))
+        level_done = bool(others) and not working and all(status[o] in _TERMINAL for o in others)
         if ended is not None or level_done:
             status[tid] = "missing"
 
-    open_question: dict[str, dict] = {}
-    for q in sorted(questions, key=lambda q: q.get("asked_at", 0)):
-        if q.get("state") == "open" and q.get("task") in per_task:
-            open_question.setdefault(q["task"], q)
-    for tid, q in open_question.items():
+    for tid in open_question:
         status[tid] = "needs-you"
 
     succ: dict[str, list[str]] = {tid: [] for tid in order}
