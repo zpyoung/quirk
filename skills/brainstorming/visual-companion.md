@@ -185,7 +185,7 @@ If `next` reports `no-server`, or the tab shows "Paused, reconnecting", run `sta
 5. Run `decide` with the updated list.
 6. Send the next `step`, then `next` again with the cursor.
 
-Finish with a `hand-off` step, then a `done` step, then clean up:
+Finish with a `hand-off` step, then a `done` step. When the pick is quirk:subagent-driven-development, the `done` message is "Starting SDD in this tab": do not run `stop`, and hand SDD the session path so its run shows in this tab. For any other pick, clean up:
 
 ```bash
 python3 "$COMPANION" stop "$SESSION"
