@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.3.1
+
+### Changes
+- Live SDD task view: follow and steer an SDD run from the companion tab (#64)
+
 ## 2026.11.3
 
 ### Changes
