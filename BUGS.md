@@ -355,3 +355,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Introduced by**: companion-first brainstorming SDD run (FR1-O1 fix)
 - **Severity**: low
 
+## BUG-44: q-flow in a design-section step freezes the companion main thread for ~12s before the step paints
+- **Observed**: 2026-11-03
+- **File**: skills/writing-html-artifacts/companion-app/app/e2e/run.ts:544
+- **Description**: In e2e scenario i, a 4-node direction=down q-flow in a design section's body_html at a 2400px viewport produced a 12556ms long task (PerformanceObserver), and the step took ~15.5s to appear. The CPU profile puts the time in vendor/flow/0.12.0/flow.bundle.js layout. A similar flow in a question's content_html paints in ~3s. The whole UI freezes while a design step with a q-flow lays out. The e2e now waits DIAGRAM_MS for that step.
+- **Severity**: medium
+- **Proposed fix**: Profile why the design view lays the flow out so much slower than the questions view (repeated layout from section annotation or resize?) and debounce or defer it
+

@@ -183,6 +183,24 @@ const FLOW_HTML = `<q-flow summary="Orders flow from checkout to the ledger." di
   </script>
 </q-flow>`
 
+const TALL_FLOW_HTML = `<q-flow summary="Four steps top to bottom." direction="down">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "plan", "label": "Plan"},
+      {"id": "build", "label": "Build"},
+      {"id": "review", "label": "Review"},
+      {"id": "merge", "label": "Merge"}
+    ],
+    "edges": [
+      {"from": "plan", "to": "build"},
+      {"from": "build", "to": "review"},
+      {"from": "review", "to": "merge"}
+    ]
+  }
+  </script>
+</q-flow>`
+
 const MINI_FLOW_HTML = `<q-flow summary="Two services." direction="right">
   <script type="application/json">
   {
@@ -509,6 +527,28 @@ const scenarios: [string, Scenario][] = [
         })
         await waitForStep(page, kit.step)
         await page.locator('[data-block-id="question:kit"] q-flow svg').first().waitFor({ timeout: DIAGRAM_MS })
+
+        // a wide window is where a fluid agent svg blows up and where a cap would clip a kit diagram
+        await page.setViewportSize({ width: 2400, height: 1000 })
+        const sizing = await step({
+          kind: 'design-section',
+          stage: 'design',
+          title: 'Sizing',
+          index: 1,
+          total: 1,
+          sections: [
+            { id: 'fluid', title: 'Fluid picture', body_html: '<svg viewBox="0 0 300 64" width="100%"><rect width="300" height="64"/></svg>' },
+            { id: 'tall', title: 'Tall flow', body_html: TALL_FLOW_HTML },
+          ],
+        })
+        // the flow layout holds the main thread for seconds before the step paints
+        await page.locator(`[data-step-id="${sizing.step}"]`).waitFor({ state: 'visible', timeout: DIAGRAM_MS })
+        const fluid = await page.locator('[data-block-id="section:fluid"] svg').first().boundingBox()
+        assert(fluid && fluid.width <= 640.5, `fluid svg not capped at 40rem: ${JSON.stringify(fluid)}`)
+        const tall = page.locator('[data-block-id="section:tall"] q-flow svg').first()
+        await tall.waitFor({ timeout: DIAGRAM_MS })
+        const flowBox = await tall.boundingBox()
+        assert(flowBox && flowBox.height > 200, `kit flow svg collapsed: ${JSON.stringify(flowBox)}`)
         same(consoleErrors, [], 'console errors')
       } finally {
         await page.close()
