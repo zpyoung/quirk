@@ -611,7 +611,11 @@ def test_run_view_against_the_real_run_store(tmp_path, monkeypatch):
     AppState(tmp_path).init()
     store = runstate.RunStore(tmp_path)
     assert run_view(tmp_path) is None
-    store.start(make_run(task("A"), task("B", deps=["A"])))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run = make_run(task("A"), task("B", deps=["A"]))
+    run["repo"] = str(repo)
+    store.start(run)
     store.report({"kind": "dispatch", "task": "A", "attempt": 1, "branch": "sdd/r1/A", "worktree": "/wt/A",
                   "base": "a" * 40})
     view = run_view(tmp_path)
