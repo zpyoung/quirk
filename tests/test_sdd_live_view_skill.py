@@ -49,3 +49,11 @@ def test_live_view_has_no_banned_words() -> None:
 
 def test_companion_reference_has_run_view() -> None:
     assert "\n## Run view" in COMPANION_REF.read_text(), "companion.md lacks a '## Run view' heading"
+
+
+def test_live_view_round_open_uses_round_kind() -> None:
+    body = LIVE_VIEW_PATH.read_text()
+    assert "round_kind" in body, "live-view.md does not name round_kind"
+    assert 'kind: "checkpoint"' not in body.replace("round_kind", ""), (
+        "live-view.md shows round-open with a bare kind field"
+    )

@@ -66,7 +66,7 @@ python3 "$COMPANION" report "$SESSION" '{"kind":"dispatch","task":"T1","attempt"
 | `commit` | `commit` `{task, commit}` (this is the accepted and committed report) |
 | `merge` | `merge` `{task, head}` |
 | `gate` | `status` `{text}` naming the gate and its result |
-| `checkpoint-open` | `round-open` `{round, kind: "checkpoint" or "final", title, covers}` |
+| `checkpoint-open` | `round-open` `{round, round_kind: "checkpoint" or "final", title, covers}` |
 | `checkpoint-close` | `round-close` `{round, outcome: "clean", "fixes" or "blocked", findings}` |
 | `hold` | `hold` `{task, round}` |
 | `rework`, `merge-as-is` | none |
