@@ -98,6 +98,7 @@ def _replay(task_reports: list[dict]) -> dict:
     st: dict[str, Any] = {
         "status": "queued", "attempt": 0, "reason": None, "attempts": [], "held_by": None,
         "reported": bool(task_reports), "last_at": None, "has_dispatch": False, "gap": False,
+        "worktree": None,
     }
 
     def close(at: float, outcome: str) -> None:
@@ -114,6 +115,7 @@ def _replay(task_reports: list[dict]) -> dict:
             if attempt <= 1:
                 st["reason"] = None
             st["has_dispatch"] = True
+            st["worktree"] = r["worktree"] if isinstance(r.get("worktree"), str) and r["worktree"] else None
         elif kind == "retry":
             close(at, "failed")
             st["attempt"] = r.get("attempt", st["attempt"] + 1)
@@ -320,6 +322,8 @@ def fold(
         }
         if "contract_md" in t:
             view["contract_md"] = t["contract_md"]
+        if st["worktree"]:
+            view["worktree"] = st["worktree"]
         if tid in chain_of:
             view["chain"] = chain_of[tid]
         if st["reason"] is not None and status[tid] in ("failed", "stopped", "skipped", "retrying", "queued"):

@@ -84,7 +84,8 @@
       "ready": true,
       "started_at": 1793664020.0,
       "status": "passed",
-      "title": "Run store"
+      "title": "Run store",
+      "worktree": "/work/recharge/.worktrees/T1"
     },
     {
       "attempt": 1,
@@ -109,7 +110,8 @@
       "ready": true,
       "started_at": 1793664025.0,
       "status": "passed",
-      "title": "Run fold"
+      "title": "Run fold",
+      "worktree": "/work/recharge/.worktrees/T2"
     },
     {
       "attempt": 1,
@@ -130,7 +132,8 @@
       "ready": true,
       "started_at": 1793664400.0,
       "status": "running",
-      "title": "Ask and answer commands"
+      "title": "Ask and answer commands",
+      "worktree": "/work/recharge/.worktrees/T5"
     }
   ]
 }
