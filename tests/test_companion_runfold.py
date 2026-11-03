@@ -287,6 +287,35 @@ def test_run_end_makes_an_unheard_ready_task_missing_even_with_siblings_working(
     assert t["C"]["status"] == "missing" and t["D"]["status"] == "queued"
 
 
+def test_a_lone_ready_task_whose_deps_passed_stays_queued_until_the_run_ends():
+    r = Reports().dispatch("A").add("commit", task="A", commit="c")
+    run = make_run(task("A"), task("B", deps=["A"]))
+    assert by_id(run_fold(run, r))["B"]["status"] == "queued"
+    assert by_id(run_fold(run, r.add("run-end", outcome="blocked")))["B"]["status"] == "missing"
+
+
+def test_level_mates_terminal_but_another_task_still_running_keeps_the_ready_task_queued():
+    r = (Reports().dispatch("A").add("commit", task="A", commit="c").dispatch("B").add("commit", task="B", commit="c")
+         .dispatch("X"))
+    run = make_run(task("A"), task("B", deps=["A"]), task("C", deps=["A"]), task("X"))
+    t = by_id(run_fold(run, r))
+    assert t["X"]["status"] == "running" and t["C"]["status"] == "queued"
+
+
+def test_level_mates_terminal_and_nothing_running_makes_the_ready_task_missing():
+    r = (Reports().dispatch("A").add("commit", task="A", commit="c").dispatch("B").add("commit", task="B", commit="c")
+         .dispatch("X").add("commit", task="X", commit="c"))
+    run = make_run(task("A"), task("B", deps=["A"]), task("C", deps=["A"]), task("X"))
+    assert by_id(run_fold(run, r))["C"]["status"] == "missing"
+
+
+def test_an_open_question_on_another_task_keeps_the_ready_task_queued():
+    r = Reports().dispatch("A").add("commit", task="A", commit="c").dispatch("B").add("commit", task="B", commit="c")
+    run = make_run(task("A"), task("B", deps=["A"]), task("C", deps=["A"]), task("X"))
+    q = {"id": "q1", "task": "X", "state": "open", "asked_at": T0}
+    assert by_id(run_fold(run, r, questions=[q]))["C"]["status"] == "queued"
+
+
 # ---- blocked by, downstream, edges -----------------------------------------------------------
 
 
