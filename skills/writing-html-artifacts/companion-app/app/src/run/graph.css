@@ -33,8 +33,9 @@
 
 .run-view .run-graph {
   display: block;
+  box-sizing: border-box;
   width: 100%;
-  height: clamp(480px, 80vh, 860px);
+  height: var(--run-graph-h, clamp(360px, 70vh, 860px));
   border: 1px solid var(--q-color-border);
   border-radius: var(--q-radius-md);
   background: var(--q-color-bg);
@@ -71,6 +72,33 @@
   width: auto;
   max-width: none;
   max-height: 70%;
+}
+
+.run-view .run-graph-hint {
+  position: absolute;
+  left: 50%;
+  bottom: var(--q-space-3);
+  z-index: 4;
+  transform: translateX(-50%);
+  padding: var(--q-space-1) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: run-hint-fade 1.5s ease-in forwards;
+}
+
+@keyframes run-hint-fade {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 /* status colours: one custom property per status, read by the card, stripe and glyph */
@@ -367,6 +395,7 @@
 @media (prefers-reduced-motion: reduce) {
   .run-view .run-graph,
   .run-view .run-graph *,
+  .run-view .run-graph-hint,
   .run-view .run-graph-card {
     animation: none !important;
     transition: none !important;

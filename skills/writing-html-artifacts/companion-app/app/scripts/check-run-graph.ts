@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  CARD_MARGIN, CARD_WIDTH, effectiveFontPx, fitView, fitZoom, isZoomedAway, layoutRun, MIN_ZOOM, placeCard, viewBoxOf, zoomFloor,
+  CARD_MARGIN, CARD_WIDTH, effectiveFontPx, fitView, fitZoom, isZoomedAway, layoutRun, MIN_ZOOM, PANEL_MIN_H, panelHeight, placeCard, placeCardForView,
+  viewBoxOf, wheelIntent, zoomFloor,
   type GraphLayout, type NodeBox, type Rect, type Size,
 } from '../src/run/layout'
 import { RunGraph } from '../src/run/graph'
@@ -222,6 +223,42 @@ check(placeCard(nodeAt(100, 100), { w: 600, h: 500 }, cardSize).mode === 'dock',
 check(placeCard(nodeAt(100, 100, 400), { w: 700, h: 500 }, cardSize).mode === 'dock', 'a container narrower than the card plus the node docks the card')
 check(placeCard(nodeAt(100, 100), { w: 640, h: 500 }, cardSize).mode === 'beside', 'a 640 px container that holds card and node places beside')
 
+// a plain wheel scrolls the page; only ctrl or meta zooms (trackpad pinch arrives as ctrl+wheel)
+check(wheelIntent({ ctrlKey: false, metaKey: false, deltaY: 120 }) === 'scroll', 'a plain wheel scrolls the page')
+check(wheelIntent({ ctrlKey: false, metaKey: false, deltaY: -120 }) === 'scroll', 'a plain wheel up scrolls the page')
+check(wheelIntent({ ctrlKey: true, metaKey: false, deltaY: -4 }) === 'zoom', 'ctrl+wheel zooms')
+check(wheelIntent({ ctrlKey: false, metaKey: true, deltaY: 100 }) === 'zoom', 'meta+wheel zooms')
+check(wheelIntent({ ctrlKey: true, metaKey: false, deltaY: 0 }) === 'scroll', 'a wheel with no vertical delta never zooms')
+
+// the card follows its node: the same node under a moved view gets a different placement, always inside the panel
+const cardPanel: Size = { w: 1100, h: 560 }
+const t9 = box('T9')
+const t9Fit = { cx: t9.x + t9.w / 2, cy: t9.y + t9.h / 2, z: 1 }
+const placedAt = (v: { cx: number; cy: number; z: number }) => placeCardForView(v, cardPanel, t9, 260)
+const centred = placedAt(t9Fit)
+check(centred.mode === 'beside', 'a centred node places the card beside it')
+const panned = placedAt({ ...t9Fit, cy: t9Fit.cy + 120 })
+check(centred.mode === 'beside' && panned.mode === 'beside' && panned.top < centred.top, 'panning the view up moves the card up with its node')
+const nodeLeftOf = (v: { cx: number; cy: number; z: number }) => (t9.x - viewBoxOf(v, cardPanel).x) * v.z
+const zoomedOut = placedAt({ ...t9Fit, z: 0.5 })
+check(zoomedOut.mode === 'beside' && centred.mode === 'beside' && zoomedOut.left !== centred.left, 'zooming the view moves the card with the node')
+check(
+  zoomedOut.mode === 'beside' &&
+    (zoomedOut.left >= nodeLeftOf({ ...t9Fit, z: 0.5 }) + t9.w * 0.5 || zoomedOut.left + CARD_WIDTH <= nodeLeftOf({ ...t9Fit, z: 0.5 })),
+  'the card sits beside the zoomed node box, not on it',
+)
+for (const v of [t9Fit, { ...t9Fit, cy: t9Fit.cy - 900 }, { ...t9Fit, cx: t9Fit.cx + 900, z: 2 }, { ...t9Fit, z: 0.3 }]) {
+  const placed = placeCardForView(v, cardPanel, t9, 260)
+  check(placed.mode === 'beside' && placed.top >= CARD_MARGIN && placed.top + 260 <= cardPanel.h - CARD_MARGIN, 'the card stays inside the visible panel vertically')
+}
+check(placeCardForView(t9Fit, { w: 500, h: 560 }, t9, 260).mode === 'dock', 'a narrow panel docks the card whatever the view')
+
+// the panel takes the viewport space left below its top edge, with a floor
+check(panelHeight(720, 250) === 470, 'the panel takes the viewport height left below its top edge')
+check(panelHeight(720, 600) === PANEL_MIN_H, 'the panel never drops below the floor')
+check(panelHeight(1440, 300) === 1140, 'a tall window gives the panel the room it has')
+check(panelHeight(720, 250.6) === 469, 'the panel height is a whole number of px')
+
 // dependency edges never take a dash, whatever the status pair
 const statuses: RunStatus[] = ['queued', 'running', 'retrying', 'passed', 'failed', 'needs-you', 'skipped']
 const pairTasks: RunTask[] = []
@@ -288,6 +325,11 @@ const sweepOpacities = [...sweepFrames.matchAll(/opacity:\s*([\d.]+)/g)].map((m)
 check(sweepOpacities.length > 0 && Math.max(...sweepOpacities) <= 0.08, 'the sweep never exceeds 8% opacity')
 check(/\.run-node\[data-status='running'\] \.run-node-dot\s*\{[^}]*animation:/.test(css), 'a running card pulses its status dot')
 check(/prefers-reduced-motion[\s\S]*\.run-graph \*[\s\S]*animation:\s*none/.test(css), 'reduced motion stops every graph animation')
+
+// the panel height comes from the measured offset, and the wheel hint is shown statically under reduced motion
+check(/\.run-graph\s*\{[^}]*height:\s*var\(--run-graph-h/.test(css), 'the graph height reads the measured --run-graph-h')
+check(/prefers-reduced-motion[\s\S]*\.run-graph-hint[\s\S]*animation:\s*none/.test(css), 'reduced motion shows the wheel hint without animation')
+check(!html.includes('Use ⌘ or Ctrl + scroll to zoom'), 'the wheel hint stays hidden until the first plain wheel')
 
 // Show all appears only while the view is away from fit
 const showAll = (h: string) => h.includes('Show all')

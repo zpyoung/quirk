@@ -262,3 +262,32 @@ export function placeCard(node: Rect, container: Size, card: Size): CardPlacemen
   const top = clamp(node.top, CARD_MARGIN, container.h - card.h - CARD_MARGIN)
   return { mode: 'beside', left, top }
 }
+
+/**
+ * Places the question card for a node box in layout units under the current view, so every pan or zoom
+ * moves the card with its node. `cardH` is the card's measured height; it is capped to what the panel can hold.
+ */
+export function placeCardForView(view: View, size: Size, box: { x: number; y: number; w: number; h: number }, cardH: number): CardPlacement {
+  const vb = viewBoxOf(view, size)
+  const left = (box.x - vb.x) * view.z
+  const top = (box.y - vb.y) * view.z
+  const card = { w: Math.min(CARD_WIDTH, size.w - 2 * CARD_MARGIN), h: Math.min(cardH, size.h - 2 * CARD_MARGIN) }
+  return placeCard({ left, top, right: left + box.w * view.z, bottom: top + box.h * view.z }, size, card)
+}
+
+export type WheelIntent = 'zoom' | 'scroll'
+
+/**
+ * What a wheel event over the graph means. Only ctrl or meta zooms (a trackpad pinch arrives as ctrl+wheel),
+ * so a plain wheel keeps scrolling the page instead of being captured by the graph.
+ */
+export function wheelIntent(event: { ctrlKey: boolean; metaKey: boolean; deltaY: number }): WheelIntent {
+  return (event.ctrlKey || event.metaKey) && event.deltaY !== 0 ? 'zoom' : 'scroll'
+}
+
+export const PANEL_MIN_H = 360
+
+/** The graph panel's height in px: the viewport space left below the panel's top edge, never under PANEL_MIN_H. */
+export function panelHeight(viewportH: number, top: number): number {
+  return Math.max(PANEL_MIN_H, Math.floor(viewportH - top))
+}
