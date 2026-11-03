@@ -20,6 +20,10 @@ snapshot/event API over the on-disk state in ``htmlkit.appstate``, and the agent
 ``step``, ``status``, ``decide``, ``review``, ``say``, ``reply``, ``next`` and ``snapshot``. A session is in app mode
 exactly when ``state/mode.json`` says so; the screen subcommands refuse an app session and the
 app subcommands refuse a screen session, both with exit 2.
+
+An app session can also carry an SDD run: ``run-start``, ``report``, ``ask``, ``await`` and
+``answer`` register it, record SDD's reports and arbitrate questions between the tab and orca ask.
+While a run is registered the snapshot gains a ``run`` view and the server watches git for it.
 """
 from __future__ import annotations
 
@@ -51,9 +55,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htmlkit import SKILL_DIR, assemble, resolve  # noqa: E402
 from htmlkit.appstate import AppState, AppStateError  # noqa: E402
+from htmlkit import gitwatch, orca  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
 from htmlkit.header import read_header, render_header  # noqa: E402
 from htmlkit.layouts import validate_layout  # noqa: E402
+from htmlkit.runfold import STALE_AFTER_S, TAB_FALLBACK_AFTER_S, current_run_actions, fold, run_view  # noqa: E402
+from htmlkit.runstate import RunError, RunStore  # noqa: E402
 from htmlkit.steps import StepError, validate_step  # noqa: E402
 from htmlkit.vendor import VendorError, VendorStore, shell_block  # noqa: E402
 
@@ -74,7 +81,13 @@ SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
 SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram", "layout"}
 EVENT_TYPES = ("click", "proceed")
 
-APP_EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "draft")
+APP_EVENT_TYPES = (
+    "submit", "continue", "chat", "comment", "edit-request", "edit-decision", "draft",
+    "run-answer", "run-stop", "run-retry",
+)
+RUN_EVENT_TYPES = ("run-answer", "run-stop", "run-retry")
+RUN_STOPPABLE = ("queued", "running", "retrying", "needs-you", "failed")
+RUN_IDLE_MINUTES = 120
 MAX_EXPORT_BODY = 2 * 1024 * 1024
 EXPORT_DRAIN_LIMIT = 8 * 1024 * 1024
 MAX_CLIENT_ID = 100
@@ -196,9 +209,9 @@ def _previous_port(state: Path) -> Optional[int]:
 
 
 def _prepare_session(session: Path) -> None:
-    """Create the session's directories; a ``.quirk/brainstorm`` parent becomes self-ignoring."""
+    """Create the session's directories; a ``.quirk/brainstorm`` or ``.quirk/sdd`` parent becomes self-ignoring."""
     parent = session.parent
-    if parent.name == "brainstorm" and parent.parent.name == ".quirk":
+    if parent.name in ("brainstorm", "sdd") and parent.parent.name == ".quirk":
         ensure_self_ignoring(parent)
     (session / "screens").mkdir(parents=True, exist_ok=True)
     _state_dir(session).mkdir(parents=True, exist_ok=True)
@@ -346,6 +359,14 @@ def _own_addresses() -> frozenset:
     return frozenset(found)
 
 
+def _run_or_none(session: Path) -> Optional[dict]:
+    """The folded run view, or None when no run is registered or its files cannot be read."""
+    try:
+        return run_view(session)
+    except Exception:
+        return None
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -399,13 +420,36 @@ class _Server(ThreadingHTTPServer):
             return data
         return None
 
+    def run_registered(self) -> bool:
+        """Whether the session has a registered SDD run (an unreadable run counts as none)."""
+        if self.app_state is None:
+            return False
+        try:
+            return RunStore(self.session, self.app_state).run() is not None
+        except (OSError, ValueError):
+            return False
+
     def idle_seconds(self) -> float:
+        """Seconds since the last request, shown step or, with a run registered, SDD report."""
         idle = time.monotonic() - self.last_request
         try:
-            shown = time.time() - (_state_dir(self.session) / "current.json").stat().st_mtime
+            idle = min(idle, time.time() - (_state_dir(self.session) / "current.json").stat().st_mtime)
         except OSError:
-            return idle
-        return min(idle, shown)
+            pass
+        if self.run_registered():
+            try:
+                reported = RunStore(self.session, self.app_state).last_report_at()
+            except (OSError, ValueError):
+                reported = None
+            if reported is not None:
+                idle = min(idle, max(0.0, time.time() - reported))
+        return idle
+
+    def idle_limit(self, idle_minutes: float) -> float:
+        """The idle limit in seconds; a registered run keeps the server up for at least two hours."""
+        if self.run_registered():
+            idle_minutes = max(idle_minutes, RUN_IDLE_MINUTES)
+        return idle_minutes * 60
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -457,6 +501,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_snapshot()
         elif self.server.app and path == "/_quirk/review":
             self._serve_review()
+        elif self.server.app and path == "/_quirk/run/diff":
+            self._serve_run_diff()
         elif path.startswith("/_quirk/lib/"):
             self._serve_library(path[len("/_quirk/lib/") :])
         else:
@@ -468,6 +514,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if self.server.app and path == "/_quirk/app/event":
             self._accept_app_event()
+        elif self.server.app and path == "/_quirk/run/open":
+            self._open_in_orca()
         elif self.server.app and path == "/_quirk/review/export":
             self._accept_review_export()
         elif not self.server.app and path == "/_quirk/event":
@@ -505,12 +553,77 @@ class _Handler(BaseHTTPRequestHandler):
         self._reply(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def _serve_snapshot(self) -> None:
-        snapshot = self.server.app_state.snapshot()
+        app = self.server.app_state
+        if self._has_token():
+            try:
+                RunStore(self.server.session, app).touch_tab()
+            except OSError:
+                pass
+        snapshot = app.snapshot()
+        snapshot["run"] = _run_or_none(self.server.session)
         wanted = parse_qs(urlsplit(self.path).query).get("rev", [""])[0]
         if wanted.isascii() and wanted.isdigit() and int(wanted) == snapshot["rev"]:
             self._reply(204)
         else:
             self._json(200, snapshot)
+
+    def _serve_run_diff(self) -> None:
+        """The task's diff as JSON; 404 for no run, an unknown task or a task with no branch."""
+        task = parse_qs(urlsplit(self.path).query).get("task", [""])[0]
+        store = RunStore(self.server.session, self.server.app_state)
+        try:
+            run_doc = store.run()
+            diff = gitwatch.task_diff(run_doc, store.reports(), task) if run_doc and task else None
+        except gitwatch.GitError as exc:
+            self._json(500, {"error": str(exc)})
+            return
+        except (OSError, ValueError):
+            diff = None
+        if diff is None:
+            self._reply(404, b"not found\n")
+        else:
+            self._json(200, diff)
+
+    def _open_in_orca(self) -> None:
+        """Open a task's listed dispatch worktree in Orca; the statuses are in tech.md's HTTP contract."""
+        if not self._check_token():
+            return
+        body = self._read_object(MAX_BODY, 400)
+        if body is None:
+            return
+        run_id, task = body.get("run_id"), body.get("task")
+        if not isinstance(run_id, str) or not isinstance(task, str) or not task:
+            self._json(400, {"error": "run_id and task must be strings"})
+            return
+        store = RunStore(self.server.session, self.server.app_state)
+        try:
+            run_doc = store.run()
+            if run_doc is None or run_doc.get("run_id") != run_id:
+                self._json(409, {"error": "not the current run"})
+                return
+            state, worktree, title = gitwatch.task_open_target(run_doc, store.reports(), task)
+        except gitwatch.GitError as exc:
+            self._json(500, {"error": str(exc)})
+            return
+        except (OSError, ValueError):
+            self._json(404, {"error": "no such task"})
+            return
+        if state == "unknown" or state == "no-worktree":
+            self._json(404, {"error": "no worktree for that task"})
+            return
+        if worktree is None:
+            self._json(410, {"error": "worktree-gone"})
+            return
+        exe = orca.orca_command()
+        if exe is None:
+            self._json(503, {"error": "orca-unavailable"})
+            return
+        try:
+            action = orca.open_worktree(exe, worktree, title)
+        except orca.OrcaError as exc:
+            self._json(502, {"error": "orca-failed", "detail": exc.detail})
+            return
+        self._json(200, {"action": action})
 
     def _serve_review(self) -> None:
         path = self.server.app_state.review_path()
@@ -604,6 +717,11 @@ class _Handler(BaseHTTPRequestHandler):
                 fh.write(json.dumps(record) + "\n")
         self._reply(204)
 
+    def _has_token(self) -> bool:
+        """Whether the request carries the session token; the snapshot GET only counts a tab check-in then."""
+        given = self.headers.get(TOKEN_HEADER, "")
+        return secrets.compare_digest(given.encode("utf-8"), self.server.token.encode("utf-8"))
+
     def _check_token(self) -> bool:
         """Refuse an app POST that lacks the session token; the unread body is drained first."""
         given = self.headers.get(TOKEN_HEADER, "")
@@ -687,6 +805,8 @@ class _Handler(BaseHTTPRequestHandler):
             return 400, {"error": "a draft must name its step"}
         if kind != "draft" and any(e.get("client_id") == client_id for e in app.events_after(0)):
             return 200, {"duplicate": True}
+        if kind in RUN_EVENT_TYPES:
+            return self._record_run_event(app, kind, client_id, payload)
         if kind in ("chat", "comment"):
             return self._record_conversation(app, kind, client_id, payload, current)
         needs_nonce = kind in ("submit", "edit-decision")
@@ -710,6 +830,69 @@ class _Handler(BaseHTTPRequestHandler):
             app.save_draft(current["screen"], payload)
             return 204, None
         if app.append_event(kind, payload, client_id, step=current["screen"]) is None:
+            return 200, {"duplicate": True}
+        return 204, None
+
+    def _record_run_event(
+        self, app: AppState, kind: str, client_id: str, payload: dict
+    ) -> tuple[int, Optional[dict]]:
+        """Store a ``run-answer``, ``run-stop`` or ``run-retry`` event; runs under the state lock.
+
+        None of them needs a current step or a nonce. A stop or retry is judged against the task's
+        folded status, which is computed from this server's own AppState: a second AppState on the
+        same lock file would wait on the lock this thread already holds. Every accepted event stores
+        the current ``run_id``, because the event log outlives a run and only current-run events count.
+        """
+        store = RunStore(self.server.session, app)
+        try:
+            run_doc = store.run()
+            if run_doc is None:
+                return 400, {"error": "no run"}
+            if kind == "run-answer":
+                return self._record_run_answer(app, store, run_doc, client_id, payload)
+            return self._record_run_action(app, store, run_doc, kind, client_id, payload)
+        except RunError as exc:
+            return 400, {"error": str(exc), "field": exc.field}
+        except (OSError, ValueError) as exc:
+            return 500, {"error": f"run state is unreadable: {exc}"}
+
+    def _record_run_action(
+        self, app: AppState, store: RunStore, run_doc: dict, kind: str, client_id: str, payload: dict
+    ) -> tuple[int, Optional[dict]]:
+        task = payload.get("task")
+        if not (isinstance(task, str) and task):
+            return 400, {"error": "task must be a task id", "field": "task"}
+        actions = current_run_actions(app.events_after(0), run_doc.get("run_id"))
+        view = fold(run_doc, store.reports(), store.git_facts(), store.questions(), actions, time.time(), STALE_AFTER_S)
+        entry = next((t for t in view["tasks"] if t["id"] == task), None)
+        if entry is None:
+            return 400, {"error": "unknown task", "field": "task"}
+        allowed = RUN_STOPPABLE if kind == "run-stop" else ("failed",)
+        if entry["status"] not in allowed:
+            return 409, {"refused": entry["status"]}
+        if entry.get("pending_action") == kind.removeprefix("run-"):
+            return 200, {"duplicate": True}
+        if app.append_event(kind, {"task": task, "run_id": run_doc.get("run_id")}, client_id, step=None) is None:
+            return 200, {"duplicate": True}
+        return 204, None
+
+    def _record_run_answer(
+        self, app: AppState, store: RunStore, run_doc: dict, client_id: str, payload: dict
+    ) -> tuple[int, Optional[dict]]:
+        pick, text = payload.get("pick"), payload.get("text")
+        if not isinstance(payload.get("question"), str) or any(
+            v is not None and not isinstance(v, str) for v in (pick, text)
+        ):
+            return 400, {"error": "question, pick and text must be strings", "field": "question"}
+        answer, recorded = store.answer(payload["question"], "tab", pick=pick, text=text)
+        if not recorded:
+            return 409, {"answered": answer}
+        clean = {
+            "question": payload["question"],
+            **({"pick": pick} if pick is not None else {"text": text}),
+            "run_id": run_doc.get("run_id"),
+        }
+        if app.append_event("run-answer", clean, client_id, step=None) is None:
             return 200, {"duplicate": True}
         return 204, None
 
@@ -964,6 +1147,28 @@ def _bind(host: str, ports: Sequence[int], session: Path, allowed_hosts: Sequenc
     raise error
 
 
+def _start_watcher(httpd: _Server) -> gitwatch.Watcher:
+    """Start the thread that polls git facts into the run store while a run is registered."""
+    store = RunStore(httpd.session, httpd.app_state)
+
+    loaded_run: list[Optional[str]] = [None]
+
+    def load() -> tuple[Optional[dict], list[dict], Optional[dict]]:
+        run = store.run()
+        loaded_run[0] = run.get("run_id") if run else None
+        return run, store.reports(), store.git_facts()
+
+    def save(facts: dict) -> None:
+        # the watcher is one thread, so loaded_run is the run this tick observed
+        run_id = loaded_run[0]
+        if run_id is not None:
+            store.write_git_facts(facts, run_id=run_id)
+
+    watcher = gitwatch.Watcher(load, save)
+    watcher.start()
+    return watcher
+
+
 def _serve(
     session: Path,
     host: Optional[str],
@@ -1019,12 +1224,15 @@ def _serve(
         signal.signal(signum, on_signal)
     atomic_write(state / "server-info", json.dumps(info))
     _emit(info)
+    watcher = _start_watcher(httpd) if app else None
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
-    limit = idle_minutes * 60
     while not stop.wait(0.1):
-        if httpd.idle_seconds() >= limit:
+        if httpd.idle_seconds() >= httpd.idle_limit(idle_minutes):
             reason["value"] = "idle"
             break
+    if watcher is not None:
+        watcher.stop()
+        watcher.join(timeout=1.0)
     httpd.shutdown()
     httpd.server_close()
     _write_stopped(state, reason["value"])
@@ -1475,11 +1683,123 @@ def _cmd_next(args: argparse.Namespace) -> int:
         time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
+def _run_error(exc: RunError, *, no_run_field: bool = True) -> int:
+    """Report a RunStore rejection; the ``run`` field means no run is registered."""
+    if no_run_field and exc.field == "run":
+        print("no run is registered; call run-start first", file=sys.stderr)
+        _emit({"error": "no run", "field": "run"})
+        return EXIT_USAGE
+    return _field_error(exc, exc.field)
+
+
+def _cmd_run_start(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    session = Path(args.session)
+    try:
+        started = RunStore(session, app).start(_read_input(args.run))
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except RunError as exc:
+        return _run_error(exc, no_run_field=False)
+    info = live_server_info(session)
+    _emit({**started, "url": info.get("url") if info else None})
+    return EXIT_OK
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    if (args.json is None) == (args.file is None):
+        return _fail("give exactly one of a JSON report and --file")
+    try:
+        if args.file is not None:
+            report = _read_input(args.file)
+        else:
+            try:
+                report = json.loads(args.json)
+            except (ValueError, RecursionError) as exc:
+                raise ScreenError(f"the report is not valid JSON: {exc}") from exc
+        result = RunStore(Path(args.session), app).report(report)
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except RunError as exc:
+        return _run_error(exc)
+    _emit(result)
+    return EXIT_OK
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        asked = RunStore(Path(args.session), app).ask(_read_input(args.question))
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except RunError as exc:
+        return _run_error(exc)
+    _emit(asked)
+    return EXIT_OK
+
+
+def _cmd_await(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    session = Path(args.session)
+    store = RunStore(session, app)
+    deadline = time.monotonic() + args.timeout
+    while True:
+        if live_server_info(session) is None:
+            _emit({"status": "no-server"})
+            print("no live companion server for this session; run start --app", file=sys.stderr)
+            return EXIT_USAGE
+        question = next((q for q in store.questions() if q.get("id") == args.question), None)
+        if question is None:
+            return _field_error(RunError("question"), "question")
+        if question.get("state") == "answered":
+            _emit({"answered": question["answer"]})
+            return EXIT_OK
+        if args.quiet_after > 0:
+            seen = store.tab_seen_ago()
+            quiet = seen if seen is not None else max(0.0, time.time() - question.get("asked_at", time.time()))
+            if quiet >= args.quiet_after:
+                _emit({"status": "tab-quiet"})
+                return EXIT_NOT_OK
+        if time.monotonic() >= deadline:
+            _emit({"status": "timeout"})
+            print("timed out waiting for an answer; re-run await, nothing is lost", file=sys.stderr)
+            return EXIT_NOT_OK
+        time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
+def _cmd_answer(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        answer, recorded = RunStore(Path(args.session), app).answer(
+            args.question, args.source, pick=args.pick, text=args.text
+        )
+    except RunError as exc:
+        return _field_error(exc, exc.field)
+    if recorded:
+        _emit({"answered": answer})
+        return EXIT_OK
+    _emit({"answered": answer, "already": True})
+    return EXIT_NOT_OK
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     app = _app_session(args)
     if app is None:
         return EXIT_USAGE
-    _emit(app.snapshot())
+    snapshot = app.snapshot()
+    snapshot["run"] = _run_or_none(Path(args.session))
+    _emit(snapshot)
     return EXIT_OK
 
 
@@ -1594,6 +1914,41 @@ def _build_parser() -> argparse.ArgumentParser:
     nxt.add_argument("--after", type=int, default=0, metavar="SEQ")
     nxt.add_argument("--timeout", type=float, default=110.0)
     nxt.set_defaults(func=_cmd_next)
+
+    run_start = sub.add_parser("run-start", help="app mode: register or resume an SDD run")
+    run_start.add_argument("session")
+    run_start.add_argument("run", metavar="RUN.json")
+    run_start.set_defaults(func=_cmd_run_start)
+
+    report = sub.add_parser("report", help="app mode: record one SDD report for the run")
+    report.add_argument("session")
+    report.add_argument("json", nargs="?", metavar="JSON")
+    report.add_argument("--file", metavar="F")
+    report.set_defaults(func=_cmd_report)
+
+    ask = sub.add_parser("ask", help="app mode: put a question to the run view's tab")
+    ask.add_argument("session")
+    ask.add_argument("question", metavar="QUESTION.json")
+    ask.set_defaults(func=_cmd_ask)
+
+    wait_answer = sub.add_parser("await", help="app mode: block until a run question is answered")
+    wait_answer.add_argument("session")
+    wait_answer.add_argument("question", metavar="QID")
+    wait_answer.add_argument("--timeout", type=float, default=600.0)
+    wait_answer.add_argument(
+        "--quiet-after", type=float, default=float(TAB_FALLBACK_AFTER_S), metavar="S",
+        help="return tab-quiet when the tab has not checked in for S seconds; 0 disables",
+    )
+    wait_answer.set_defaults(func=_cmd_await)
+
+    answer = sub.add_parser("answer", help="app mode: answer a run question from orca or SDD")
+    answer.add_argument("session")
+    answer.add_argument("question", metavar="QID")
+    answer.add_argument("--source", required=True, choices=("orca", "sdd"))
+    value = answer.add_mutually_exclusive_group(required=True)
+    value.add_argument("--pick")
+    value.add_argument("--text")
+    answer.set_defaults(func=_cmd_answer)
 
     snapshot = sub.add_parser("snapshot", help="app mode: print the snapshot the tab receives")
     snapshot.add_argument("session")

@@ -1,0 +1,232 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [
+    {
+      "id": "c1",
+      "tasks": [
+        "T4",
+        "T5"
+      ]
+    }
+  ],
+  "counts": {
+    "failed": 1,
+    "missing": 0,
+    "needs-you": 0,
+    "passed": 4,
+    "queued": 1,
+    "retrying": 0,
+    "running": 0,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T4",
+      "kind": "order",
+      "to": "T5"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T6",
+      "kind": "dep",
+      "to": "T9"
+    }
+  ],
+  "last_update_at": 1793664640.0,
+  "now": 1793664670.0,
+  "questions": [],
+  "rounds": [],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664020.0,
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T9"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T9"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664480.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "chain": "c1",
+      "downstream": [],
+      "ended_at": 1793664480.0,
+      "files": 1,
+      "id": "T4",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Report command",
+      "worktree": "/work/recharge/.worktrees/T4"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664550.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664490.0
+        }
+      ],
+      "blocked_by": [],
+      "chain": "c1",
+      "contract_md": "Add `ask`, `await` and `answer` to `companion.py`.",
+      "downstream": [],
+      "ended_at": 1793664550.0,
+      "files": 1,
+      "id": "T5",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664490.0,
+      "status": "passed",
+      "title": "Ask and answer commands",
+      "worktree": "/work/recharge/.worktrees/T5"
+    },
+    {
+      "attempt": 2,
+      "attempts": [
+        {
+          "end": 1793664520.0,
+          "n": 1,
+          "outcome": "failed",
+          "start": 1793664400.0
+        },
+        {
+          "end": 1793664640.0,
+          "n": 2,
+          "outcome": "failed",
+          "start": 1793664530.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T9"
+      ],
+      "ended_at": 1793664640.0,
+      "files": 1,
+      "id": "T6",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "pending_action": "stop",
+      "ready": true,
+      "reason": "acceptance check failed again",
+      "started_at": 1793664400.0,
+      "status": "failed",
+      "title": "Snapshot run key",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [
+        "T6"
+      ],
+      "downstream": [],
+      "files": 0,
+      "id": "T9",
+      "labels": [
+        "blocked by T6"
+      ],
+      "level": 3,
+      "mismatch": null,
+      "ready": false,
+      "status": "queued",
+      "title": "Shell run view"
+    }
+  ]
+}

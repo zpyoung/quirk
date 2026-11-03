@@ -244,3 +244,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Priority**: P2
 - **Proposed owner**: the next SDD change (per-task dispatch landed in #61)
 
+## DEFER-30: Speed up the full test suite with pytest-xdist and Playwright context reuse
+- **Deferred**: 2026-11-03
+- **Session context**: SDD live task view run, final gate
+- **Why deferred**: Full suite takes ~29 min locally (python3 -m pytest -q, 8164 tests, measured 2026-11-03 during the SDD task-view run); out of scope for that work
+- **Estimated effort**: M
+- **Priority**: P3
+

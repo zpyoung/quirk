@@ -3,6 +3,10 @@ import { Theme } from '@astryxdesign/core/theme'
 import { neutralTheme } from '@astryxdesign/theme-neutral/built'
 import { readBoot } from './boot'
 import { useReadySignal } from './notify'
+import { DiffPage } from './run/diff-page'
+import { FindingsPage } from './run/findings-page'
+import { pickPage } from './run/format'
+import { RunPage } from './run/run-view'
 import { Connecting, NotConnected, ShellView } from './shell'
 import { nextThemeMode, setThemeMode, useThemeMode } from './theme'
 import { postEvent, useSnapshotFeed } from './transport'
@@ -17,10 +21,15 @@ function ThemeToggle() {
   )
 }
 
+export { pickPage }
+
 export default function App() {
   const mode = useThemeMode()
   const boot = useMemo(readBoot, [])
-  const feed = useSnapshotFeed(boot !== null)
+  const search = location.search
+  const feed = useSnapshotFeed(boot !== null && pickPage(search, false) !== 'diff')
+  const run = feed.snapshot?.run ?? null
+  const page = pickPage(search, run !== null)
   const [submittedStepId, setSubmittedStepId] = useState<string | null>(null)
   const [openStage, setOpenStage] = useState<StageId | null>(null)
   const step = feed.snapshot?.step ?? null
@@ -63,9 +72,15 @@ export default function App() {
 
   const themeMode = mode === 'auto' ? 'system' : mode
   let body
-  if (!boot) body = <NotConnected />
+  if (page === 'diff') {
+    body = <DiffPage task={new URLSearchParams(search).get('task') ?? ''} />
+  } else if (page === 'findings') {
+    body = <FindingsPage run={run} round={new URLSearchParams(search).get('round') ?? ''} />
+  } else if (!boot) body = <NotConnected />
   else if (!feed.snapshot) body = <Connecting paused={feed.paused} />
-  else {
+  else if (page === 'run') {
+    body = <RunPage snapshot={feed.snapshot} boot={boot} paused={feed.paused} headerExtras={<ThemeToggle />} />
+  } else {
     body = (
       <ShellView
         snapshot={feed.snapshot}
