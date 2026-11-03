@@ -6,7 +6,7 @@
   position: absolute;
   top: var(--q-space-2);
   right: var(--q-space-2);
-  z-index: 2;
+  z-index: 10;
   display: flex;
   gap: var(--q-space-1);
 }
@@ -22,6 +22,11 @@
   cursor: pointer;
 }
 
+.run-view .run-graph-tools .run-graph-show-all {
+  border-color: var(--q-color-accent);
+  font-weight: 600;
+}
+
 .run-view .run-graph-tools button:hover {
   border-color: var(--q-color-accent);
 }
@@ -29,7 +34,7 @@
 .run-view .run-graph {
   display: block;
   width: 100%;
-  height: clamp(320px, 62vh, 680px);
+  height: clamp(480px, 80vh, 860px);
   border: 1px solid var(--q-color-border);
   border-radius: var(--q-radius-md);
   background: var(--q-color-bg);
@@ -141,18 +146,18 @@
 
 .run-view .run-node-title {
   fill: var(--q-color-text);
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
 }
 .run-view .run-node-meta {
   fill: var(--q-color-text-muted);
   font-family: var(--q-font-mono, monospace);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .run-view .run-node-reason {
   fill: var(--q-color-critical);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .run-view .run-node-dot {
@@ -160,7 +165,7 @@
 }
 .run-view .run-node-glyph {
   fill: var(--run-status-text);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 .run-view .run-node[data-status='retrying'] .run-node-glyph,
@@ -204,14 +209,21 @@
   animation: run-flash 0.9s ease-out;
 }
 
+/* activity is a pulsing status dot plus a faint sweep confined to the accent bar; the card body is never overlaid */
 .run-view .run-node-shimmer {
   pointer-events: none;
   overflow: hidden;
-  color: var(--run-status);
 }
 .run-view .run-node-sweep {
+  fill: var(--q-color-bg);
   opacity: 0;
-  animation: run-sweep 2.2s ease-in-out infinite;
+  transform-box: fill-box;
+  animation: run-sweep 2.8s ease-in-out infinite;
+}
+.run-view .run-node[data-status='running'] .run-node-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: run-dot-pulse 2.4s ease-in-out infinite;
 }
 
 .run-view .run-node-chip rect {
@@ -221,7 +233,7 @@
 }
 .run-view .run-node-chip text {
   fill: var(--q-color-text);
-  font-size: 10px;
+  font-size: 12.5px;
 }
 .run-view .run-node-chip[data-kind='try'] rect {
   fill: color-mix(in srgb, var(--q-color-warn) 30%, var(--q-color-surface));
@@ -239,7 +251,7 @@
 }
 .run-view .run-node-mark text {
   fill: var(--q-color-bg);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
 }
 .run-view .run-node-mark {
@@ -253,7 +265,7 @@
 }
 .run-view .run-tip text {
   fill: var(--q-color-bg);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 /* edges */
@@ -328,17 +340,21 @@
 @keyframes run-sweep {
   0% {
     opacity: 0;
-    transform: translateX(-60%);
+    transform: translateY(-100%);
   }
-  20% {
-    opacity: 1;
-  }
-  70% {
-    opacity: 1;
+  30%,
+  60% {
+    opacity: 0.08;
   }
   100% {
     opacity: 0;
-    transform: translateX(170%);
+    transform: translateY(230%);
+  }
+}
+@keyframes run-dot-pulse {
+  50% {
+    opacity: 0.6;
+    transform: scale(1.14);
   }
 }
 @keyframes run-edge-glow {

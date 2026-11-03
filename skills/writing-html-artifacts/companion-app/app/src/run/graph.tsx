@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { CARD_MARGIN, CARD_WIDTH, clampZoom, fitView, layoutRun, placeCard, viewBoxOf, zoomFloor, type Size, type View } from './layout'
+import { CARD_MARGIN, CARD_WIDTH, clampZoom, fitView, isZoomedAway, layoutRun, placeCard, viewBoxOf, zoomFloor, type Size, type View } from './layout'
 import { mismatchLines, TaskNode } from './node'
 import type { RunView } from './types'
 
@@ -12,6 +12,8 @@ export interface RunGraphProps {
   card: ReactNode
   stale: boolean
   onSelect(task: string): void
+  /** Starts the view here instead of at fit, so the zoomed-away state can be rendered directly. */
+  initialView?: View
 }
 
 const FOCUS_ZOOM = 1
@@ -30,10 +32,10 @@ function summary(run: RunView): string {
 }
 
 /** The run as a dependency graph: columns by level, pan and zoom through the viewBox, a card beside the asking task. */
-export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stale, onSelect }: RunGraphProps): JSX.Element {
+export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stale, onSelect, initialView }: RunGraphProps): JSX.Element {
   const layout = useMemo(() => layoutRun(run), [run])
   const [size, setSize] = useState<Size>(DEFAULT_SIZE)
-  const [view, setViewState] = useState<View>(() => fitView(layout, DEFAULT_SIZE))
+  const [view, setViewState] = useState<View>(() => initialView ?? fitView(layout, DEFAULT_SIZE))
   const [tip, setTip] = useState<string | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -41,7 +43,7 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   const svgRef = useRef<SVGSVGElement>(null)
   const viewRef = useRef(view)
   const sizeRef = useRef(size)
-  const autoFit = useRef(true)
+  const autoFit = useRef(initialView === undefined)
   const frame = useRef(0)
   const moved = useRef(false)
   const lastNonce = useRef<number | null>(null)
@@ -228,6 +230,7 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   )
 
   const vb = viewBoxOf(view, size)
+  const away = !autoFit.current && isZoomedAway(view, layout, size)
   const hot = hover ?? selected
   const tipTask = tip ? tasks.get(tip) : undefined
   const tipBox = tip ? layout.nodes.find((n) => n.id === tip) : undefined
@@ -250,6 +253,11 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
   return (
     <div className="run-graph-root" data-run-part="graph">
       <div className="run-graph-tools" role="group" aria-label="Graph view">
+        {away ? (
+          <button type="button" className="run-graph-show-all" onClick={fit}>
+            Show all
+          </button>
+        ) : null}
         <button type="button" onClick={fit}>
           Fit
         </button>
@@ -283,11 +291,6 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
           <marker id="run-arrow-failed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
             <path className="run-arrow run-arrow-failed" d="M0,1 L10,5 L0,9 Z" />
           </marker>
-          <linearGradient id="run-shimmer-grad" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0" stopColor="currentColor" stopOpacity="0" />
-            <stop offset="0.5" stopColor="currentColor" stopOpacity="0.28" />
-            <stop offset="1" stopColor="currentColor" stopOpacity="0" />
-          </linearGradient>
         </defs>
         <g className="run-edges">
           {layout.edges.map((edge) => {
@@ -331,13 +334,13 @@ export function RunGraph({ run, serverNow, selected, focus, cardTask, card, stal
 
 function MismatchTip({ text, x, y }: { text: string; x: number; y: number }): JSX.Element {
   const lines = mismatchLines(text)
-  const width = Math.max(...lines.map((l) => l.length)) * 6.4 + 20
-  const height = lines.length * 15 + 14
+  const width = Math.max(...lines.map((l) => l.length)) * 7.6 + 24
+  const height = lines.length * 19 + 16
   return (
     <g className="run-tip" transform={`translate(${x} ${y - height - 8})`} pointerEvents="none" role="tooltip">
       <rect width={width} height={height} rx={6} />
       {lines.map((line, i) => (
-        <text key={i} x={10} y={20 + i * 15}>
+        <text key={i} x={12} y={24 + i * 19}>
           {line}
         </text>
       ))}

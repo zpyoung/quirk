@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  CARD_MARGIN, CARD_WIDTH, fitView, fitZoom, layoutRun, MIN_ZOOM, placeCard, viewBoxOf, zoomFloor,
+  CARD_MARGIN, CARD_WIDTH, effectiveFontPx, fitView, fitZoom, isZoomedAway, layoutRun, MIN_ZOOM, placeCard, viewBoxOf, zoomFloor,
   type GraphLayout, type NodeBox, type Rect, type Size,
 } from '../src/run/layout'
 import { RunGraph } from '../src/run/graph'
@@ -247,6 +247,62 @@ for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
   }
 }
 check(!/run-flow/.test(css), 'graph.css: the dashed flow animation is gone')
+
+// text stays legible at the default fit: sizes come from the stylesheet, scaled by the fit zoom of the 11-task demo
+const cssFont = (selector: string): number => {
+  for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const [, sel, body] = rule
+    if (sel.trim().split(/\s*,\s*/).some((part) => part.endsWith(selector))) {
+      const size = /font-size:\s*([\d.]+)px/.exec(body)?.[1]
+      if (size) return Number(size)
+    }
+  }
+  return 0
+}
+const panel: Size = { w: 1232, h: 576 }
+const titlePx = effectiveFontPx(layout, panel, cssFont('.run-node-title'))
+const metaPx = effectiveFontPx(layout, panel, cssFont('.run-node-meta'))
+const chipPx = effectiveFontPx(layout, panel, cssFont('.run-node-chip text'))
+check(titlePx >= 14, `node titles must be at least 14 px at the default fit, got ${titlePx.toFixed(1)}`)
+check(metaPx >= 12, `node meta must be at least 12 px at the default fit, got ${metaPx.toFixed(1)}`)
+check(chipPx >= 12, `node chips must be at least 12 px at the default fit, got ${chipPx.toFixed(1)}`)
+check(fitZoom(layout, panel) >= 0.9, 'the 11-task demo fits near zoom 1, not shrunk to fit')
+check(layout.width * fitZoom(layout, panel) >= panel.w * 0.9, 'the demo fit uses at least 90% of the panel width')
+check(effectiveFontPx(layout, { w: 1232, h: 100_000 }, 10) === 10 * Math.min(1232 / layout.width, 1.25), 'effectiveFontPx scales by the fit zoom')
+
+// accessible names pluralise the file count
+const labels = [...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1])
+check(labels.some((l) => l.startsWith('T2 ') && /, 1 file(,|$)/.test(l)), 'a task with one file is announced as "1 file"')
+check(labels.every((l) => !/\b1 files\b/.test(l)) && !html.includes('1 files'), 'no label says "1 files"')
+check(labels.some((l) => l.startsWith('T1 ') && l.includes('3 files')), 'several files stay plural in the label')
+
+// the running effect is a dot pulse and a faint accent-bar sweep, never a gradient over the card body
+check(!html.includes('run-shimmer-grad') && !css.includes('run-shimmer-grad'), 'the card-wide shimmer gradient is gone')
+const shimmerSvg = /<svg class="run-node-shimmer"[^>]*>/.exec(html)?.[0] ?? ''
+check(/width="5"/.test(shimmerSvg), 'the running sweep is confined to the 5-unit accent bar')
+check(!/url\(/.test(html.slice(html.indexOf('run-node-shimmer'), html.indexOf('run-node-shimmer') + 300)), 'the sweep paints no gradient')
+const sweepRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /sweep|shimmer/.test(sel))
+check(sweepRules.length > 0 && sweepRules.every(([, sel, body]) => !/gradient|url\(/.test(body) && !/run-node-card/.test(sel)), 'shimmer rules target only the accent element')
+const sweepFrames = /@keyframes run-sweep\s*\{([\s\S]*?)\n\}\n/.exec(css)?.[1] ?? ''
+const sweepOpacities = [...sweepFrames.matchAll(/opacity:\s*([\d.]+)/g)].map((m) => Number(m[1]))
+check(sweepOpacities.length > 0 && Math.max(...sweepOpacities) <= 0.08, 'the sweep never exceeds 8% opacity')
+check(/\.run-node\[data-status='running'\] \.run-node-dot\s*\{[^}]*animation:/.test(css), 'a running card pulses its status dot')
+check(/prefers-reduced-motion[\s\S]*\.run-graph \*[\s\S]*animation:\s*none/.test(css), 'reduced motion stops every graph animation')
+
+// Show all appears only while the view is away from fit
+const showAll = (h: string) => h.includes('Show all')
+check(!showAll(html), 'Show all is hidden at the fit view')
+const defaultSize: Size = { w: 960, h: 520 }
+const fitted = fitView(layout, defaultSize)
+check(!showAll(renderToStaticMarkup(createElement(RunGraph, { run: sample, ...props, initialView: fitted }))), 'Show all is hidden when the view equals fit')
+const zoomedIn = { cx: box('T9').x + box('T9').w / 2, cy: box('T9').y + box('T9').h / 2, z: 1.6 }
+const awayHtml = renderToStaticMarkup(createElement(RunGraph, { run: sample, ...props, initialView: zoomedIn }))
+check(showAll(awayHtml), 'Show all appears when the view is zoomed away from fit')
+check(awayHtml.indexOf('Show all') < awayHtml.indexOf('<svg'), 'Show all sits in the control group')
+check(isZoomedAway(zoomedIn, layout, defaultSize) && !isZoomedAway(fitted, layout, defaultSize), 'isZoomedAway separates zoomed views from the fit view')
+check(isZoomedAway({ ...fitted, cx: fitted.cx + 200 }, layout, defaultSize), 'a panned view counts as away from fit')
+check(!isZoomedAway({ ...fitted, cx: fitted.cx + 1 }, layout, defaultSize), 'sub-pixel drift is not away from fit')
+check(/\.run-graph-tools\s*\{[^}]*z-index:\s*(\d+)/.test(css) && Number(/\.run-graph-tools\s*\{[^}]*z-index:\s*(\d+)/.exec(css)![1]) > Number(/\.run-graph-card\s*\{[^}]*z-index:\s*(\d+)/.exec(css)![1]), 'the control group stays above the card overlay')
 
 const emptyHtml = renderToStaticMarkup(createElement(RunGraph, { run: view([], []), ...props }))
 check(emptyHtml.includes('<svg'), 'an empty run still renders an svg')
