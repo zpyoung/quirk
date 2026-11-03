@@ -1,0 +1,190 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [],
+  "counts": {
+    "failed": 0,
+    "missing": 1,
+    "needs-you": 0,
+    "passed": 4,
+    "queued": 1,
+    "retrying": 0,
+    "running": 0,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T8"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T8"
+    },
+    {
+      "from": "T8",
+      "kind": "dep",
+      "to": "T9"
+    }
+  ],
+  "last_update_at": 1793664506.0,
+  "now": 1793664525.0,
+  "questions": [],
+  "rounds": [],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664020.0,
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T8",
+        "T9"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T8",
+        "T9"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664480.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [],
+      "ended_at": 1793664480.0,
+      "files": 1,
+      "id": "T4",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Report command"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664500.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [],
+      "ended_at": 1793664500.0,
+      "files": 1,
+      "id": "T6",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Snapshot run key"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [],
+      "downstream": [
+        "T9"
+      ],
+      "files": 0,
+      "id": "T8",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "status": "missing",
+      "title": "Diff route"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 0,
+      "id": "T9",
+      "labels": [],
+      "level": 3,
+      "mismatch": null,
+      "ready": false,
+      "status": "queued",
+      "title": "Shell run view"
+    }
+  ]
+}
