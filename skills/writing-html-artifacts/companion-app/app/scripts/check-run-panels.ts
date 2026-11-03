@@ -94,12 +94,14 @@ check('banner skips tab answer', !answeredBanner.includes('Beta'))
 check('banner dismiss', answeredBanner.split('Dismiss').length - 1 === 2)
 check('banner empty', html(createElement(NeedsYouBanner, { run: mkRun([t6], [], []), onShow: noop })) === '')
 
-const store = new Map<string, string>([['quirk-run-dismissed', JSON.stringify(['o'])]])
+const store = new Map<string, string>([['quirk-run-dismissed', JSON.stringify([`${answeredRun.run_id}:o`])]])
 Object.assign(globalThis, {
   sessionStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) },
 })
 const dismissedBanner = html(createElement(NeedsYouBanner, { run: answeredRun, onShow: noop }))
 check('banner dismissed hidden', !dismissedBanner.includes('widen scope') && dismissedBanner.includes('SDD assumed: Alpha'))
+const otherRun = { ...answeredRun, run_id: `${answeredRun.run_id}-other` }
+check('banner dismissal scoped to run', html(createElement(NeedsYouBanner, { run: otherRun, onShow: noop })).includes('widen scope'))
 Object.assign(globalThis, { sessionStorage: { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } } })
 check('banner survives blocked storage', html(createElement(NeedsYouBanner, { run: answeredRun, onShow: noop })).includes('widen scope'))
 delete (globalThis as { sessionStorage?: unknown }).sessionStorage
