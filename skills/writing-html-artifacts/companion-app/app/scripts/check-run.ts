@@ -66,13 +66,16 @@ const snapshot = (run: RunView): Snapshot => ({
 const page = (run: RunView, paused = false) =>
   renderToStaticMarkup(createElement(RunPage, { snapshot: snapshot(run), boot, paused }))
 
+const hasPart = (html: string, name: string) =>
+  html.includes(`data-run-part="${name}"`) || html.includes(`data-stub="${name}"`)
+
 // header counts, branch and title
 {
   const html = page(liveRun())
   check(html.includes('Quirk run'), 'header lacks "Quirk run"')
   check(html.includes('feature/live-view'), 'header lacks the branch')
   check(html.includes('1 of 3 passed · 1 running · 1 queued'), 'header lacks the counts line')
-  check(html.includes('data-stub="graph"'), 'a live run does not render the graph')
+  check(hasPart(html, 'graph'), 'a live run does not render the graph')
   check(!html.includes('data-stale'), 'a fresh run is marked stale')
 }
 
@@ -80,16 +83,16 @@ const page = (run: RunView, paused = false) =>
 {
   const html = page(baseRun({ status_text: 'Preflight: checking backends' }))
   check(html.includes('Preflight: checking backends'), 'preflight lacks the status line')
-  check(!html.includes('data-stub="graph"'), 'preflight rendered the graph')
-  check(!html.includes('data-stub="timeline"'), 'preflight rendered the timeline')
+  check(!hasPart(html, 'graph'), 'preflight rendered the graph')
+  check(!hasPart(html, 'timeline'), 'preflight rendered the timeline')
 }
 
 // ended run renders the summary instead of the live layout
 {
   const run = liveRun({ ended: { at: T0 + 100, outcome: 'clean', next_step: 'merge' } })
   const html = page(run)
-  check(html.includes('data-stub="summary"'), 'an ended run does not render the summary')
-  check(!html.includes('data-stub="graph"'), 'an ended run still renders the graph')
+  check(hasPart(html, 'summary'), 'an ended run does not render the summary')
+  check(!hasPart(html, 'graph'), 'an ended run still renders the graph')
   const stopped = page(run, true)
   check(!stopped.includes('Lost connection to the companion'), 'an ended run shows the live connection-lost text')
 }
@@ -119,14 +122,14 @@ const page = (run: RunView, paused = false) =>
   const html = page(liveRun({
     questions: [{ id: 'q1', task: 'T2', prompt: 'Which?', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], asked_at: T0 + 8, state: 'open' }],
   }))
-  check(html.includes('data-stub="banner"'), 'an open question does not render the banner')
+  check(hasPart(html, 'banner'), 'an open question does not render the banner')
 }
 
 // reviews section only when rounds exist
 {
   const withRounds = page(liveRun({ rounds: [{ id: 'cp1', kind: 'checkpoint', title: 'Checkpoint 1', covers: ['T1'], findings: [] }] }))
-  check(withRounds.includes('data-stub="reviews"'), 'rounds do not render Reviews')
-  check(!page(liveRun()).includes('data-stub="reviews"'), 'Reviews renders without rounds')
+  check(hasPart(withRounds, 'reviews'), 'rounds do not render Reviews')
+  check(!hasPart(page(liveRun()), 'reviews'), 'Reviews renders without rounds')
 }
 
 // format helpers against the contract examples
