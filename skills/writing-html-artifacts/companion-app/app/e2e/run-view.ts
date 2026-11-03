@@ -186,7 +186,7 @@ const scenarios: [string, Scenario][] = [
       same(plan.resumed, true, 'second run-start resumes')
       await page.locator('.run-node').nth(3).waitFor({ timeout: STEP_MS })
       same(await page.locator('.run-node').count(), 4, 'nodes after the plan')
-      same((await page.locator('.run-counts').innerText()).trim(), '0 of 4 passed · 4 queued', 'header counts')
+      same((await page.locator('.run-counts .sr-only').textContent())?.trim(), '0 of 4 passed · 4 queued', 'header counts')
       for (const [from, to] of [['T1', 'T2'], ['T1', 'T3'], ['T2', 'T4'], ['T3', 'T4']]) {
         same(await page.locator(`path.run-edge[data-from="${from}"][data-to="${to}"]`).count(), 1, `edge ${from} to ${to}`)
       }
