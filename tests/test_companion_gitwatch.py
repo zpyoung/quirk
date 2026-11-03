@@ -237,6 +237,22 @@ def test_running_task_files_include_untracked(fx):
     assert "new dir/n.txt" in facts["files"]
 
 
+def test_failed_worktree_listing_keeps_previous_facts_and_records_error(fx, monkeypatch):
+    branch = fx.fork("T1")
+    wt = fx.worktree("T1")
+    reports = [dispatch("T1", branch, wt, fx.base)]
+    first = observe(fx.run, reports, None, 1.0)
+    assert first["tasks"]["T1"]["worktree_present"] is True
+
+    def failing(_repo):
+        raise GitError("worktree list failed")
+
+    monkeypatch.setattr(gitwatch, "listed_worktrees", failing)
+    second = observe(fx.run, reports, first, 2.0)["tasks"]["T1"]
+    assert second["worktree_present"] is True
+    assert "worktree list failed" in second["error"]
+
+
 def test_task_without_branch_has_no_entry(fx):
     fx.add_task("T9")
     assert observe(fx.run, [], None, 1.0)["tasks"] == {}
@@ -373,6 +389,19 @@ def test_task_diff_truncates_at_max_bytes(fx):
     full = task_diff(fx.run, [], "T1")
     assert full["truncated"] is False and len(full["files"]) == 4
     assert branch
+
+
+def test_task_diff_caps_total_patch_bytes_for_one_large_file(fx):
+    fx.fork("T1")
+    wt = fx.worktree("T1")
+    (wt / "big.txt").write_text("line\n" * 5000)
+    g(wt, "add", "-A")
+    g(wt, "commit", "-q", "-m", "big")
+    diff = task_diff(fx.run, [], "T1", max_bytes=200)
+    assert diff["truncated"] is True
+    assert [f["path"] for f in diff["files"]] == ["big.txt"]
+    assert 0 < sum(len(f["patch"].encode("utf-8")) for f in diff["files"]) <= 200
+    assert task_diff(fx.run, [], "T1")["truncated"] is False
 
 
 # ---- watcher ----

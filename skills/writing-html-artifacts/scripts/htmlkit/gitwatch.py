@@ -202,14 +202,17 @@ def observe(run: dict, reports: list[dict], previous: dict | None, now: float) -
     """Collect one poll of git facts for every task of a run, as the ``git.json`` object.
 
     A task whose branch does not exist has no entry. A failing call records ``error`` on that
-    task and keeps its previous facts. ``changed_at`` stays at the previous value while every
+    task and keeps its previous facts; that includes a failed worktree listing, which would otherwise
+    read as every worktree being absent. ``changed_at`` stays at the previous value while every
     task's facts are unchanged, so a caller can skip the write and the revision bump.
     """
     repo = run["repo"]
+    listed: set[str] = set()
+    listed_error: GitError | None = None
     try:
-        listed: set[str] | None = listed_worktrees(repo)
-    except GitError:
-        listed = set()
+        listed = listed_worktrees(repo)
+    except GitError as exc:
+        listed_error = exc
     merged_heads: set[str] | None
     merge_error: GitError | None = None
     try:
@@ -227,6 +230,8 @@ def observe(run: dict, reports: list[dict], previous: dict | None, now: float) -
                 continue
             if merged_heads is None:
                 raise merge_error  # type: ignore[misc]
+            if listed_error is not None:
+                raise listed_error
             tasks[tid] = _task_facts(run, reports, task, head, listed, merged_heads)
         except (GitError, ValueError, KeyError) as exc:
             kept = dict(prev_tasks.get(tid) or {
@@ -318,8 +323,9 @@ def task_diff(run: dict, reports: list[dict], task_id: str, max_bytes: int = 1 <
 
     A running task (listed worktree, no later commit report) is diffed in its worktree against
     the task base, plus untracked files read directly. Any other task diffs ``base..head`` in the
-    repo. Raises GitError when git itself fails. Once the patch text passes ``max_bytes`` no
-    further files are added and ``truncated`` is set.
+    repo. Raises GitError when git itself fails. The patch text across all files never exceeds
+    ``max_bytes``: the patch that crosses the cap is cut to the remaining budget, no further files
+    are added and ``truncated`` is set.
     """
     if task_id not in {t["id"] for t in _all_tasks(run, reports)}:
         return None
@@ -349,14 +355,16 @@ def task_diff(run: dict, reports: list[dict], task_id: str, max_bytes: int = 1 <
         files = _tracked_files(repo, f"{base}..{head}")
 
     kept: list[dict] = []
-    total = 0
+    remaining = max_bytes
     truncated = False
     for f in files:
-        kept.append(f)
-        total += len(f["patch"].encode("utf-8"))
-        if total > max_bytes:
+        patch = f["patch"].encode("utf-8")
+        if len(patch) > remaining:
+            kept.append({**f, "patch": patch[:remaining].decode("utf-8", "ignore")})
             truncated = True
             break
+        kept.append(f)
+        remaining -= len(patch)
     return {"task": task_id, "base": base, "head": out_head, "source": source, "files": kept, "truncated": truncated}
 
 

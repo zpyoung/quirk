@@ -313,6 +313,15 @@ def test_round_open_and_close_with_findings(store, run_doc):
         ({"kind": "action", "seq": 3, "outcome": "nope"}, "outcome"),
         ({"kind": "round-open", "round": "r1", "title": "t", "covers": ["T1"]}, "round_kind"),
         ({"kind": "round-open", "round": "r1", "round_kind": "x", "title": "t", "covers": ["T1"]}, "round_kind"),
+        ({"kind": "status", "text": "x", "task": ["T1"]}, "task"),
+        ({"kind": "status", "text": "x", "task": {"id": "T1"}}, "task"),
+        ({"kind": "run-end", "outcome": "clean", "task": ["T1"]}, "task"),
+        ({"kind": "round-open", "round": "r1", "round_kind": "final", "title": "t", "covers": [["T1"]]}, "covers"),
+        ({"kind": "round-open", "round": "r1", "round_kind": "final", "title": "t", "covers": {"T1": 1}}, "covers"),
+        ({"kind": "round-close", "round": "r1", "outcome": "fixes",
+          "findings": [{"id": "f1", "lens": "l", "severity": "high", "ruling": "accepted", "reason": "r",
+                        "fix_task": ["F1"]}]}, "findings[0].fix_task"),
+        ({"kind": "dispatch", "task": ["T1"], "attempt": 1, "branch": "b", "worktree": "/w", "base": "x"}, "task"),
     ],
 )
 def test_invalid_report_rejected(store, run_doc, rep, field):
