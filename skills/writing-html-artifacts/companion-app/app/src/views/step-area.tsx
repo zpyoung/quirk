@@ -6,6 +6,7 @@ import { DesignView } from './design'
 import { DoneView } from './done'
 import { EditCardView } from './edit-card'
 import { HandOffView } from './hand-off'
+import { MockReviewView } from './mock-review'
 import { QuestionsView } from './questions'
 import { SpecReviewView } from './spec'
 import { WaitingView } from './waiting'
@@ -38,6 +39,8 @@ function renderStep(step: Step, props: Omit<ViewProps, 'step'>) {
       return <QuestionsView key={step.id} step={step} {...props} />
     case 'approaches':
       return <ApproachesView key={step.id} step={step} {...props} />
+    case 'mock-review':
+      return <MockReviewView key={step.id} step={step} {...props} />
     case 'design-section':
       return <DesignView key={step.id} step={step} {...props} />
     case 'spec-review':

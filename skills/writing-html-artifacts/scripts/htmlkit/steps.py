@@ -10,8 +10,8 @@ import copy
 import re
 from typing import Callable, Optional
 
-STEP_KINDS = ("questions", "approaches", "design-section", "spec-review", "edit-card", "hand-off", "done")
-STAGES = ("context", "gray-areas", "questions", "approaches", "design", "spec", "hand-off")
+STEP_KINDS = ("questions", "approaches", "mock-review", "design-section", "spec-review", "edit-card", "hand-off", "done")
+STAGES = ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
 
 ID_PATTERN = re.compile(r"[a-z0-9-]{1,40}")
 QUESTION_TYPES = ("single", "multi", "text")
@@ -22,6 +22,7 @@ COMMON_KEYS = {"v", "kind", "stage", "title", "intro_md", "intro_html", "changed
 KIND_KEYS = {
     "questions": {"questions"},
     "approaches": {"approaches"},
+    "mock-review": {"version"},
     "design-section": {"index", "total", "sections"},
     "spec-review": {"format", "spec_path", "sections"},
     "edit-card": {"decision_id", "from", "to", "invalidates", "origin"},
@@ -258,6 +259,13 @@ def _approaches(raw: dict) -> dict:
     return out
 
 
+def _mock_review(raw: dict) -> dict:
+    version = _int(raw, "version", "")
+    if version < 1:
+        raise _fail("version", "must be at least 1")
+    return {"version": version}
+
+
 def _design_section_step(raw: dict) -> dict:
     index = _int(raw, "index", "")
     if index < 1:
@@ -320,6 +328,7 @@ def _changed(raw: object) -> dict:
 KIND_BUILDERS = {
     "questions": _questions,
     "approaches": _approaches,
+    "mock-review": _mock_review,
     "design-section": _design_section_step,
     "spec-review": _spec_review,
     "edit-card": _edit_card,

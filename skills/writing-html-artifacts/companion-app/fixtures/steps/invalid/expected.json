@@ -54,5 +54,9 @@
   "done-no-message.json": "message_md",
   "done-empty-message.json": "message_md",
   "design-diagram-html.json": "sections[0].diagram",
-  "question-diagram-html.json": "questions[0].diagram"
+  "question-diagram-html.json": "questions[0].diagram",
+  "mock-review-no-version.json": "version",
+  "mock-review-version-zero.json": "version",
+  "mock-review-version-bool.json": "version",
+  "mock-review-version-string.json": "version"
 }

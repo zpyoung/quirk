@@ -31,10 +31,11 @@ You MUST create a task for each of these items and complete them in order:
 6. **Essential-coverage check** — diff what is established against the six Essential items (see [essential-coverage.md](references/essential-coverage.md)); ask any gaps before proposing approaches. Only past this gate may the user fast-track what remains.
 7. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
 8. **Propose 2-3 approaches** — side by side on screen, with trade-offs, citing research findings, your recommendation
-9. **Present design** — one section per screen (short ones may share), get user approval on each before the next
-10. **Write logic spec** — follow **quirk:writing-specs**: ask once, on screen, whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
-11. **User reviews written spec** — on screen, the rubric's review gate; for an interactive spec, the gate is the page's final (stage-2) sign-off; do not proceed until the user approves
-12. **Transition to implementation** — the user picks the execution skill on screen (quirk:subagent-driven-development, recommended; or quirk:executing-plans); invoke it, and it authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
+9. **Run the UX review (UI work only)** — after the approach is picked and before any design section, build a clickable mock of it and have the user click through and pin comments until they pick Looks right or Skip review. Runs automatically for UI work; other work skips it. At detection, record a `ux-review` decision via `decide` so the rail gains the stage. See [ux-review.md](references/ux-review.md).
+10. **Present design** — one section per screen (short ones may share), get user approval on each before the next
+11. **Write logic spec** — follow **quirk:writing-specs**: ask once, on screen, whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
+12. **User reviews written spec** — on screen, the rubric's review gate; for an interactive spec, the gate is the page's final (stage-2) sign-off; do not proceed until the user approves
+13. **Transition to implementation** — the user picks the execution skill on screen (quirk:subagent-driven-development, recommended; or quirk:executing-plans); invoke it, and it authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
 
@@ -48,6 +49,8 @@ digraph brainstorming {
     "Essential-coverage\ncheck" [shape=diamond];
     "Dispatch option-validation\nresearch (parallel)" [shape=box];
     "Propose 2-3 approaches" [shape=box];
+    "UI work?" [shape=diamond];
+    "Run the UX review\n(clickable mock)" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
     "Write logic spec\n(quirk:writing-specs)" [shape=box];
@@ -62,7 +65,11 @@ digraph brainstorming {
     "Essential-coverage\ncheck" -> "Ask remaining\nclarifying questions" [label="gaps remain"];
     "Essential-coverage\ncheck" -> "Dispatch option-validation\nresearch (parallel)" [label="all six covered"];
     "Dispatch option-validation\nresearch (parallel)" -> "Propose 2-3 approaches";
-    "Propose 2-3 approaches" -> "Present design sections";
+    "Propose 2-3 approaches" -> "UI work?";
+    "UI work?" -> "Run the UX review\n(clickable mock)" [label="yes"];
+    "UI work?" -> "Present design sections" [label="no, skip"];
+    "Run the UX review\n(clickable mock)" -> "Run the UX review\n(clickable mock)" [label="needs changes"];
+    "Run the UX review\n(clickable mock)" -> "Present design sections" [label="looks right or skip review"];
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
     "User approves design?" -> "Write logic spec\n(quirk:writing-specs)" [label="yes"];
@@ -88,6 +95,7 @@ Inside a companion brainstorm:
 - **Question batches:** up to ~4 related questions per step, one submit. The recommended option is labeled and first, never preselected. Every choice has an Other box, text-only questions are fine, and a skip is logged as open and re-asked only if something depends on it. A question may carry its own mockup or diagram.
 - **Research waits.** On a `continue` event ("Continue without the rest"), stop the outstanding researchers, proceed with what returned, and mark their options "(research pending)" in the spec's Industry Insights.
 - **Approaches:** one `approaches` step with 2-3 cards side by side, one recommended, each citing its research.
+- **UX review (UI work only):** after the approach pick, write the screen inventory and mock, register it with `mock`, and send a `mock-review` step. The next design section waits for Looks right or Skip review. [ux-review.md](references/ux-review.md) has the loop.
 - **Design:** one `design-section` step per section (short ones may share, up to 3), answered Looks right or Needs changes plus a comment. A revision sets `changed` to highlight the passages and say what changed. The next section follows only after Looks right.
 - **Spec:** ask the format as a question on screen. Markdown goes in a `spec-review` step, where Sign off is the review gate's approval and per-section comments get a `reply`. Interactive registers the page with `review`, sends a `spec-review` interactive step, and reads exports from `review-export` events.
 - **Edits.** A rail Change or a chat request arrives as an `edit-request`. Send an `edit-card` listing what it invalidates and apply it only on an `edit-decision` confirm, then update `decide`. Never change a decision from chat without that card.
@@ -162,6 +170,8 @@ Classify the work from the task description before clarifying questions:
 | Organization | "organize", "structure", "migrate", "refactor", "clean up" |
 | Data | "import", "export", "ETL", "pipeline", "transform", "process" |
 | Integration | "integrate", "sync", "connect", "webhook", "third-party" |
+
+Work also counts as **UI** for the [UX review](references/ux-review.md) when it adds or changes a screen a person uses (web, app or desktop pages, components, dialogs, flows) or a generated page (HTML reports, dashboards, companion or artifact pages). Terminal UIs and CLI output don't count. The review runs automatically, with one chat line saying a clickable mock comes after the approach pick and can be skipped from the review screen; no opt-in question is asked. A brainstorm with no UI sees no change.
 
 ### Expected Gray-Area Catalog
 
@@ -281,6 +291,11 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Lead with your recommended option and explain why
 - For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the logic spec
 
+**Running the UX review (UI work only):**
+
+- Right after the approach pick, build a clickable mock of it and loop on the user's pins until they pick Looks right or Skip review; the rounds have no cap. Follow [ux-review.md](references/ux-review.md).
+- Design sections then cite screens by name instead of re-describing layouts. Pins carried as open questions are listed in the first design section that touches them.
+
 **Presenting the design:**
 
 - Once you believe you understand what you're building, present the design
@@ -330,7 +345,7 @@ Do not proceed past the rubric's user review gate until the user approves.
 
 ## Terminal flow
 
-The shape used by `--terminal` and the fallback. Everything above applies, except that questions go through `orca ask` when it is available (see the `orca-ask` skill) and otherwise `AskUserQuestion`, up to 4 per call, one area at a time. There is no companion, so approaches, design sections and the spec review are conversational and the execution pick is a question. The labels are the same ones used on screen.
+The shape used by `--terminal` and the fallback. Everything above applies, except that questions go through `orca ask` when it is available (see the `orca-ask` skill) and otherwise `AskUserQuestion`, up to 4 per call, one area at a time. There is no companion, so approaches, design sections and the spec review are conversational and the execution pick is a question. The labels are the same ones used on screen. For UI work the UX review runs as well: register the mock with `mock`, run `mock-export` into the session folder, print the `mock.html` path, and ask the verdict (Looks right, Needs changes with free text, Skip review); see [ux-review.md](references/ux-review.md#terminal-flow).
 
 The adhd offer, its own call (skipped on truly trivial work):
 

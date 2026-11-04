@@ -17,7 +17,7 @@ nonce. It never touches the network beyond its own socket.
 
 ``start --app`` runs the same server in app mode: it serves a prebuilt React shell and a
 snapshot/event API over the on-disk state in ``htmlkit.appstate``, and the agent drives it with
-``step``, ``status``, ``decide``, ``review``, ``say``, ``reply``, ``next`` and ``snapshot``. A session is in app mode
+``step``, ``status``, ``decide``, ``review``, ``mock``, ``mock-export``, ``say``, ``reply``, ``next`` and ``snapshot``. A session is in app mode
 exactly when ``state/mode.json`` says so; the screen subcommands refuse an app session and the
 app subcommands refuse a screen session, both with exit 2.
 
@@ -53,7 +53,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # the skill directory holds htmlkit and is not on sys.path when this file is run by path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from htmlkit import SKILL_DIR, assemble, resolve  # noqa: E402
+from htmlkit import SKILL_DIR, assemble, mocks, resolve  # noqa: E402
 from htmlkit.appstate import AppState, AppStateError  # noqa: E402
 from htmlkit import gitwatch, orca  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
@@ -102,10 +102,14 @@ REVIEW_KINDS = {
 }
 REVIEW_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
 VERDICTS = {
+    "mock-review": ("looks-right", "needs-changes", "skip"),
     "design-section": ("looks-right", "needs-changes"),
     "spec-review": ("sign-off", "changes"),
 }
 ANSWER_KEYS = {"selected", "other", "text", "skipped"}
+MOCK_VERSION = re.compile(r"[1-9][0-9]{0,3}")
+MOCK_ID_LIST_MAX = 200
+MOCK_ID = re.compile(r"[a-z0-9-]{1,40}")
 
 WAITING_PAGE = (
     '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -501,6 +505,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_snapshot()
         elif self.server.app and path == "/_quirk/review":
             self._serve_review()
+        elif self.server.app and path.startswith("/_quirk/mock/"):
+            self._serve_mock(path[len("/_quirk/mock/") :])
         elif self.server.app and path == "/_quirk/run/diff":
             self._serve_run_diff()
         elif path.startswith("/_quirk/lib/"):
@@ -635,6 +641,30 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(404, b"not found\n")
         else:
             self._reply(200, page, "text/html; charset=utf-8")
+
+    def _serve_mock(self, rest: str) -> None:
+        """A registered mock version inside the harness page; needs the session token in ``?t=``."""
+        given = parse_qs(urlsplit(self.path).query).get("t", [""])[0]
+        if not secrets.compare_digest(given.encode("utf-8"), self.server.token.encode("utf-8")):
+            self._json(403, {"error": "bad token"})
+            return
+        app_state = self.server.app_state
+        mock = app_state.get_mock(int(rest)) if MOCK_VERSION.fullmatch(rest) else None
+        if mock is None:
+            self._reply(404, b"not found\n")
+            return
+        index = app_state.mocks_index()
+        boot = mocks.make_boot(
+            mode="app", version=mock["version"], latest=index["latest"], versions=index["versions"],
+            screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"], revision=mock["revision"],
+            token=self.server.token,
+        )
+        try:
+            page = mocks.fill_template(*mocks.load_template(), boot)
+        except mocks.MockError:
+            self._json(500, {"error": "mock harness missing"})
+            return
+        self._reply(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def _serve_library(self, rest: str) -> None:
         parts = [unquote(p) for p in rest.split("/")]
@@ -1027,12 +1057,16 @@ def _submit_problem(step: dict, payload: dict) -> Optional[str]:
     if kind == "spec-review" and step.get("format") == "interactive":
         return "an interactive spec review is exported with review-export, not submit"
     field = {"questions": "answers", "approaches": "pick", "hand-off": "pick"}.get(kind, "verdict")
-    extra = set(payload) - {field, "comment"}
+    extra = set(payload) - {field, "comment"} - ({"visited", "marks"} if kind == "mock-review" else set())
     if extra:
         return f"unknown payload field(s): {', '.join(sorted(extra))}"
     problem = _comment_problem(payload)
     if problem:
         return problem
+    if kind == "mock-review":
+        for key in ("visited", "marks"):
+            if key in payload and not _mock_ids_ok(payload[key]):
+                return f"{key} must be a list of at most {MOCK_ID_LIST_MAX} screen ids matching [a-z0-9-]{{1,40}}"
     value = payload.get(field)
     if kind == "questions":
         return _answers_problem(step, value)
@@ -1045,6 +1079,14 @@ def _submit_problem(step: dict, payload: dict) -> Optional[str]:
     if not isinstance(value, str) or value not in allowed:
         return f"{field} must be one of {', '.join(map(str, allowed))}"
     return None
+
+
+def _mock_ids_ok(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) <= MOCK_ID_LIST_MAX
+        and all(isinstance(v, str) and MOCK_ID.fullmatch(v) for v in value)
+    )
 
 
 def _answers_problem(step: dict, answers: object) -> Optional[str]:
@@ -1568,6 +1610,8 @@ def _cmd_step(args: argparse.Namespace) -> int:
         return _fail(str(exc))
     except StepError as exc:
         return _field_error(exc, exc.field)
+    if step["kind"] == "mock-review" and step["version"] not in app.mocks_index()["versions"]:
+        return _field_error(ValueError(f"mock version {step['version']} is not registered"), "version")
     written = app.write_step(step)
     info = live_server_info(Path(args.session))
     _emit({**written, "url": info.get("url") if info else None})
@@ -1621,6 +1665,65 @@ def _cmd_review(args: argparse.Namespace) -> int:
         return _fail(f"cannot read {path}: {exc}")
     app.set_review(path)
     _emit({"review_url": "/_quirk/review"})
+    return EXIT_OK
+
+
+def _cmd_mock(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    try:
+        with open(args.mock_html, "rb") as fh:
+            raw = fh.read(mocks.MAX_MOCK_BYTES + 1)
+    except OSError as exc:
+        return _fail(f"cannot read {args.mock_html}: {exc}")
+    if len(raw) > mocks.MAX_MOCK_BYTES:
+        return _fail(f"{args.mock_html} is over {mocks.MAX_MOCK_BYTES // (1024 * 1024)} MiB")
+    try:
+        html = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return _fail(f"{args.mock_html} is not UTF-8")
+    try:
+        screens = mocks.validate_screens(_read_input(args.screens))
+        changed = mocks.validate_changed(_read_input(args.changed)) if args.changed else []
+        app.register_mock(args.version, html, screens, changed)
+    except ScreenError as exc:
+        return _fail(str(exc))
+    except (mocks.MockError, AppStateError) as exc:
+        return _field_error(exc, exc.field)
+    _emit({"version": args.version, "mock_url": f"/_quirk/mock/{args.version}"})
+    return EXIT_OK
+
+
+def _cmd_mock_export(args: argparse.Namespace) -> int:
+    app = _app_session(args)
+    if app is None:
+        return EXIT_USAGE
+    mock = app.get_mock(args.version)
+    if mock is None:
+        return _field_error(ValueError(f"mock version {args.version} is not registered"), "version")
+    boot = mocks.make_boot(
+        mode="offline", version=args.version, latest=args.version, versions=[args.version],
+        screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"], revision=mock["revision"],
+    )
+    try:
+        page = mocks.fill_template(*mocks.load_template(), boot)
+    except mocks.MockError as exc:
+        return _fail(str(exc))
+    review = mocks.build_review(args.version, app.snapshot()["threads"], mocks.now_iso())
+    out = Path(os.path.abspath(args.out))
+    contents = {
+        "mock.html": page,
+        "screens.md": mocks.screens_markdown(mock["screens"], args.version),
+        "review.json": json.dumps(review, ensure_ascii=False, indent=2) + "\n",
+    }
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        for name, text in contents.items():
+            atomic_write(out / name, text)
+    except OSError as exc:
+        return _fail(f"cannot write {out}: {exc}")
+    _emit({"files": [str(out / name) for name in contents]})
     return EXIT_OK
 
 
@@ -1894,6 +1997,20 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("session")
     review.add_argument("review_html", metavar="REVIEW_HTML")
     review.set_defaults(func=_cmd_review)
+
+    mock = sub.add_parser("mock", help="app mode: register a mock version for the UX review")
+    mock.add_argument("session")
+    mock.add_argument("mock_html", metavar="MOCK_HTML")
+    mock.add_argument("--version", type=int, required=True, metavar="N")
+    mock.add_argument("--screens", required=True, metavar="SCREENS_JSON")
+    mock.add_argument("--changed", metavar="CHANGED_JSON")
+    mock.set_defaults(func=_cmd_mock)
+
+    mock_export = sub.add_parser("mock-export", help="app mode: write a mock version as an offline folder")
+    mock_export.add_argument("session")
+    mock_export.add_argument("--version", type=int, required=True, metavar="N")
+    mock_export.add_argument("--out", required=True, metavar="DIR")
+    mock_export.set_defaults(func=_cmd_mock_export)
 
     say = sub.add_parser("say", help="app mode: add a chat message")
     say.add_argument("session")

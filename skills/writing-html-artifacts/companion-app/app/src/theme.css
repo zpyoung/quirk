@@ -613,6 +613,14 @@ textarea {
   border-radius: var(--q-radius-md);
   background: var(--q-color-bg);
 }
+.mock-frame {
+  width: 100%;
+  height: calc(100vh - 10rem);
+  min-height: 32rem;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+}
 
 .edit-card {
   border: 1px solid var(--q-color-border);

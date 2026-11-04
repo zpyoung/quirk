@@ -192,6 +192,12 @@ costs more than it returns. Skipping it is a decision already made, not an overs
 correct — and "this plan is unusually high-stakes" is not new information, because every run
 believes that.
 
+When the logic spec has a Screens section, the signed-off mock it links is the UX source of truth
+wherever the text is silent. Each UI task cites the mock screens it implements and carries the
+Screens acceptance items for them in its acceptance. The implementation is rebuilt in the project's
+stack and never lifts mock code. A deliberate departure from the mock needs a one-line note in the
+tech spec or the PR, or the acceptance item fails.
+
 Before scheduling, audit every declared `dependencies` edge for semantic motivation: keep it as a
 **dependency edge** only when the target genuinely needs the source's output. An edge motivated
 only by file overlap becomes an **ordering edge**. It still keeps the target from dispatching
@@ -680,7 +686,7 @@ Each invocation gets:
 | `lens` | this reviewer's lens, from the three above |
 | `id_prefix` | a distinct prefix per lens — `C` correctness, `S` spec, `X` security. Each gate numbers from 1 on its own, so without this all three lenses return an `F1` and Step 9's merge cannot tell them apart |
 | `depth` | `standard` at checkpoints, `deep` in the final loop, passed **explicitly** |
-| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim**, plus per-lens closure verification when applicable |
+| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** (including the logic spec's Screens acceptance items when it has a Screens section), plus per-lens closure verification when applicable |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
 | `author_family` | the recorded `AUTHOR_FAMILY` |
 | `model` | the recorded `REVIEWER_ALIAS` — only when preflight verified it reachable. Omitted when the record holds `task-fallback` |

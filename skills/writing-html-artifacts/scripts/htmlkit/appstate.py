@@ -12,6 +12,7 @@ highest seq already in ``app-events`` or ``chat.json``, so a lost counters write
 from __future__ import annotations
 
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -24,7 +25,7 @@ from typing import Any, ContextManager, Iterable, Iterator
 
 from .fsutil import atomic_write
 
-STAGES = ("context", "gray-areas", "questions", "approaches", "design", "spec", "hand-off")
+STAGES = ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
 EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export",
                "run-answer", "run-stop", "run-retry")
 
@@ -431,6 +432,116 @@ class AppState:
             data = self._read_json("review.json", None)
             return Path(data["path"]) if data and data.get("path") else None
 
+    # ---- mocks ---------------------------------------------------------------
+
+    _MAX_MOCK_VERSION = 9999
+
+    def _mock_versions(self) -> dict:
+        data = self._read_json("mocks.json", {})
+        versions = data.get("versions") if isinstance(data, dict) else None
+        return versions if isinstance(versions, dict) else {}
+
+    def _mocks_index(self) -> dict:
+        nums = sorted(int(n) for n in self._mock_versions())
+        return {"latest": nums[-1] if nums else None, "versions": nums}
+
+    def _mocks_view(self) -> dict:
+        versions = self._mock_versions()
+        view = self._mocks_index()
+        view["revisions"] = {
+            str(n): entry["revision"]
+            for n in view["versions"]
+            if isinstance(entry := versions.get(str(n)), dict) and isinstance(entry.get("revision"), str)
+        }
+        return view
+
+    def mocks_index(self) -> dict:
+        """``{"latest": int | None, "versions": [int, ...]}`` for the registered mock versions."""
+        with self._locked():
+            return self._mocks_index()
+
+    def _is_ui_session(self) -> bool:
+        """True once the agent signalled UI work: a ux-review step or decision, or any registered mock."""
+        if self._mock_versions():
+            return True
+        if any(d.get("stage") == "ux-review" for d in self._read_json("decisions.json", []) if isinstance(d, dict)):
+            return True
+        for path in (self._dir / "steps").glob("*.json"):
+            try:
+                step = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(step, dict) and step.get("stage") == "ux-review":
+                return True
+        return False
+
+    def register_mock(self, version: int, html: str, screens: dict, changed: list) -> None:
+        """Copy ``html`` to a new file under ``mocks/`` and record it; a re-registered latest is replaced.
+
+        The first version must be 1 and each later one the latest or latest + 1; a refusal changes
+        nothing. The caller validates ``screens`` and ``changed``. Each registration writes its HTML to a
+        fresh file and then switches ``mocks.json`` to it in one atomic write, so a reader sees either the
+        old HTML with the old metadata or the new HTML with the new metadata.
+        """
+        if not (isinstance(version, int) and not isinstance(version, bool)) or not 1 <= version <= self._MAX_MOCK_VERSION:
+            raise AppStateError("version", "version must be a positive integer")
+        with self._locked():
+            latest = self._mocks_index()["latest"]
+            allowed = (1,) if latest is None else (latest, latest + 1)
+            if version not in allowed:
+                want = " or ".join(str(n) for n in allowed)
+                raise AppStateError("version", f"version must be {want}, not {version}")
+            (self._dir / "mocks").mkdir(parents=True, exist_ok=True)
+            versions = self._mock_versions()
+            previous = versions.get(str(version))
+            rel = f"mocks/v{version}-{secrets.token_hex(4)}.html"
+            atomic_write(self._dir / rel, html)
+            versions[str(version)] = {
+                "file": rel,
+                "screens": screens,
+                "changed": list(changed),
+                "registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "revision": secrets.token_hex(8),
+            }
+            try:
+                self._write_json("mocks.json", {"versions": versions})
+            except BaseException:
+                self._unlink_mock_file(rel)
+                raise
+            if isinstance(previous, dict) and isinstance(previous.get("file"), str):
+                self._unlink_mock_file(previous["file"])
+            self._tick()
+
+    def _unlink_mock_file(self, rel: str) -> None:
+        """Best-effort removal of a registry HTML file; a leftover is harmless because ``mocks.json`` decides what is served."""
+        target = (self._dir / rel).resolve()
+        if target.parent != (self._dir / "mocks").resolve():
+            return
+        with contextlib.suppress(OSError):
+            target.unlink()
+
+    def get_mock(self, version: int) -> dict | None:
+        """``{version, html, screens, changed, registered_at, revision}`` for a registered version, else None.
+
+        ``revision`` is opaque and changes on every registration of the version.
+        """
+        with self._locked():
+            entry = self._mock_versions().get(str(version))
+            if not isinstance(entry, dict):
+                return None
+            try:
+                html = (self._dir / entry["file"]).read_text(encoding="utf-8")
+            except (OSError, KeyError, UnicodeError):
+                return None
+            return {
+                "version": version,
+                "html": html,
+                "screens": entry.get("screens"),
+                "changed": entry.get("changed", []),
+                "registered_at": entry.get("registered_at"),
+                "revision": entry.get("revision"),
+            }
+
     # ---- snapshot ------------------------------------------------------------
 
     def snapshot(self) -> dict:
@@ -454,9 +565,11 @@ class AppState:
             if cur_stage not in STAGES:
                 cur_stage = STAGES[0]
             idx = STAGES.index(cur_stage)
+            ui_session = self._is_ui_session()
             stages = [
                 {"id": s, "state": "done" if i < idx else "current" if i == idx else "todo"}
                 for i, s in enumerate(STAGES)
+                if ui_session or s != "ux-review"
             ]
             chat = []
             for entry in self._read_json("chat.json", []):
@@ -476,6 +589,7 @@ class AppState:
                 "chat": chat,
                 "threads": self._read_json("threads.json", []),
                 "review_registered": (self._dir / "review.json").exists(),
+                "mocks": self._mocks_view(),
             }
             if step_id is not None:
                 draft = self._read_json(f"drafts/{step_id}.json", None)

@@ -121,6 +121,11 @@ function checkKind(name: string, step: FixtureStep, html: string) {
     case 'spec-review':
       has(/Sign off|\/_quirk\/review\?t=tok/, 'Sign off button or review iframe')
       break
+    case 'mock-review':
+      has('<iframe class="mock-frame" title="Mock review" src="/_quirk/mock/1?t=tok"', 'mock iframe with the versioned src')
+      if (/<iframe[^>]*\ssandbox/.test(html)) fail(name, 'the mock iframe must not carry a sandbox attribute')
+      if (html.includes('Looks right')) fail(name, 'the shell must not render a verdict bar for a mock review')
+      break
     case 'edit-card':
       has('Confirm and redo', 'Confirm and redo button')
       has('Cancel', 'Cancel button')
@@ -212,6 +217,24 @@ for (const file of files) {
   const marked = section([{ id: 'arch', title: 'Arch', body_md: 'a\n\nb' }], { summary: 's', blocks: ['section:arch/p1'] })
   if (!/data-block-id="section:arch\/p1" data-changed="true"/.test(marked)) fail('design paragraphs', 'a changed paragraph is not highlighted')
   if (/data-block-id="section:arch\/p0" data-changed/.test(marked)) fail('design paragraphs', 'an unchanged paragraph is highlighted')
+}
+
+// the rail shows UX review only when the snapshot lists the stage; every other stage always renders
+{
+  const railLabels = (html: string) => [...html.matchAll(/class="rail-item"/g)].length
+  const withoutUx = renderShell(snapshot(null))
+  const withUx = renderShell(
+    snapshot(null, {
+      stages: [
+        { id: 'context', state: 'done' },
+        { id: 'ux-review', state: 'current' },
+      ],
+    }),
+  )
+  if (/UX review/.test(withoutUx)) fail('rail', 'a snapshot without ux-review in stages still shows the UX review stage')
+  if (!/UX review/.test(withUx)) fail('rail', 'a snapshot with ux-review in stages does not show the UX review stage')
+  if (railLabels(withUx) !== railLabels(withoutUx) + 1) fail('rail', 'ux-review should be the only stage that depends on the snapshot list')
+  if (!/Brainstorm|Design/.test(withoutUx)) fail('rail', 'the other stages stopped rendering')
 }
 
 const waitingStatus: Status = { text: 'Checking approaches', progress: '2/3', interruptible: true, started_at: new Date().toISOString() }

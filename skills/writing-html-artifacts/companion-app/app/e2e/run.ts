@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -257,6 +257,67 @@ async function submitPick(page: Page, pick: string): Promise<void> {
   await page.getByRole('button', { name: 'Submit pick' }).click()
   await page.getByRole('heading', { name: 'Working on it' }).waitFor({ timeout: 10_000 })
 }
+
+/** Where the runner keeps its scoped temp files: the temp root that also holds the step JSON files. */
+function scratchRoot(): string {
+  return path.dirname(path.dirname(path.dirname(session)))
+}
+
+/** A three-screen mock that routes by plain `#/<screen>` links, like an agent-written mock does. */
+function exportsMockHtml(version: number): string {
+  const newExport = version === 1 ? '<button data-pin="new-export" class="btn">New export</button>' : ''
+  const rowText = version === 1 ? 'Q3 report.csv' : 'Q3 report.csv (scheduled)'
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Exports mock v${version}</title>
+<style>body{font:16px system-ui;margin:0;padding:16px}nav a{margin-right:16px}.btn{padding:8px 12px}section>div>*{margin:8px 0}</style>
+</head><body>
+<nav><a href="#/exports">Exports</a><a href="#/saved">Saved</a><a href="#/detail">Detail</a></nav>
+<section data-screen="exports">
+  <div data-state="default"><h1>Exports</h1>${newExport}<div data-pin="export-row">${rowText}</div></div>
+  <div data-state="empty"><h1>Exports</h1><p data-pin="empty-msg">No exports yet.</p></div>
+</section>
+<section data-screen="saved">
+  <div data-state="default"><h1>Saved exports</h1><ul data-pin="saved-list"><li>Weekly.csv</li></ul></div>
+</section>
+<section data-screen="detail">
+  <div data-state="default"><h1>Export detail</h1><p data-pin="detail-title">Q3 report.csv, 12 KB</p></div>
+</section>
+<script>
+function route() {
+  var id = location.hash.replace(/^#\\//, '') || 'exports'
+  document.querySelectorAll('[data-screen]').forEach(function (s) { s.hidden = s.getAttribute('data-screen') !== id })
+}
+window.addEventListener('hashchange', route)
+route()
+</script>
+</body></html>`
+}
+
+function exportsScreens(version: number): unknown {
+  const exportsElements: unknown[] = [{ pin: 'export-row', label: 'Export row', component: 'Row' }]
+  if (version === 1) exportsElements.unshift({ pin: 'new-export', label: 'New export button', component: 'Button' })
+  return {
+    ui_layer: true,
+    screens: [
+      { id: 'exports', title: 'Exports', purpose: 'List recent exports', states: ['default', 'empty'], elements: exportsElements },
+      { id: 'saved', title: 'Saved exports', purpose: 'Exports kept for later', states: ['default'], elements: [{ pin: 'saved-list', label: 'Saved list', component: 'List' }] },
+      { id: 'detail', title: 'Export detail', purpose: 'One export in full', states: ['default'], elements: [{ pin: 'detail-title', label: 'Title', component: null }] },
+    ],
+  }
+}
+
+let mockFileCount = 0
+async function registerMock(version: number, changed?: string[]): Promise<void> {
+  mockFileCount += 1
+  const dir = scratchRoot()
+  const html = path.join(dir, `mock-v${version}-${mockFileCount}.html`)
+  await writeFile(html, exportsMockHtml(version), 'utf8')
+  const args: (string | number)[] = ['mock', session, html, '--version', version, '--screens', await writeJson('mock-screens', exportsScreens(version))]
+  if (changed) args.push('--changed', await writeJson('mock-changed', { changed }))
+  await cliOk(...args)
+}
+
+const PIN_ID_V1 = /^mock:v1\/exports\/default\/new-export\/x([0-9]{1,3})-y([0-9]{1,3})$/
 
 type Scenario = (env: Env) => Promise<void>
 
@@ -719,6 +780,135 @@ const scenarios: [string, Scenario][] = [
         same(events[0].payload.block_id, 'section:arch/p1', 'comment block id')
         same(events[0].payload.text, 'Who guards the writer?', 'comment text')
         await page.locator('.comment-badge[data-for-block="section:arch/p1"]').waitFor({ state: 'attached', timeout: 10_000 })
+        same(consoleErrors, [], 'console errors')
+      } finally {
+        await page.close()
+      }
+    },
+  ],
+  [
+    'o. mock review: pin, revise, sign off',
+    async (env) => {
+      const { page, consoleErrors } = await openPage(env)
+      try {
+        await registerMock(1)
+        const mockStep = (version: number) => step({ kind: 'mock-review', stage: 'ux-review', title: `Exports mock v${version}`, version })
+        const s1 = await mockStep(1)
+        await waitForStep(page, s1.step)
+
+        const shellFrame = page.locator('iframe.mock-frame')
+        const src = (await shellFrame.getAttribute('src')) ?? ''
+        const token = new URL(src, env.url).searchParams.get('t') ?? ''
+        assert(src.startsWith('/_quirk/mock/1?t=') && token, `unexpected mock iframe src: ${src}`)
+        const harness = page.frameLocator('iframe.mock-frame')
+        const mock = harness.frameLocator('#mock-frame')
+        const current = (title: string) => harness.locator('.screen-item.current .title', { hasText: title })
+        await harness.locator('#version-chip', { hasText: 'Mock v1' }).waitFor({ timeout: 15_000 })
+        await current('Exports').waitFor({ timeout: 10_000 })
+
+        // an in-mock link moves the rail
+        await mock.locator('a[href="#/saved"]').click()
+        await current('Saved exports').waitFor({ timeout: 5000 })
+        await mock.locator('a[href="#/exports"]').click()
+        await current('Exports').waitFor({ timeout: 5000 })
+
+        // state switcher shows the empty variant
+        await mock.locator('[data-screen="exports"] [data-state="default"]').waitFor({ state: 'visible', timeout: 5000 })
+        await harness.locator('#state-switch button', { hasText: 'empty' }).click()
+        await mock.locator('[data-screen="exports"] [data-state="empty"]').waitFor({ state: 'visible', timeout: 5000 })
+        await mock.locator('[data-screen="exports"] [data-state="default"]').waitFor({ state: 'hidden', timeout: 5000 })
+
+        // mobile viewport is 390px wide
+        await harness.locator('#vp-mobile').click()
+        await sleep(300)
+        const mobile = await harness.locator('#mock-frame').boundingBox()
+        assert(mobile && Math.abs(mobile.width - 390) <= 1, `mobile frame width: ${JSON.stringify(mobile)}`)
+        same(await mock.locator('body').evaluate(() => window.innerWidth), 390, 'inner window width in mobile')
+        await harness.locator('#vp-desktop').click()
+        await harness.locator('#state-switch button', { hasText: 'default' }).click()
+        await mock.locator('[data-screen="exports"] [data-state="default"]').waitFor({ state: 'visible', timeout: 5000 })
+
+        // pin a comment on a keyed element
+        await harness.locator('#mode-comment').click()
+        await mock.locator('[data-pin="new-export"]').click()
+        const note = harness.locator('.note-pop')
+        await note.waitFor({ state: 'visible', timeout: 5000 })
+        await note.getByLabel('Comment', { exact: true }).fill('Make this button primary')
+        await note.getByRole('button', { name: 'Send', exact: true }).click()
+        await note.waitFor({ state: 'detached', timeout: 10_000 })
+        const commentEvents = await nextEvents()
+        same(commentEvents.map((e) => e.type), ['comment'], 'event types after the pin')
+        const pinned = commentEvents[0].payload
+        assert(typeof pinned.block_id === 'string' && PIN_ID_V1.test(pinned.block_id), `pin block id: ${pinned.block_id}`)
+        same(pinned.text, 'Make this button primary', 'pin text')
+        const threadId = pinned.thread_id
+        assert(typeof threadId === 'string' && threadId, 'the pin comment has no thread_id')
+        await harness.locator('#layer-pins .pin').waitFor({ state: 'visible', timeout: 10_000 })
+
+        // Needs changes
+        await harness.locator('#verdict').getByRole('button', { name: 'Needs changes', exact: true }).click()
+        await harness.locator('#verdict').getByLabel('Overall comment (optional)').fill('Tighten the header')
+        await harness.locator('#verdict').getByRole('button', { name: 'Send: needs changes' }).click()
+        const verdictEvents = await nextEvents()
+        same(verdictEvents.map((e) => e.type), ['submit'], 'event types after Needs changes')
+        const verdict = verdictEvents[0].payload
+        same(verdict.verdict, 'needs-changes', 'verdict')
+        same(verdict.comment, 'Tighten the header', 'verdict comment')
+        assert(Array.isArray(verdict.visited) && verdict.visited.includes('exports') && verdict.visited.includes('saved'), `visited: ${JSON.stringify(verdict.visited)}`)
+        await harness.locator('#verdict').waitFor({ state: 'hidden', timeout: 10_000 })
+
+        // the agent answers, then registers v2 without the pinned key and with another key changed
+        await cliOk('reply', session, threadId, '--text', 'Dropped the button from the list', '--resolve', 'addressed')
+        await registerMock(2, ['export-row'])
+        const s2 = await mockStep(2)
+        await waitForStep(page, s2.step)
+        await harness.locator('#version-chip', { hasText: 'Mock v2' }).waitFor({ timeout: 15_000 })
+
+        // v1 pin is orphaned: listed, not drawn on any element
+        const orphan = harness.locator('.pin-row', { has: harness.locator('.badge.warn', { hasText: 'element removed in v2' }) })
+        await orphan.waitFor({ state: 'visible', timeout: 15_000 })
+        await harness.locator('.rail h2', { hasText: 'Orphaned pins' }).waitFor({ timeout: 5000 })
+        assert((await orphan.innerText()).includes('new-export'), 'the orphaned row does not name the removed key')
+        same(await harness.locator('#layer-pins .pin').count(), 0, 'pins drawn in v2')
+        await harness.locator('#mode-comment').waitFor({ state: 'visible', timeout: 5000 })
+
+        // Show changes outlines the changed element
+        await harness.locator('#show-changes').check()
+        const outline = harness.locator('#layer-changes .box.changed')
+        await outline.waitFor({ state: 'visible', timeout: 5000 })
+        same(await outline.count(), 1, 'changed outlines')
+        const target = await mock.locator('[data-pin="export-row"]').boundingBox()
+        const frameBox = await harness.locator('#mock-frame').boundingBox()
+        const drawn = await outline.boundingBox()
+        assert(target && frameBox && drawn, 'missing a bounding box for the change outline')
+        assert(
+          Math.abs(drawn.x - target.x) <= 1 && Math.abs(drawn.y - target.y) <= 1 && Math.abs(drawn.width - target.width) <= 1 && Math.abs(drawn.height - target.height) <= 1,
+          `the change outline ${JSON.stringify(drawn)} is not on the changed element ${JSON.stringify(target)}`,
+        )
+        same(await mock.locator('[data-pin="new-export"]').count(), 0, 'removed element still in v2')
+
+        // Looks right with one screen unvisited needs a confirm
+        await mock.locator('a[href="#/saved"]').click()
+        await current('Saved exports').waitFor({ timeout: 5000 })
+        const bar = harness.locator('#verdict')
+        await bar.getByRole('button', { name: 'Looks right', exact: true }).click()
+        const confirmText = await bar.locator('.panel').innerText()
+        assert(confirmText.includes('Export detail') && !confirmText.includes('Saved exports'), `confirm panel text: ${confirmText}`)
+        const quiet = await cli('next', session, '--after', cursor, '--timeout', 1)
+        same(quiet.out.status, 'timeout', 'no event before the confirm click')
+        await bar.getByRole('button', { name: 'Confirm: looks right' }).click()
+        const signoff = await nextEvents()
+        same(signoff.map((e) => e.type), ['submit'], 'event types after Looks right')
+        same(signoff[0].payload.verdict, 'looks-right', 'sign-off verdict')
+        same(signoff[0].payload.visited, ['exports', 'saved'], 'sign-off visited')
+
+        // export is a single file with no token in it
+        const outDir = await mkdtemp(path.join(scratchRoot(), 'mock-export-'))
+        const exported = await cliOk('mock-export', session, '--version', 2, '--out', outDir)
+        same(exported.files.map((f: string) => path.basename(f)).sort(), ['mock.html', 'review.json', 'screens.md'], 'exported files')
+        for (const file of exported.files) assert(existsSync(file), `missing exported file ${file}`)
+        const exportedHtml = await readFile(path.join(outDir, 'mock.html'), 'utf8')
+        assert(!exportedHtml.includes(token), 'mock.html contains the session token')
         same(consoleErrors, [], 'console errors')
       } finally {
         await page.close()
