@@ -12,6 +12,7 @@ highest seq already in ``app-events`` or ``chat.json``, so a lost counters write
 from __future__ import annotations
 
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -425,6 +426,68 @@ class AppState:
             data = self._read_json("review.json", None)
             return Path(data["path"]) if data and data.get("path") else None
 
+    # ---- mocks ---------------------------------------------------------------
+
+    _MAX_MOCK_VERSION = 9999
+
+    def _mock_versions(self) -> dict:
+        data = self._read_json("mocks.json", {})
+        versions = data.get("versions") if isinstance(data, dict) else None
+        return versions if isinstance(versions, dict) else {}
+
+    def _mocks_index(self) -> dict:
+        nums = sorted(int(n) for n in self._mock_versions())
+        return {"latest": nums[-1] if nums else None, "versions": nums}
+
+    def mocks_index(self) -> dict:
+        """``{"latest": int | None, "versions": [int, ...]}`` for the registered mock versions."""
+        with self._locked():
+            return self._mocks_index()
+
+    def register_mock(self, version: int, html: str, screens: dict, changed: list) -> None:
+        """Copy ``html`` to ``mocks/v<version>.html`` and record it; a re-registered latest is replaced.
+
+        The first version must be 1 and each later one the latest or latest + 1; a refusal changes
+        nothing. The caller validates ``screens`` and ``changed``.
+        """
+        if not (isinstance(version, int) and not isinstance(version, bool)) or not 1 <= version <= self._MAX_MOCK_VERSION:
+            raise AppStateError("version", "version must be a positive integer")
+        with self._locked():
+            latest = self._mocks_index()["latest"]
+            allowed = (1,) if latest is None else (latest, latest + 1)
+            if version not in allowed:
+                want = " or ".join(str(n) for n in allowed)
+                raise AppStateError("version", f"version must be {want}, not {version}")
+            (self._dir / "mocks").mkdir(parents=True, exist_ok=True)
+            atomic_write(self._dir / "mocks" / f"v{version}.html", html)
+            versions = self._mock_versions()
+            versions[str(version)] = {
+                "file": f"mocks/v{version}.html",
+                "screens": screens,
+                "changed": list(changed),
+                "registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            }
+            self._write_json("mocks.json", {"versions": versions})
+            self._tick()
+
+    def get_mock(self, version: int) -> dict | None:
+        """``{version, html, screens, changed, registered_at}`` for a registered version, else None."""
+        with self._locked():
+            entry = self._mock_versions().get(str(version))
+            if not isinstance(entry, dict):
+                return None
+            try:
+                html = (self._dir / entry["file"]).read_text(encoding="utf-8")
+            except (OSError, KeyError, UnicodeError):
+                return None
+            return {
+                "version": version,
+                "html": html,
+                "screens": entry.get("screens"),
+                "changed": entry.get("changed", []),
+                "registered_at": entry.get("registered_at"),
+            }
+
     # ---- snapshot ------------------------------------------------------------
 
     def snapshot(self) -> dict:
@@ -470,6 +533,7 @@ class AppState:
                 "chat": chat,
                 "threads": self._read_json("threads.json", []),
                 "review_registered": (self._dir / "review.json").exists(),
+                "mocks": self._mocks_index(),
             }
             if step_id is not None:
                 draft = self._read_json(f"drafts/{step_id}.json", None)
