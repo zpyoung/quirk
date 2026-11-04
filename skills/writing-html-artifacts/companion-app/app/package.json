@@ -12,7 +12,8 @@
     "drafts-check": "tsx scripts/check-drafts.ts",
     "chat-check": "tsx scripts/check-chat.ts",
     "template-check": "tsx scripts/check-template.ts",
-    "check": "pnpm run typecheck && pnpm run tokens-check && pnpm run steps-check && pnpm run drafts-check && pnpm run chat-check && pnpm run template-check",
+    "harness-check": "tsx scripts/check-harness.ts",
+    "check": "pnpm run typecheck && pnpm run tokens-check && pnpm run steps-check && pnpm run drafts-check && pnpm run chat-check && pnpm run template-check && pnpm run harness-check",
     "e2e": "tsx e2e/run.ts",
     "build": "vite build"
   },
