@@ -439,10 +439,35 @@ class AppState:
         nums = sorted(int(n) for n in self._mock_versions())
         return {"latest": nums[-1] if nums else None, "versions": nums}
 
+    def _mocks_view(self) -> dict:
+        versions = self._mock_versions()
+        view = self._mocks_index()
+        view["revisions"] = {
+            str(n): entry["revision"]
+            for n in view["versions"]
+            if isinstance(entry := versions.get(str(n)), dict) and isinstance(entry.get("revision"), str)
+        }
+        return view
+
     def mocks_index(self) -> dict:
         """``{"latest": int | None, "versions": [int, ...]}`` for the registered mock versions."""
         with self._locked():
             return self._mocks_index()
+
+    def _is_ui_session(self) -> bool:
+        """True once the agent signalled UI work: a ux-review step or decision, or any registered mock."""
+        if self._mock_versions():
+            return True
+        if any(d.get("stage") == "ux-review" for d in self._read_json("decisions.json", []) if isinstance(d, dict)):
+            return True
+        for path in (self._dir / "steps").glob("*.json"):
+            try:
+                step = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(step, dict) and step.get("stage") == "ux-review":
+                return True
+        return False
 
     def register_mock(self, version: int, html: str, screens: dict, changed: list) -> None:
         """Copy ``html`` to a new file under ``mocks/`` and record it; a re-registered latest is replaced.
@@ -470,6 +495,7 @@ class AppState:
                 "screens": screens,
                 "changed": list(changed),
                 "registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "revision": secrets.token_hex(8),
             }
             try:
                 self._write_json("mocks.json", {"versions": versions})
@@ -489,7 +515,10 @@ class AppState:
             target.unlink()
 
     def get_mock(self, version: int) -> dict | None:
-        """``{version, html, screens, changed, registered_at}`` for a registered version, else None."""
+        """``{version, html, screens, changed, registered_at, revision}`` for a registered version, else None.
+
+        ``revision`` is opaque and changes on every registration of the version.
+        """
         with self._locked():
             entry = self._mock_versions().get(str(version))
             if not isinstance(entry, dict):
@@ -504,6 +533,7 @@ class AppState:
                 "screens": entry.get("screens"),
                 "changed": entry.get("changed", []),
                 "registered_at": entry.get("registered_at"),
+                "revision": entry.get("revision"),
             }
 
     # ---- snapshot ------------------------------------------------------------
@@ -529,9 +559,11 @@ class AppState:
             if cur_stage not in STAGES:
                 cur_stage = STAGES[0]
             idx = STAGES.index(cur_stage)
+            ui_session = self._is_ui_session()
             stages = [
                 {"id": s, "state": "done" if i < idx else "current" if i == idx else "todo"}
                 for i, s in enumerate(STAGES)
+                if ui_session or s != "ux-review"
             ]
             chat = []
             for entry in self._read_json("chat.json", []):
@@ -551,7 +583,7 @@ class AppState:
                 "chat": chat,
                 "threads": self._read_json("threads.json", []),
                 "review_registered": (self._dir / "review.json").exists(),
-                "mocks": self._mocks_index(),
+                "mocks": self._mocks_view(),
             }
             if step_id is not None:
                 draft = self._read_json(f"drafts/{step_id}.json", None)

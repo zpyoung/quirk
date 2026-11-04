@@ -63,6 +63,31 @@
     return placePin(pin, viewed, latest, keys)
   }
 
+  /**
+   * The data-pin keys a pin's screen and state offers for classification, as a Set, or null for "cannot
+   * tell yet". `keys` is the array of keys found in the viewed document, or null when no element for the
+   * screen exists there. A missing screen element is only evidence of absence once the viewed document
+   * has loaded and the pin's screen is the one on show; before that, or for another screen, it is unknown.
+   */
+  function viewedKeys(loaded, currentScreen, screenId, keys) {
+    if (keys !== null && keys !== undefined) return new Set(keys)
+    return loaded && currentScreen === screenId ? new Set() : null
+  }
+
+  /**
+   * The elements of a screen that carry data-pin for `state`: the screen element itself (when it has a
+   * data-pin) followed by its descendants. `descendants` is every `[data-pin]` node inside `scr`.
+   */
+  function pinNodes(scr, state, descendants) {
+    var all = [scr].concat(Array.prototype.slice.call(descendants))
+    return all.filter(function (p) {
+      if (p.getAttribute('data-pin') === null) return false
+      var st = p.closest('[data-state]')
+      if (!st || st === scr || !scr.contains(st)) return true
+      return !state || st.getAttribute('data-state') === state
+    })
+  }
+
   function screenList(doc) {
     if (Array.isArray(doc)) return doc
     return doc && Array.isArray(doc.screens) ? doc.screens : []
@@ -173,9 +198,20 @@
     return html.slice(0, pos) + '<head>' + base + '</head>' + html.slice(pos)
   }
 
+  /**
+   * Whether the version registered under `boot.version` was replaced after this page was served. Only
+   * app mode compares, and only when both sides carry a revision.
+   */
+  function isStale(boot, snap) {
+    if (!boot || boot.mode !== 'app' || !snap || !snap.mocks || !snap.mocks.revisions) return false
+    var current = snap.mocks.revisions[String(boot.version)]
+    return typeof boot.revision === 'string' && typeof current === 'string' && current !== boot.revision
+  }
+
   /** Whether comment mode and the verdict bar are allowed for this boot and snapshot. */
   function canReview(boot, snap) {
     if (!boot || boot.mode !== 'app' || !snap || !snap.step) return false
+    if (isStale(boot, snap)) return false
     if (snap.step_state !== 'open') return false
     if (snap.step.kind !== 'mock-review' || snap.step.version !== boot.version) return false
     return !!snap.mocks && snap.mocks.latest === boot.version
@@ -201,6 +237,9 @@
     formatPinId: formatPinId,
     placePin: placePin,
     classifyPin: classifyPin,
+    viewedKeys: viewedKeys,
+    pinNodes: pinNodes,
+    isStale: isStale,
     isKnownScreen: isKnownScreen,
     unvisitedScreens: unvisitedScreens,
     deriveGaps: deriveGaps,

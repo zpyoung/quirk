@@ -8,7 +8,7 @@ It runs automatically for UI work, and the user can skip it from the review scre
 
 - UI means a screen a person uses (web, app or desktop pages, components, dialogs, flows) or a generated page (HTML reports, dashboards, companion or artifact pages).
 - Terminal UIs and CLI output don't count. A brainstorm that only touches those, or an API with no screens, sees no UX review stage, question, chat line or mock.
-- Decide at domain detection. For UI work, say once in the chat that a clickable mock comes after the approach pick and can be skipped from the review screen, and add the *UX review* stage to the rail. Don't ask whether to run it.
+- Decide at domain detection. For UI work, say once in the chat that a clickable mock comes after the approach pick and can be skipped from the review screen, and record a decision with stage `ux-review` through `decide` at that moment (label `UX review`, value `runs after the approach pick`); that is what adds the *UX review* stage to the rail. Don't ask whether to run it.
 
 ## Writing the screen inventory
 

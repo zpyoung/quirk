@@ -16,7 +16,7 @@ export function Rail({ stages, openStage, onOpen }: { stages: StageState[]; open
   return (
     <nav className="rail" aria-label="Brainstorm stages">
       <ol>
-        {STAGES.map((id) => {
+        {STAGES.filter((id) => id !== 'ux-review' || stages.some((s) => s.id === id)).map((id) => {
           const state = stateOf(stages, id)
           const label = STAGE_LABELS[id]
           return (

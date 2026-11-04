@@ -333,6 +333,7 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     return v && v.length ? v : [boot.version]
   }
   function canReview() { return Core.canReview(boot, S.snap) }
+  function staleVersion() { return Core.isStale(boot, S.snap) }
   function readOnlyVersion() { return appMode && S.snap !== null && boot.version !== latestVersion() }
 
   // ---- inner document lookups (attribute compares avoid selector escaping) ----
@@ -352,11 +353,7 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     if (!scr) return null
     var states = stateEls(scr)
     if (states.length && state && !findAttr(states, 'data-state', state)) return []
-    return Array.prototype.filter.call(scr.querySelectorAll('[data-pin]'), function (p) {
-      var st = p.closest('[data-state]')
-      if (!st || st === scr || !scr.contains(st)) return true
-      return !state || st.getAttribute('data-state') === state
-    })
+    return Core.pinNodes(scr, state, scr.querySelectorAll('[data-pin]'))
   }
   function visibleBox(node) {
     var r = node.getBoundingClientRect()
@@ -385,7 +382,7 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
       n += 1
       var placement = Core.classifyPin(pin, boot.version, latestVersion(), boot.screens, function (screenId, state) {
         var els = pinEls(screenId, state)
-        return els === null ? null : new Set(els.map(function (e) { return e.getAttribute('data-pin') }))
+        return Core.viewedKeys(!!inner, S.screenId, screenId, els === null ? null : els.map(function (e) { return e.getAttribute('data-pin') }))
       })
       out.push({ n: n, thread: t, pin: pin, placement: placement })
     })
@@ -788,6 +785,10 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     if (!appMode) {
       b.hidden = false
       b.appendChild(el('span', { text: 'Mock v' + boot.version + ' · not the product' }))
+    } else if (staleVersion()) {
+      b.hidden = false
+      b.appendChild(el('span', { role: 'alert', text: 'This version was updated \u2014 reload to review it' }))
+      b.appendChild(el('button', { type: 'button', text: 'Reload', onclick: function () { window.location.reload() } }))
     } else if (readOnlyVersion()) {
       b.hidden = false
       var latest = latestVersion()

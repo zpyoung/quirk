@@ -43,7 +43,7 @@ python3 "$COMPANION" step "$SESSION" "$SESSION/layout.json"
 
 The open tab switches to it in place. A background tab gets the "(1) Your turn" title, a favicon badge and a sound. An invalid step exits `2` with `{"error","field"}` and nothing becomes current: fix the field and send again. Never reuse a step; each `step` call creates a new numbered one, so revise by sending a new step.
 
-Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `approaches`, `ux-review`, `design`, `spec` or `hand-off`) and `title`, plus optional `intro_md` or `intro_html`. Unknown keys and kinds are rejected. Ids match `[a-z0-9-]{1,40}`.
+Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `approaches`, `ux-review`, `design`, `spec` or `hand-off`) and `title`, plus optional `intro_md` or `intro_html`. The `ux-review` stage shows in the rail only in UI sessions (a `ux-review` step or decision, or a registered mock). Unknown keys and kinds are rejected. Ids match `[a-z0-9-]{1,40}`.
 
 | Kind | Body | The user does |
 |---|---|---|

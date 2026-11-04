@@ -58,7 +58,8 @@ python3 companion.py mock SESSION MOCK_HTML --version N --screens SCREENS_JSON [
 - Prints `{"version": N, "mock_url": "/_quirk/mock/N"}` and exits 0. Works whether or not the server is running.
 - Exit 2 with `{"error", "field"?}` when: `MOCK_HTML` is unreadable, not UTF-8, or larger than 5 MiB; `SCREENS_JSON` or `CHANGED_JSON` fails the schema below; `N` is not `1` for the first registration, or not equal to the latest version or latest + 1 afterwards.
 - Copies the HTML to a new file `state/mocks/v<N>-<token>.html` (so later edits to the agent's file never change a version under review), then records the version in `state/mocks.json` with `atomic_write`; the metadata's `file` field names the HTML readers serve. Re-registering the latest version writes a fresh file and switches `mocks.json` to it atomically, then removes the old file, so readers see either the old pair or the new pair. Without `--changed`, `changed` is empty (Show changes outlines nothing).
-- The snapshot gains `"mocks": {"latest": <int|null>, "versions": [<int>, ...]}`.
+- The snapshot gains `"mocks": {"latest": <int|null>, "versions": [<int>, ...], "revisions": {"<N>": <opaque str>}}`. A version's revision is set at registration and changes every time that version is registered again.
+- The snapshot's `stages` omits `ux-review` unless the session is a UI session: any written step with stage `ux-review`, any recorded decision with stage `ux-review`, or any registered mock. Done, current and todo for the other stages are computed as before. The rail renders `ux-review` only when `stages` contains it. The agent signals detection by recording a `ux-review` decision at domain detection.
 
 ### `mock-export` subcommand
 
@@ -96,6 +97,7 @@ Back-links: [Conceptual model](logic.md#conceptual-model), [SC-5](logic.md#main-
 - **Comment mode** (app mode, latest version, current step is `mock-review` for this version and `step_state` is `open`): hover outlines the nearest ancestor with `data-pin` and shows its component name from the inventory (or "gap" / nothing); click opens a note; send posts a `comment` event with the pin block id. Elements without `data-pin` cannot be pinned (the harness says so).
 - **Pins.** For each thread whose `block_id` parses as a pin: same version → drawn at the element plus percentage offset; older version and the key exists in the current screen/state → drawn re-anchored with a "from vX" badge; older version and the key is missing → listed in the rail as orphaned "element removed in v<current>", never drawn on another element; newer version → hidden. A resolved thread shows its last agent message.
 - **Versions.** Picker lists `mocks.versions`; picking one navigates to `/_quirk/mock/<M>?t=<token>`. Any version other than `mocks.latest` is read-only: no comment mode, no verdict bar.
+- **Stale page.** When `mocks.revisions["<boot.version>"]` differs from the boot `revision` (the version was registered again while the page was open), app mode disables comment mode and the verdict bar and shows "This version was updated — reload to review it" with a Reload button. A missing revision on either side never counts as stale.
 - **Show changes.** Outlines every element whose `data-pin` is in `changed`.
 - After a submit the snapshot's `step_state` is `submitted`, so comment mode and the verdict bar lock until the agent sends the next `mock-review` step. That is intended.
 - **Verdict bar** (same conditions as comment mode): Looks right (if any inventory screen is unvisited, list them and require one confirm click), Needs changes (optional overall comment), Skip review. Posts a `submit` event with the step's `nonce` and `step` id from the snapshot and payload `{verdict, comment?, visited, marks}`.
@@ -135,9 +137,9 @@ A **gap** is an element with `component: null` while `ui_layer` is true.
 
 `SCHEMA:` changed file (`--changed`): `{"changed": [pin-key, ...]}` (at most 500).
 
-`SCHEMA:` `state/mocks.json`: `{"versions": {"<N>": {"file": "mocks/v<N>-<token>.html", "screens": <screens>, "changed": [pin-key], "registered_at": <iso8601>}}}`.
+`SCHEMA:` `state/mocks.json`: `{"versions": {"<N>": {"file": "mocks/v<N>-<token>.html", "screens": <screens>, "changed": [pin-key], "registered_at": <iso8601>, "revision": <opaque str>}}}`.
 
-`SCHEMA:` boot JSON: `{"mode": "app"|"offline", "version": int, "latest": int, "versions": [int], "token"?: str, "screens": <screens>, "changed": [pin-key], "mock_html": str}`.
+`SCHEMA:` boot JSON: `{"mode": "app"|"offline", "version": int, "latest": int, "versions": [int], "revision": str|null, "token"?: str, "screens": <screens>, "changed": [pin-key], "mock_html": str}`. `revision` is the served version's snapshot revision at serve time; the offline export carries it and never compares it.
 
 `SCHEMA:` `review.json`: `{"version": int, "exported_at": iso8601, "pins": [{"thread_id": str, "version": int, "screen": str, "state": str, "pin": str, "messages": [{"from": str, "text": str, "timestamp": str}], "resolution": "addressed"|"not-addressed"|null}]}`. Only threads whose block id parses as a pin are included.
 
@@ -176,7 +178,7 @@ Back-links: [Scope and non-goals](logic.md#scope-and-non-goals).
 ## Testing strategy
 
 - `tests/test_companion_app_steps.py`: update the contract-constant pins; valid fixture `valid/mock-review.json`; invalid fixtures for a missing, zero, bool and string `version` with `expected.json` entries.
-- `tests/test_companion_appstate.py`: stage list pin; mock registry round trip; snapshot `mocks` field.
+- `tests/test_companion_appstate.py`: stage list pin; snapshot `stages` omits `ux-review` until a step, decision or mock makes it a UI session; mock registry round trip; snapshot `mocks` field with per-version revisions.
 - `tests/test_companion_mock.py` (new): `mock` subcommand success and every exit-2 case; version sequencing; copy immutability; `step` rejects an unregistered version; route 403 without or with a bad token, 404 unknown version, 500 missing template, boot JSON injected once and `<` escaped; foreign Origin 403; `mock-export` writes three files, offline boot has no token, `review.json` contains only pin threads with resolutions; submit verdict validation (`skip` accepted, unknown key 400, `visited` id validation).
 - `A/scripts/check-steps.ts`: a `mock-review` case asserting the iframe `src` and `data-step-kind`.
 - `A/scripts/check-harness.ts` (new, added to `pnpm run check`): pure-logic tests for `H/harness-core.js`: pin block id parse/format round trip and rejection of malformed ids; pin placement decision (same version, re-anchored, orphaned, hidden); unvisited-screens list; gap derivation.
