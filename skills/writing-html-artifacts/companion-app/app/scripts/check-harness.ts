@@ -271,6 +271,9 @@ const core = require(`${harnessDir}harness-core.js`)
   const coreSrc = readFileSync(`${harnessDir}harness-core.js`, 'utf8')
   check(!coreSrc.includes('quirk-mock-boot') && !coreSrc.includes('quirk-harness-core') && !coreSrc.includes('</script'), 'harness-core.js would break when inlined into the page')
   check(!/\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b/.test(html), 'the page opens a connection other than fetch')
+  const sendHandler = html.match(/send\.addEventListener\('click', function \(\) \{\n\s*if \(!canReview\(\)\)/)
+  check(sendHandler !== null, 'the pin note Send handler does not refuse to post when the page is not reviewable')
+  check(/function renderNote\(\) \{[^]*?syncNoteGate\(\); return/.test(html), 'an already-open pin note is not re-gated on canReview when the page re-renders')
   for (const target of html.match(/fetch\(([^,)]*)/g) ?? []) check(/_quirk\/app\//.test(target), `fetch target is not same-origin /_quirk/app: ${target}`)
 }
 
