@@ -188,9 +188,14 @@ def parse_pin(block_id: Any) -> Optional[dict]:
 
 
 def make_boot(*, mode: str, version: int, latest: int, versions: list[int], screens: dict, changed: list[str],
-              mock_html: str, token: Optional[str] = None) -> dict:
-    """The boot JSON the harness reads; ``token`` is only ever present in app mode."""
+              mock_html: str, revision: Optional[str] = None, token: Optional[str] = None) -> dict:
+    """The boot JSON the harness reads; ``token`` is only ever present in app mode.
+
+    ``revision`` identifies this registration of ``version``; the app-mode harness compares it with the
+    snapshot's to notice a re-registration. The offline export carries it but never compares it.
+    """
     boot: dict[str, Any] = {"mode": mode, "version": version, "latest": latest, "versions": versions}
+    boot["revision"] = revision
     if token is not None:
         boot["token"] = token
     boot.update({"screens": screens, "changed": changed, "mock_html": mock_html})

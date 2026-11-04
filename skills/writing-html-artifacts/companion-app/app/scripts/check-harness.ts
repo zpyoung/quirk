@@ -169,6 +169,52 @@ const core = require(`${harnessDir}harness-core.js`)
   same(core.classifyPin(pin(3, 'list', 'default'), 2, 3, doc, present), 'hidden', 'a newer pin is hidden')
 }
 
+// a missing screen element means orphaned only once the viewed document has loaded on that screen
+{
+  const keys = ['btn']
+  same([...(core.viewedKeys(true, 'list', 'list', keys) as Set<string>)], ['btn'], 'keys found in the viewed screen are offered')
+  same(core.viewedKeys(false, 'list', 'list', null), null, 'a document that has not loaded is unknown')
+  same(core.viewedKeys(true, 'detail', 'list', null), null, 'a screen other than the current one is unknown')
+  const none = core.viewedKeys(true, 'list', 'list', null) as Set<string>
+  check(none instanceof Set && none.size === 0, 'a loaded current screen with no element offers an empty key set')
+  const doc = { screens: [{ id: 'list', states: ['default'] }] }
+  const older = { version: 1, screen: 'list', state: 'default', pin: 'btn', x: 1, y: 1 }
+  same(core.classifyPin(older, 2, 2, doc, () => core.viewedKeys(true, 'list', 'list', null)), 'orphaned', 'older pin whose screen element is absent from the loaded mock')
+  same(core.classifyPin(older, 2, 2, doc, () => core.viewedKeys(false, 'list', 'list', null)), 'unknown', 'older pin before the mock has loaded')
+}
+
+// a data-pin on the screen element itself is a pin target, in the right state
+{
+  type Fake = { attrs: Record<string, string>; parent: Fake | null; getAttribute(n: string): string | null; closest(sel: string): Fake | null; contains(o: Fake): boolean }
+  const node = (attrs: Record<string, string>, parent: Fake | null = null): Fake => {
+    const n: Fake = {
+      attrs,
+      parent,
+      getAttribute: (name) => (name in attrs ? attrs[name] : null),
+      closest: (sel) => {
+        const attr = sel.slice(1, -1)
+        for (let c: Fake | null = n; c; c = c.parent) if (attr in c.attrs) return c
+        return null
+      },
+      contains: (o) => {
+        for (let c: Fake | null = o; c; c = c.parent) if (c === n) return true
+        return false
+      },
+    }
+    return n
+  }
+  const scr = node({ 'data-screen': 'list', 'data-pin': 'root' })
+  const row = node({ 'data-pin': 'row' }, scr)
+  const empty = node({ 'data-state': 'empty' }, scr)
+  const cta = node({ 'data-pin': 'cta' }, empty)
+  const keys = (state: string | null) => core.pinNodes(scr, state, [row, cta]).map((n: Fake) => n.getAttribute('data-pin'))
+  same(keys(null), ['root', 'row', 'cta'], 'the screen element is offered with its descendants')
+  same(keys('default'), ['root', 'row'], 'a pin inside another state is not offered')
+  same(keys('empty'), ['root', 'row', 'cta'], 'a pin inside the shown state is offered')
+  const plain = node({ 'data-screen': 'plain' })
+  same(core.pinNodes(plain, null, []).length, 0, 'a screen element without data-pin is not a pin target')
+}
+
 // the review UI is gated on the open mock-review step for the viewed latest version
 {
   const boot = { mode: 'app', version: 2, latest: 2, token: 't' }
@@ -186,6 +232,15 @@ const core = require(`${harnessDir}harness-core.js`)
   check(core.canReview(boot, snap({ step: { id: 's', nonce: 'n', kind: 'questions' } })) === false, 'canReview allowed another step kind')
   check(core.canReview(boot, snap({ step: { id: 's', nonce: 'n', kind: 'mock-review', version: 1 } })) === false, 'canReview allowed a step for another version')
   check(core.canReview(boot, snap({ step: null })) === false, 'canReview allowed no step')
+  const staleBoot = { ...boot, revision: 'a' }
+  const withRevs = (rev: unknown) => snap({ mocks: { latest: 2, versions: [1, 2], revisions: { '1': 'x', '2': rev } } })
+  check(core.isStale(staleBoot, withRevs('b')) === true, 'a changed revision for the booted version is stale')
+  check(core.isStale(staleBoot, withRevs('a')) === false, 'an unchanged revision is not stale')
+  check(core.isStale(boot, withRevs('b')) === false, 'a boot without a revision is never stale')
+  check(core.isStale(staleBoot, snap()) === false, 'a snapshot without revisions is never stale')
+  check(core.isStale({ ...staleBoot, mode: 'offline' }, withRevs('b')) === false, 'offline mode never compares revisions')
+  check(core.canReview(staleBoot, withRevs('a')) === true, 'canReview allowed an unchanged revision')
+  check(core.canReview(staleBoot, withRevs('b')) === false, 'canReview allowed a stale version')
 }
 
 // offsets within an element box are integer percentages inside 0-100

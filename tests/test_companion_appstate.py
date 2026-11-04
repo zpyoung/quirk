@@ -408,9 +408,9 @@ def test_snapshot_empty(st):
     snap = st.snapshot()
     assert snap == {
         "rev": 0, "mode": "app", "step": None, "step_state": "open", "status": None,
-        "stages": [{"id": s, "state": "current" if s == "context" else "todo"} for s in STAGES],
+        "stages": [{"id": s, "state": "current" if s == "context" else "todo"} for s in STAGES if s != "ux-review"],
         "decisions": [], "chat": [], "threads": [], "review_registered": False,
-        "mocks": {"latest": None, "versions": []},
+        "mocks": {"latest": None, "versions": [], "revisions": {}},
     }
 
 
@@ -421,7 +421,7 @@ def test_snapshot_step_stages_and_state(st):
     assert snap["step"]["title"] == "Pick" and snap["step"]["kind"] == "choice"
     assert snap["mode"] == "app"
     states = {s["id"]: s["state"] for s in snap["stages"]}
-    assert [s["id"] for s in snap["stages"]] == list(STAGES)
+    assert [s["id"] for s in snap["stages"]] == [s for s in STAGES if s != "ux-review"]
     assert states["context"] == states["gray-areas"] == states["questions"] == "done"
     assert states["approaches"] == "current"
     assert states["design"] == states["spec"] == states["hand-off"] == "todo"
@@ -436,6 +436,42 @@ def test_snapshot_step_stages_and_state(st):
     r2 = st.write_step({"kind": "next", "stage": "design"})
     assert st.snapshot()["step_state"] == "open"
     assert st.snapshot()["step"]["id"] == r2["step"]
+
+
+def stage_ids(st) -> list[str]:
+    return [s["id"] for s in st.snapshot()["stages"]]
+
+
+def test_snapshot_omits_ux_review_for_a_plain_session(st):
+    st.write_step({"kind": "choice", "stage": "approaches", "title": "Pick"})
+    st.set_decisions([decision(1, stage="approaches"), decision(2, stage="design")])
+    assert "ux-review" not in stage_ids(st)
+    st.write_step({"kind": "next", "stage": "design"})
+    ids = stage_ids(st)
+    assert ids == [s for s in STAGES if s != "ux-review"]
+    states = {s["id"]: s["state"] for s in st.snapshot()["stages"]}
+    assert states["approaches"] == "done" and states["design"] == "current" and states["spec"] == "todo"
+
+
+def test_snapshot_includes_ux_review_after_a_ux_review_decision(st):
+    st.set_decisions([decision(1, stage="ux-review", label="UX review", value="runs after the approach pick")])
+    assert stage_ids(st) == list(STAGES)
+
+
+def test_snapshot_includes_ux_review_after_a_ux_review_step(st):
+    st.write_step({"kind": "choice", "stage": "approaches", "title": "Pick"})
+    assert "ux-review" not in stage_ids(st)
+    st.write_step({"kind": "next", "stage": "ux-review"})
+    snap = st.snapshot()
+    assert [s["id"] for s in snap["stages"]] == list(STAGES)
+    assert {s["id"]: s["state"] for s in snap["stages"]}["ux-review"] == "current"
+    st.write_step({"kind": "next", "stage": "design"})
+    assert {s["id"]: s["state"] for s in st.snapshot()["stages"]}["ux-review"] == "done"
+
+
+def test_snapshot_includes_ux_review_after_a_mock_registration(st):
+    st.register_mock(1, "<html></html>", {"ui_layer": True, "screens": []}, [])
+    assert stage_ids(st) == list(STAGES)
 
 
 def test_snapshot_draft_for_current_step_only(st):
@@ -492,15 +528,21 @@ def test_mock_registry_round_trip_and_snapshot(st):
     assert rev(st) > before
     st.register_mock(2, "<html>two</html>", screens, ["cta"])
     assert st.mocks_index() == {"latest": 2, "versions": [1, 2]}
-    assert st.snapshot()["mocks"] == {"latest": 2, "versions": [1, 2]}
+    snap_mocks = st.snapshot()["mocks"]
+    assert (snap_mocks["latest"], snap_mocks["versions"]) == (2, [1, 2])
+    assert set(snap_mocks["revisions"]) == {"1", "2"}
     one = st.get_mock(1)
     assert one["html"] == "<html>one</html>" and one["screens"] == screens and one["changed"] == []
     assert st.get_mock(2)["changed"] == ["cta"] and one["registered_at"]
     assert (st._dir / st._mock_versions()["1"]["file"]).read_text() == "<html>one</html>"
 
+    before_revisions = dict(st.snapshot()["mocks"]["revisions"])
     st.register_mock(2, "<html>two b</html>", screens, [])
     assert st.get_mock(2)["html"] == "<html>two b</html>" and st.get_mock(2)["changed"] == []
     assert st.mocks_index()["versions"] == [1, 2]
+    after_revisions = st.snapshot()["mocks"]["revisions"]
+    assert after_revisions["1"] == before_revisions["1"]
+    assert after_revisions["2"] != before_revisions["2"] and st.get_mock(2)["revision"] == after_revisions["2"]
 
 
 @pytest.mark.parametrize("prior, version", [([], 2), ([], 0), ([1], 3), ([1, 2], 1), ([1], True), ([], "1")])

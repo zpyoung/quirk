@@ -219,6 +219,24 @@ for (const file of files) {
   if (/data-block-id="section:arch\/p0" data-changed/.test(marked)) fail('design paragraphs', 'an unchanged paragraph is highlighted')
 }
 
+// the rail shows UX review only when the snapshot lists the stage; every other stage always renders
+{
+  const railLabels = (html: string) => [...html.matchAll(/class="rail-item"/g)].length
+  const withoutUx = renderShell(snapshot(null))
+  const withUx = renderShell(
+    snapshot(null, {
+      stages: [
+        { id: 'context', state: 'done' },
+        { id: 'ux-review', state: 'current' },
+      ],
+    }),
+  )
+  if (/UX review/.test(withoutUx)) fail('rail', 'a snapshot without ux-review in stages still shows the UX review stage')
+  if (!/UX review/.test(withUx)) fail('rail', 'a snapshot with ux-review in stages does not show the UX review stage')
+  if (railLabels(withUx) !== railLabels(withoutUx) + 1) fail('rail', 'ux-review should be the only stage that depends on the snapshot list')
+  if (!/Brainstorm|Design/.test(withoutUx)) fail('rail', 'the other stages stopped rendering')
+}
+
 const waitingStatus: Status = { text: 'Checking approaches', progress: '2/3', interruptible: true, started_at: new Date().toISOString() }
 const waiting = render(snapshot(null, { status: waitingStatus }))
 if (!waiting.includes('Continue without the rest')) fail('waiting', 'no "Continue without the rest" button when interruptible')

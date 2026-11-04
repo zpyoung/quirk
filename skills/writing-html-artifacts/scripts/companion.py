@@ -543,7 +543,8 @@ class _Handler(BaseHTTPRequestHandler):
         index = app_state.mocks_index()
         boot = mocks.make_boot(
             mode="app", version=mock["version"], latest=index["latest"], versions=index["versions"],
-            screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"], token=self.server.token,
+            screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"], revision=mock["revision"],
+            token=self.server.token,
         )
         try:
             page = mocks.fill_template(*mocks.load_template(), boot)
@@ -1495,7 +1496,7 @@ def _cmd_mock_export(args: argparse.Namespace) -> int:
         return _field_error(ValueError(f"mock version {args.version} is not registered"), "version")
     boot = mocks.make_boot(
         mode="offline", version=args.version, latest=args.version, versions=[args.version],
-        screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"],
+        screens=mock["screens"], changed=mock["changed"], mock_html=mock["html"], revision=mock["revision"],
     )
     try:
         page = mocks.fill_template(*mocks.load_template(), boot)

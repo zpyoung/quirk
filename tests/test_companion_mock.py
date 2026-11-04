@@ -316,8 +316,9 @@ def test_route_serves_the_filled_harness(app: App, tmp_path: Path) -> None:
     boot = boot_of(page)
     assert boot == {
         "mode": "app", "version": 1, "latest": 2, "versions": [1, 2], "token": app.token,
-        "screens": SCREENS, "changed": [], "mock_html": MOCK_HTML,
+        "screens": SCREENS, "changed": [], "mock_html": MOCK_HTML, "revision": boot["revision"],
     }
+    assert boot["revision"] == app.snapshot()["mocks"]["revisions"]["1"]
     assert CORE_MARK not in page and "<script>" + CORE_JS.replace("</script", "<\\/script") + "</script>" in page
     boot2 = boot_of(get(app, f"/_quirk/mock/2?t={app.token}")[1].decode())
     assert boot2["version"] == 2 and boot2["changed"] == ["cta"]
@@ -399,10 +400,21 @@ def test_route_does_not_exist_in_screen_mode(tmp_path: Path, harness: Path) -> N
 
 
 def test_snapshot_over_http_lists_mock_versions(app: App, tmp_path: Path) -> None:
-    assert app.snapshot()["mocks"] == {"latest": None, "versions": []}
+    assert app.snapshot()["mocks"] == {"latest": None, "versions": [], "revisions": {}}
     register(app.session, tmp_path)
     register(app.session, tmp_path, 2)
-    assert app.snapshot()["mocks"] == {"latest": 2, "versions": [1, 2]}
+    mocks = app.snapshot()["mocks"]
+    assert (mocks["latest"], mocks["versions"]) == (2, [1, 2])
+    assert set(mocks["revisions"]) == {"1", "2"} and mocks["revisions"]["1"] != mocks["revisions"]["2"]
+
+
+def test_re_registering_a_version_changes_its_revision_in_boot_and_snapshot(app: App, tmp_path: Path) -> None:
+    register(app.session, tmp_path)
+    first = boot_of(get(app, f"/_quirk/mock/1?t={app.token}")[1].decode())["revision"]
+    assert isinstance(first, str) and first == app.snapshot()["mocks"]["revisions"]["1"]
+    register(app.session, tmp_path, html=MOCK_HTML.replace("hi", "bye"))
+    second = boot_of(get(app, f"/_quirk/mock/1?t={app.token}")[1].decode())["revision"]
+    assert second != first and second == app.snapshot()["mocks"]["revisions"]["1"]
 
 
 # ---- mock-export ------------------------------------------------------------------------------
@@ -425,6 +437,7 @@ def test_export_writes_three_files_with_an_offline_boot(offline: Path, tmp_path:
     boot = boot_of(page)
     assert boot["mode"] == "offline" and "token" not in boot and boot["version"] == 1
     assert boot["screens"] == SCREENS and boot["mock_html"] == MOCK_HTML and boot["changed"] == []
+    assert isinstance(boot["revision"], str) and boot["revision"]
     assert CORE_MARK not in page
 
 
