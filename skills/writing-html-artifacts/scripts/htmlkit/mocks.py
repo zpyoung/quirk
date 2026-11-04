@@ -68,6 +68,26 @@ def _ident(value: Any, path: str, pattern: re.Pattern) -> str:
     return value
 
 
+def _reject_unencodable(value: Any, path: str) -> None:
+    """Raises ``MockError`` for a string (value or key) that UTF-8 cannot encode, such as a lone surrogate.
+
+    JSON text can carry ``"\\ud800"``; stored as-is it would fail the registry write after validation passed.
+    """
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _bad(path, "must not contain an unpaired surrogate") from None
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            sub = _join(path, str(key)) if isinstance(key, str) and key.isascii() else _join(path, "<key>")
+            _reject_unencodable(key, sub)
+            _reject_unencodable(item, sub)
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            _reject_unencodable(item, f"{path}[{i}]")
+
+
 def _present(obj: dict, key: str, path: str) -> Any:
     if key not in obj:
         raise _bad(_join(path, key), "is required")
@@ -76,6 +96,7 @@ def _present(obj: dict, key: str, path: str) -> Any:
 
 def validate_screens(raw: Any) -> dict:
     """The screens inventory as a deep copy; raises ``MockError`` naming the first offending field."""
+    _reject_unencodable(raw, "")
     root = _object(raw, "", {"ui_layer", "screens"})
     if not isinstance(_present(root, "ui_layer", ""), bool):
         raise _bad("ui_layer", "must be true or false")
@@ -140,6 +161,7 @@ def _validate_elements(elements: Any, path: str) -> None:
 
 def validate_changed(raw: Any) -> list[str]:
     """The pin keys of a ``--changed`` file; raises ``MockError`` for a malformed file."""
+    _reject_unencodable(raw, "")
     root = _object(raw, "", {"changed"})
     keys = _present(root, "changed", "")
     if not isinstance(keys, list) or len(keys) > MAX_CHANGED:

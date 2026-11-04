@@ -115,10 +115,10 @@ def boot_of(page: str) -> dict:
 def test_mock_registers_a_version_without_a_server(offline: Path, tmp_path: Path) -> None:
     rc, out = register(offline, tmp_path)
     assert (rc, out) == (0, {"version": 1, "mock_url": "/_quirk/mock/1"})
-    assert (offline / "state" / "mocks" / "v1.html").read_text(encoding="utf-8") == MOCK_HTML
     index = json.loads((offline / "state" / "mocks.json").read_text())
     entry = index["versions"]["1"]
-    assert entry["file"] == "mocks/v1.html"
+    assert re.fullmatch(r"mocks/v1-[0-9a-f]+\.html", entry["file"])
+    assert (offline / "state" / entry["file"]).read_text(encoding="utf-8") == MOCK_HTML
     assert entry["screens"] == SCREENS and entry["changed"] == []
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*", entry["registered_at"])
 
@@ -153,7 +153,9 @@ def test_mock_sequencing(offline: Path, tmp_path: Path, version: int, prior: lis
 def test_mock_accepts_the_latest_again_and_latest_plus_one(offline: Path, tmp_path: Path) -> None:
     register(offline, tmp_path, 1)
     register(offline, tmp_path, 1, html="<html><body>replaced</body></html>")
-    assert "replaced" in (offline / "state" / "mocks" / "v1.html").read_text()
+    index = json.loads((offline / "state" / "mocks.json").read_text())
+    assert "replaced" in (offline / "state" / index["versions"]["1"]["file"]).read_text()
+    assert len(list((offline / "state" / "mocks").iterdir())) == 1
     register(offline, tmp_path, 2)
     register(offline, tmp_path, 2)
     register(offline, tmp_path, 3)
@@ -250,6 +252,28 @@ def test_mock_rejects_unparseable_screens_and_changed_files(offline: Path, tmp_p
 def test_mock_rejects_a_bad_changed_file(offline: Path, tmp_path: Path, changed: object, field: str) -> None:
     rc, out = register(offline, tmp_path, changed=changed, expect=None)
     assert rc == 2 and out["error"] and out["field"] == field
+    assert not (offline / "state" / "mocks.json").exists()
+
+
+@pytest.mark.parametrize("surrogate", ["\ud800", "ok\udfff", "\ud83d"])
+def test_mock_rejects_an_unpaired_surrogate_in_screens(offline: Path, tmp_path: Path, surrogate: str) -> None:
+    screens = json.loads(json.dumps(SCREENS))
+    screens["screens"][1]["title"] = surrogate
+    rc, out = register(offline, tmp_path, screens=screens, expect=None)
+    assert rc == 2 and out["error"] and out["field"] == "screens[1].title"
+    assert not (offline / "state" / "mocks.json").exists()
+
+
+def test_mock_rejects_an_unpaired_surrogate_in_any_screens_or_changed_string(offline: Path, tmp_path: Path) -> None:
+    screens = json.loads(json.dumps(SCREENS))
+    screens["screens"][0]["elements"][0]["component"] = "x\ud800"
+    rc, out = register(offline, tmp_path, screens=screens, expect=None)
+    assert rc == 2 and out["field"] == "screens[0].elements[0].component"
+    rc, out = register(offline, tmp_path, changed={"changed": ["\ud800"]}, expect=None)
+    assert rc == 2 and out["field"] == "changed[0]"
+    rc, out = register(offline, tmp_path, screens={"ui_layer": True, "screens": SCREENS["screens"], "\ud800": 1},
+                       expect=None)
+    assert rc == 2 and out["field"] and "\ud800" not in out["field"]
     assert not (offline / "state" / "mocks.json").exists()
 
 

@@ -445,10 +445,12 @@ class AppState:
             return self._mocks_index()
 
     def register_mock(self, version: int, html: str, screens: dict, changed: list) -> None:
-        """Copy ``html`` to ``mocks/v<version>.html`` and record it; a re-registered latest is replaced.
+        """Copy ``html`` to a new file under ``mocks/`` and record it; a re-registered latest is replaced.
 
         The first version must be 1 and each later one the latest or latest + 1; a refusal changes
-        nothing. The caller validates ``screens`` and ``changed``.
+        nothing. The caller validates ``screens`` and ``changed``. Each registration writes its HTML to a
+        fresh file and then switches ``mocks.json`` to it in one atomic write, so a reader sees either the
+        old HTML with the old metadata or the new HTML with the new metadata.
         """
         if not (isinstance(version, int) and not isinstance(version, bool)) or not 1 <= version <= self._MAX_MOCK_VERSION:
             raise AppStateError("version", "version must be a positive integer")
@@ -459,16 +461,32 @@ class AppState:
                 want = " or ".join(str(n) for n in allowed)
                 raise AppStateError("version", f"version must be {want}, not {version}")
             (self._dir / "mocks").mkdir(parents=True, exist_ok=True)
-            atomic_write(self._dir / "mocks" / f"v{version}.html", html)
             versions = self._mock_versions()
+            previous = versions.get(str(version))
+            rel = f"mocks/v{version}-{secrets.token_hex(4)}.html"
+            atomic_write(self._dir / rel, html)
             versions[str(version)] = {
-                "file": f"mocks/v{version}.html",
+                "file": rel,
                 "screens": screens,
                 "changed": list(changed),
                 "registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             }
-            self._write_json("mocks.json", {"versions": versions})
+            try:
+                self._write_json("mocks.json", {"versions": versions})
+            except BaseException:
+                self._unlink_mock_file(rel)
+                raise
+            if isinstance(previous, dict) and isinstance(previous.get("file"), str):
+                self._unlink_mock_file(previous["file"])
             self._tick()
+
+    def _unlink_mock_file(self, rel: str) -> None:
+        """Best-effort removal of a registry HTML file; a leftover is harmless because ``mocks.json`` decides what is served."""
+        target = (self._dir / rel).resolve()
+        if target.parent != (self._dir / "mocks").resolve():
+            return
+        with contextlib.suppress(OSError):
+            target.unlink()
 
     def get_mock(self, version: int) -> dict | None:
         """``{version, html, screens, changed, registered_at}`` for a registered version, else None."""
