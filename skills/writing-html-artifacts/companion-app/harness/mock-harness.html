@@ -383,16 +383,10 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
       var pin = Core.parsePinId(t.block_id)
       if (!pin) return
       n += 1
-      var placement
-      if (pin.version === boot.version) placement = 'draw'
-      else {
-        var els = pinEls(pin.screen, pin.state)
-        if (els === null && pin.version < boot.version) placement = 'unknown'
-        else {
-          var keys = new Set((els || []).map(function (e) { return e.getAttribute('data-pin') }))
-          placement = Core.placePin(pin, boot.version, latestVersion(), keys)
-        }
-      }
+      var placement = Core.classifyPin(pin, boot.version, latestVersion(), boot.screens, function (screenId, state) {
+        var els = pinEls(screenId, state)
+        return els === null ? null : new Set(els.map(function (e) { return e.getAttribute('data-pin') }))
+      })
       out.push({ n: n, thread: t, pin: pin, placement: placement })
     })
     return out.filter(function (p) { return p.placement !== 'hidden' })
@@ -528,7 +522,10 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     if (navigate && p && inner && p.placement !== 'orphaned') {
       var s = screenById(p.pin.screen)
       if (s && s.states.indexOf(p.pin.state) !== -1) S.states[s.id] = p.pin.state
-      if (p.pin.screen !== S.screenId) goToScreen(p.pin.screen)
+      if (p.pin.screen !== S.screenId) {
+        goToScreen(p.pin.screen)
+        S.openThread = id
+      }
     }
     renderAll()
   }
@@ -610,13 +607,17 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
   }
   function onInnerHash() {
     if (!inner) return
-    S.screenId = Core.currentScreenId(inner.win.location.hash, boot.screens)
+    var nextId = Core.currentScreenId(inner.win.location.hash, boot.screens)
+    var moved = nextId !== S.screenId
+    S.screenId = nextId
     if (Core.isKnownScreen(boot.screens, S.screenId) && !S.visited.has(S.screenId)) {
       S.visited.add(S.screenId)
       saveVisited()
     }
-    S.note = null
-    S.openThread = null
+    if (moved) {
+      S.note = null
+      S.openThread = null
+    }
     hoverEl = null
     renderAll()
   }
@@ -804,19 +805,18 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     if (!appMode) { bar.hidden = true; return }
     var reviewing = canReview()
     var unvisited = Core.unvisitedScreens(boot.screens, S.visited)
-    var sig = JSON.stringify([reviewing, S.panel, S.submitting, S.verdictError, unvisited, S.snap ? S.snap.step_state : '', readOnlyVersion()])
+    var sig = JSON.stringify([reviewing, S.panel, S.submitting, S.verdictError, unvisited])
     if (sig === verdictSig) return
     verdictSig = sig
+    var typing = document.activeElement && bar.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA'
+      ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+      : null
     clear(bar)
-    bar.hidden = false
     if (!reviewing) {
-      var why = !S.snap ? 'Connecting to the review.'
-        : readOnlyVersion() ? 'Viewing an earlier version. The verdict is given on the latest.'
-        : S.snap.step_state === 'submitted' ? 'Verdict sent. The agent is working on it.'
-        : 'Nothing is waiting for a verdict on this version.'
-      bar.appendChild(el('span', { class: 'info', text: why }))
+      bar.hidden = true
       return
     }
+    bar.hidden = false
     bar.appendChild(el('strong', { text: 'Your verdict' }))
     var busy = S.submitting
     bar.appendChild(el('button', { type: 'button', class: 'primary', disabled: busy, text: 'Looks right', onclick: onLooksRight }))
@@ -838,6 +838,12 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
       var area = el('textarea', { 'aria-label': 'Overall comment (optional)', placeholder: 'Overall comment (optional)' })
       area.value = S.changesText
       area.addEventListener('input', function () { S.changesText = area.value })
+      if (typing) {
+        queueMicrotask(function () {
+          area.focus()
+          area.setSelectionRange(typing.start, typing.end)
+        })
+      }
       bar.appendChild(el('div', { class: 'panel' }, [
         area,
         el('div', { class: 'row' }, [
@@ -932,7 +938,6 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
           return r.json().then(function (snap) {
             rev = String(snap.rev)
             S.snap = snap
-            verdictSig = ''
             renderAll()
           })
         }

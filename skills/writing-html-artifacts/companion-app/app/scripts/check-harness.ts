@@ -129,6 +129,44 @@ const core = require(`${harnessDir}harness-core.js`)
   check(bare.startsWith(`<head>${base}</head>`), 'a fragment does not get a head')
   check(core.withBase('<!doctype html><p>hi</p>').startsWith(`<!doctype html><head>${base}</head>`), 'the doctype is not kept first')
   check(core.withBase('<!-- <head> --><html><head></head></html>').includes(`<!-- <head> --><html><head>${base}</head>`), 'base went into a comment instead of the real head')
+
+  const count = (text: string, needle: string) => text.split(needle).length - 1
+  for (const tag of ['script', 'style', 'textarea', 'title']) {
+    const body = tag === 'script' ? 'var s = "<head>";' : '<head>'
+    const doc = `<!doctype html><html><${tag}>${body}</${tag}><head><meta charset="utf-8"></head><body></body></html>`
+    const out = core.withBase(doc)
+    check(out.includes(`<head>${base}<meta charset="utf-8">`) && count(out, base) === 1, `base missed the real head after a ${tag} containing <head>: ${out}`)
+    check(out.includes(`<${tag}>${body}</${tag}>`), `base corrupted the ${tag} contents`)
+  }
+  const inAttr = core.withBase('<html><body data-x="<head>"></body></html>')
+  check(inAttr.includes(`<html><head>${base}</head><body data-x="<head>">`), `a <head> in an attribute value was taken for the head: ${inAttr}`)
+  const scriptNoHead = core.withBase('<!doctype html><html lang="en"><script>document.write("<head><html>")</script><body>x</body></html>')
+  check(scriptNoHead.includes(`<html lang="en"><head>${base}</head><script>document.write("<head><html>")</script>`) && count(scriptNoHead, base) === 1, `a headless document with <head> text in a script got the base in the wrong place: ${scriptNoHead}`)
+  const scriptOnly = core.withBase('<!doctype html><script>var a = "<html><head>";</script><p>x</p>')
+  check(scriptOnly.startsWith(`<!doctype html><head>${base}</head><script>var a = "<html><head>";</script>`), `a document with neither html nor head got the base inside a script: ${scriptOnly}`)
+  const lateHead = core.withBase('<html><body><p>x</p></body></html>')
+  check(lateHead.includes(`<html><head>${base}</head><body>`), 'a headless document did not get a head before the body')
+}
+
+// pin classification uses the viewed version's inventory
+{
+  const doc = {
+    screens: [
+      { id: 'list', states: ['default', 'empty'] },
+      { id: 'detail', states: ['default'] },
+    ],
+  }
+  const pin = (version: number, screen: string, state: string, key = 'btn') => ({ version, screen, state, pin: key, x: 1, y: 1 })
+  const present = () => new Set(['btn'])
+  const none = () => null
+  same(core.classifyPin(pin(1, 'gone', 'default'), 2, 2, doc, none), 'orphaned', 'older pin on a screen removed from the inventory')
+  same(core.classifyPin(pin(1, 'gone', 'default'), 2, 2, doc, present), 'orphaned', 'a removed screen is orphaned even if keys are offered')
+  same(core.classifyPin(pin(1, 'list', 'loading'), 2, 2, doc, present), 'orphaned', 'older pin on a state removed from the screen')
+  same(core.classifyPin(pin(1, 'list', 'empty'), 2, 2, doc, present), 'reanchored', 'older pin, screen, state and key all present')
+  same(core.classifyPin(pin(1, 'list', 'empty', 'gone'), 2, 2, doc, present), 'orphaned', 'older pin whose key is gone from its rendered screen')
+  same(core.classifyPin(pin(1, 'detail', 'default'), 2, 2, doc, none), 'unknown', 'older pin on a listed screen that is not rendered is neither orphaned nor drawn')
+  same(core.classifyPin(pin(2, 'gone', 'default'), 2, 2, doc, none), 'draw', 'a pin of the viewed version always draws')
+  same(core.classifyPin(pin(3, 'list', 'default'), 2, 3, doc, present), 'hidden', 'a newer pin is hidden')
 }
 
 // the review UI is gated on the open mock-review step for the viewed latest version
@@ -185,5 +223,5 @@ if (failures.length) {
   console.error(`harness-check failed:\n${failures.map((f) => `  - ${f}`).join('\n')}`)
   process.exitCode = 1
 } else {
-  console.log('harness-check passed: pin ids, placement, unvisited screens, gaps, hash parsing, srcdoc base and page placeholders.')
+  console.log('harness-check passed: pin ids, placement, unvisited screens, gaps, hash parsing, srcdoc base, pin classification and page placeholders.')
 }
