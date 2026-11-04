@@ -472,9 +472,21 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
   }
 
   var noteShown = null
+  var noteUi = null
+  var NOTE_CLOSED_REASON = 'This review is no longer open for comments. Your text is kept so you can copy it.'
+
+  function syncNoteGate() {
+    if (!noteUi) return
+    var open = canReview()
+    noteUi.send.disabled = !open || noteUi.busy
+    if (!open) noteUi.err.textContent = NOTE_CLOSED_REASON
+    else if (noteUi.err.textContent === NOTE_CLOSED_REASON) noteUi.err.textContent = ''
+  }
+
   function renderNote() {
     var layer = $('layer-pop')
-    if (S.note && S.note === noteShown && layer.querySelector('.pop.note-pop')) return
+    if (S.note && S.note === noteShown && layer.querySelector('.pop.note-pop')) { syncNoteGate(); return }
+    noteUi = null
     layer.querySelectorAll('.pop.note-pop').forEach(function (n) { n.parentNode.removeChild(n) })
     noteShown = S.note
     if (!S.note) return
@@ -485,22 +497,26 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
     var err = el('span', { class: 'err' })
     var send = el('button', { type: 'button', class: 'primary', text: 'Send' })
     var cancel = el('button', { type: 'button', text: 'Cancel', onclick: function () { S.note = null; renderNote() } })
+    var ui = { send: send, err: err, busy: false }
     send.addEventListener('click', function () {
+      if (!canReview()) { syncNoteGate(); return }
       var text = area.value.trim()
       if (!text) { err.textContent = 'Write a comment first.'; return }
+      ui.busy = true
       send.disabled = true
       cancel.disabled = true
       err.textContent = ''
       postEvent('comment', { block_id: note.blockId, text: text }, {}).then(function (result) {
+        ui.busy = false
         if (result === 'ok') {
           S.note = null
           renderNote()
           setNotice('Comment sent.', false)
           pollNow()
         } else {
-          send.disabled = false
           cancel.disabled = false
           err.textContent = 'Could not send. Try again.'
+          syncNoteGate()
         }
       })
     })
@@ -510,6 +526,8 @@ select { background: var(--surface); border: 1px solid var(--border); border-rad
       el('div', { class: 'row' }, [err, cancel, send]),
     ])
     layer.appendChild(pop)
+    noteUi = ui
+    syncNoteGate()
     area.focus()
   }
 
