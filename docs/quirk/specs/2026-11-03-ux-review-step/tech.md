@@ -57,7 +57,7 @@ python3 companion.py mock SESSION MOCK_HTML --version N --screens SCREENS_JSON [
 
 - Prints `{"version": N, "mock_url": "/_quirk/mock/N"}` and exits 0. Works whether or not the server is running.
 - Exit 2 with `{"error", "field"?}` when: `MOCK_HTML` is unreadable, not UTF-8, or larger than 5 MiB; `SCREENS_JSON` or `CHANGED_JSON` fails the schema below; `N` is not `1` for the first registration, or not equal to the latest version or latest + 1 afterwards.
-- Copies the HTML to `state/mocks/v<N>.html` (so later edits to the agent's file never change a version under review) and records the version in `state/mocks.json`, both with `atomic_write`. Re-registering the latest version replaces it. Without `--changed`, `changed` is empty (Show changes outlines nothing).
+- Copies the HTML to a new file `state/mocks/v<N>-<token>.html` (so later edits to the agent's file never change a version under review), then records the version in `state/mocks.json` with `atomic_write`; the metadata's `file` field names the HTML readers serve. Re-registering the latest version writes a fresh file and switches `mocks.json` to it atomically, then removes the old file, so readers see either the old pair or the new pair. Without `--changed`, `changed` is empty (Show changes outlines nothing).
 - The snapshot gains `"mocks": {"latest": <int|null>, "versions": [<int>, ...]}`.
 
 ### `mock-export` subcommand
@@ -135,7 +135,7 @@ A **gap** is an element with `component: null` while `ui_layer` is true.
 
 `SCHEMA:` changed file (`--changed`): `{"changed": [pin-key, ...]}` (at most 500).
 
-`SCHEMA:` `state/mocks.json`: `{"versions": {"<N>": {"file": "mocks/v<N>.html", "screens": <screens>, "changed": [pin-key], "registered_at": <iso8601>}}}`.
+`SCHEMA:` `state/mocks.json`: `{"versions": {"<N>": {"file": "mocks/v<N>-<token>.html", "screens": <screens>, "changed": [pin-key], "registered_at": <iso8601>}}}`.
 
 `SCHEMA:` boot JSON: `{"mode": "app"|"offline", "version": int, "latest": int, "versions": [int], "token"?: str, "screens": <screens>, "changed": [pin-key], "mock_html": str}`.
 

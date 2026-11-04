@@ -496,7 +496,7 @@ def test_mock_registry_round_trip_and_snapshot(st):
     one = st.get_mock(1)
     assert one["html"] == "<html>one</html>" and one["screens"] == screens and one["changed"] == []
     assert st.get_mock(2)["changed"] == ["cta"] and one["registered_at"]
-    assert (st._dir / "mocks" / "v1.html").read_text() == "<html>one</html>"
+    assert (st._dir / st._mock_versions()["1"]["file"]).read_text() == "<html>one</html>"
 
     st.register_mock(2, "<html>two b</html>", screens, [])
     assert st.get_mock(2)["html"] == "<html>two b</html>" and st.get_mock(2)["changed"] == []
@@ -512,3 +512,33 @@ def test_mock_registry_sequencing_changes_nothing_on_refusal(st, prior, version)
         st.register_mock(version, "<html>x</html>", {"ui_layer": True, "screens": []}, [])
     assert e.value.field == "version"
     assert rev(st) == before and st.mocks_index()["versions"] == prior
+
+
+def test_mock_re_registration_is_all_or_nothing_when_the_metadata_write_fails(st, monkeypatch):
+    from htmlkit import appstate
+
+    old_screens = {"ui_layer": True, "screens": [{"id": "a", "title": "A", "purpose": "p", "states": ["default"]}]}
+    new_screens = {"ui_layer": False, "screens": [{"id": "b", "title": "B", "purpose": "q", "states": ["default"]}]}
+    st.register_mock(1, "<html>old</html>", old_screens, ["cta"])
+    before = st.get_mock(1)
+    files_before = sorted(p.name for p in (st._dir / "mocks").iterdir())
+    real = appstate.atomic_write
+
+    def failing(path, data):
+        if Path(path).name == "mocks.json":
+            raise OSError("disk full")
+        return real(path, data)
+
+    monkeypatch.setattr(appstate, "atomic_write", failing)
+    with pytest.raises(OSError):
+        st.register_mock(1, "<html>new</html>", new_screens, [])
+    monkeypatch.setattr(appstate, "atomic_write", real)
+
+    assert st.get_mock(1) == before
+    assert before["html"] == "<html>old</html>" and before["screens"] == old_screens and before["changed"] == ["cta"]
+    assert sorted(p.name for p in (st._dir / "mocks").iterdir()) == files_before
+
+    st.register_mock(1, "<html>new</html>", new_screens, [])
+    after = st.get_mock(1)
+    assert after["html"] == "<html>new</html>" and after["screens"] == new_screens and after["changed"] == []
+    assert len(list((st._dir / "mocks").iterdir())) == 1
