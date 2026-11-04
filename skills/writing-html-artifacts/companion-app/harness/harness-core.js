@@ -47,6 +47,22 @@
     return present ? 'reanchored' : 'orphaned'
   }
 
+  /**
+   * Placement of a pin from the viewed version's own screen inventory. A pin of an older version whose
+   * screen or state the viewed version no longer lists is orphaned. When the screen and state exist,
+   * `keysFor(screen, state)` returns the data-pin keys rendered there (array or Set), or null when that
+   * screen is not rendered right now, which leaves the pin `unknown`: neither orphaned nor drawn.
+   */
+  function classifyPin(pin, viewed, latest, doc, keysFor) {
+    if (pin.version > viewed || pin.version > latest) return 'hidden'
+    if (pin.version === viewed) return 'draw'
+    var screen = screenList(doc).filter(function (s) { return s.id === pin.screen })[0]
+    if (!screen || !Array.isArray(screen.states) || screen.states.indexOf(pin.state) === -1) return 'orphaned'
+    var keys = keysFor(pin.screen, pin.state)
+    if (keys === null || keys === undefined) return 'unknown'
+    return placePin(pin, viewed, latest, keys)
+  }
+
   function screenList(doc) {
     if (Array.isArray(doc)) return doc
     return doc && Array.isArray(doc.screens) ? doc.screens : []
@@ -90,22 +106,70 @@
     return screens.length ? screens[0].id : null
   }
 
-  /** Inserts <base href="about:srcdoc"> as the first child of <head>, creating the head if the mock has none. */
+  var RAW_TEXT = { script: 1, style: 1, textarea: 1, title: 1, xmp: 1, iframe: 1, noembed: 1, noframes: 1, noscript: 1 }
+
+  /**
+   * Inserts <base href="about:srcdoc"> as the first child of the mock's real <head>. Comments, raw-text
+   * elements (script, style, ...) and quoted attribute values are skipped, so `<head>` text inside them is
+   * never mistaken for the head. With no head before the body, one is created right after <html>, else
+   * after the doctype, else at the start.
+   */
   function withBase(html) {
     var base = '<base href="about:srcdoc">'
-    var masked = html.replace(/<!--[\s\S]*?-->/g, function (c) { return new Array(c.length + 1).join(' ') })
-    var head = /<head(?=[\s>/])[^>]*>/i.exec(masked)
-    if (head) {
-      var at = head.index + head[0].length
-      return html.slice(0, at) + base + html.slice(at)
+    var len = html.length
+    var i = 0
+    var doctypeEnd = 0
+    var htmlEnd = -1
+    var sawTag = false
+    while (i < len) {
+      var lt = html.indexOf('<', i)
+      if (lt === -1) break
+      var next = html.charAt(lt + 1)
+      if (html.substr(lt, 4) === '<!--') {
+        var close = html.indexOf('-->', lt + 2)
+        i = close === -1 ? len : close + 3
+        continue
+      }
+      if (next === '!' || next === '?' || next === '/') {
+        var gt = html.indexOf('>', lt + 2)
+        if (next === '!' && !sawTag && gt !== -1 && /^<!doctype/i.test(html.substr(lt, 9))) doctypeEnd = gt + 1
+        i = gt === -1 ? len : gt + 1
+        continue
+      }
+      if (!/[a-zA-Z]/.test(next)) {
+        i = lt + 1
+        continue
+      }
+      var j = lt + 1
+      while (j < len && !/[\s/>]/.test(html.charAt(j))) j += 1
+      var name = html.slice(lt + 1, j).toLowerCase()
+      while (j < len && html.charAt(j) !== '>') {
+        if (html.charAt(j) === '=') {
+          j += 1
+          while (j < len && /\s/.test(html.charAt(j))) j += 1
+          var q = html.charAt(j)
+          if (q === '"' || q === "'") {
+            var endQuote = html.indexOf(q, j + 1)
+            j = endQuote === -1 ? len : endQuote + 1
+          }
+          continue
+        }
+        j += 1
+      }
+      var tagEnd = j < len ? j + 1 : len
+      sawTag = true
+      if (name === 'head') return html.slice(0, tagEnd) + base + html.slice(tagEnd)
+      if (name === 'body' || name === 'frameset') break
+      if (name === 'html' && htmlEnd === -1) htmlEnd = tagEnd
+      i = tagEnd
+      if (RAW_TEXT[name] === 1) {
+        var closer = new RegExp('</' + name + '(?=[\\s/>])', 'ig')
+        closer.lastIndex = tagEnd
+        var found = closer.exec(html)
+        i = found ? found.index : len
+      }
     }
-    var open = /<html(?=[\s>/])[^>]*>/i.exec(masked)
-    if (open) {
-      var end = open.index + open[0].length
-      return html.slice(0, end) + '<head>' + base + '</head>' + html.slice(end)
-    }
-    var doctype = /^\s*<!doctype[^>]*>/i.exec(masked)
-    var pos = doctype ? doctype[0].length : 0
+    var pos = htmlEnd !== -1 ? htmlEnd : doctypeEnd
     return html.slice(0, pos) + '<head>' + base + '</head>' + html.slice(pos)
   }
 
@@ -136,6 +200,7 @@
     parsePinId: parsePinId,
     formatPinId: formatPinId,
     placePin: placePin,
+    classifyPin: classifyPin,
     isKnownScreen: isKnownScreen,
     unvisitedScreens: unvisitedScreens,
     deriveGaps: deriveGaps,
