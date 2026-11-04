@@ -244,3 +244,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Priority**: P2
 - **Proposed owner**: the next SDD change (per-task dispatch landed in #61)
 
+## DEFER-30: Speed up the 20-minute local pytest suite
+- **Deferred**: 2026-11-03
+- **Session context**: zpyoung/bainstorm-ux-step SDD final gate
+- **Why deferred**: Out of scope for the UX review step branch; observed during its SDD run (7968 tests, 1203s on 2026-11-03). Evaluate pytest-xdist (-n auto) and reusing a Playwright BrowserContext per worker for the companion e2e.
+- **Estimated effort**: M
+- **Priority**: P3
+
