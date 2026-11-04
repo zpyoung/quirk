@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.4
+
+### Changes
+- Brainstorming UX review: click through full mocks before the design (#65)
+
 ## 2026.11.3.1
 
 ### Changes
