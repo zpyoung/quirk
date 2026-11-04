@@ -133,7 +133,18 @@ class App:
             assert rc == expect, (rc, out, err)
         return out
 
+    def register_mock(self, version: int) -> None:
+        html = self.root / f"mock-v{version}.html"
+        html.write_text("<!doctype html><html><head></head><body><div data-screen=\"home\"></div></body></html>", encoding="utf-8")
+        screens = self.root / "screens.json"
+        screens.write_text(json.dumps({"ui_layer": True, "screens": [
+            {"id": "home", "title": "Home", "purpose": "Entry screen", "states": ["default"]},
+        ]}), encoding="utf-8")
+        self.cli("mock", self.session, html, "--version", version, "--screens", screens)
+
     def step(self, spec: dict) -> dict:
+        if spec["kind"] == "mock-review" and spec["version"] not in self.snapshot()["mocks"]["versions"]:
+            self.register_mock(spec["version"])
         path = self.root / f"step-{uuid.uuid4().hex}.json"
         path.write_text(json.dumps(spec), encoding="utf-8")
         return self.cli("step", self.session, path)

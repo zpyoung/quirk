@@ -410,6 +410,7 @@ def test_snapshot_empty(st):
         "rev": 0, "mode": "app", "step": None, "step_state": "open", "status": None,
         "stages": [{"id": s, "state": "current" if s == "context" else "todo"} for s in STAGES],
         "decisions": [], "chat": [], "threads": [], "review_registered": False,
+        "mocks": {"latest": None, "versions": []},
     }
 
 
@@ -480,3 +481,34 @@ def test_multiprocess_appends_are_serialised(tmp_path):
     assert s.snapshot()["rev"] >= 100
     lines = (tmp_path / "state" / "app-events").read_text().splitlines()
     assert len(lines) == 100 and all(json.loads(ln) for ln in lines)
+
+
+def test_mock_registry_round_trip_and_snapshot(st):
+    screens = {"ui_layer": True, "screens": [{"id": "a", "title": "A", "purpose": "p", "states": ["default"]}]}
+    assert st.mocks_index() == {"latest": None, "versions": []}
+    assert st.get_mock(1) is None
+    before = rev(st)
+    st.register_mock(1, "<html>one</html>", screens, [])
+    assert rev(st) > before
+    st.register_mock(2, "<html>two</html>", screens, ["cta"])
+    assert st.mocks_index() == {"latest": 2, "versions": [1, 2]}
+    assert st.snapshot()["mocks"] == {"latest": 2, "versions": [1, 2]}
+    one = st.get_mock(1)
+    assert one["html"] == "<html>one</html>" and one["screens"] == screens and one["changed"] == []
+    assert st.get_mock(2)["changed"] == ["cta"] and one["registered_at"]
+    assert (st._dir / "mocks" / "v1.html").read_text() == "<html>one</html>"
+
+    st.register_mock(2, "<html>two b</html>", screens, [])
+    assert st.get_mock(2)["html"] == "<html>two b</html>" and st.get_mock(2)["changed"] == []
+    assert st.mocks_index()["versions"] == [1, 2]
+
+
+@pytest.mark.parametrize("prior, version", [([], 2), ([], 0), ([1], 3), ([1, 2], 1), ([1], True), ([], "1")])
+def test_mock_registry_sequencing_changes_nothing_on_refusal(st, prior, version):
+    for v in prior:
+        st.register_mock(v, "<html></html>", {"ui_layer": True, "screens": []}, [])
+    before = rev(st)
+    with pytest.raises(AppStateError) as e:
+        st.register_mock(version, "<html>x</html>", {"ui_layer": True, "screens": []}, [])
+    assert e.value.field == "version"
+    assert rev(st) == before and st.mocks_index()["versions"] == prior
