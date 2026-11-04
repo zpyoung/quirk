@@ -153,3 +153,9 @@ HTTP routes, all behind the Host and Origin check, with a session token required
 - `GET /_quirk/review` serves the registered review page; `POST /_quirk/review/export` accepts its exports (2 MiB cap).
 
 App state lives under `state/` (`steps/`, `current.json`, `decisions.json`, `app-events`, `drafts/`, `token`), so a restart restores it.
+
+## Run view
+
+An app-mode session can also carry a subagent-driven-development run, and the tab then switches from the brainstorm shell to the run view. The run subcommands are `run-start`, `report`, `ask`, `await` and `answer`; each needs an app-mode session and prints one JSON object. The working protocol is `skills/subagent-driven-development/live-view.md`, and the contract is in `docs/quirk/specs/2026-11-03-sdd-task-visualization/tech.md`.
+
+The run view's task drawer has an Open in Orca button: `POST /_quirk/run/open` (token required) switches to an Orca terminal in the task's listed worktree or creates one, through the Orca CLI (`ORCA_CLI_COMMAND`, else `orca`; `orca-ide` on Linux).

@@ -1,3 +1,5 @@
+import type { RunView } from './run/types'
+
 export const STAGES = ['context', 'gray-areas', 'questions', 'approaches', 'ux-review', 'design', 'spec', 'hand-off'] as const
 export type StageId = (typeof STAGES)[number]
 
@@ -170,6 +172,8 @@ export interface Snapshot {
   threads: Thread[]
   draft?: Draft | null
   review_registered: boolean
+  /** Present once SDD registered a run; the shell then serves the run view. */
+  run?: RunView | null
 }
 
 export interface Boot {

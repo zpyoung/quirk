@@ -26,7 +26,8 @@ from typing import Any, ContextManager, Iterable, Iterator
 from .fsutil import atomic_write
 
 STAGES = ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
-EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export")
+EVENT_TYPES = ("submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export",
+               "run-answer", "run-stop", "run-retry")
 
 _SENDERS = ("agent", "user", "system")
 _DECISION_STATUSES = ("confirmed", "assumed", "open")
@@ -93,6 +94,11 @@ class AppState:
     def lock(self) -> ContextManager[None]:
         """Exclusive inter-process lock on ``state/app.lock``; re-entrant within this instance."""
         return self._locked()
+
+    def bump_rev(self) -> int:
+        """Advance ``rev`` for a change made outside AppState's own files; returns the new rev."""
+        with self._locked():
+            return self._tick()
 
     # ---- raw file helpers (callers hold the lock) ----------------------------
 

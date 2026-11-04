@@ -61,3 +61,8 @@ def test_fast_track_is_never_a_companion_question() -> None:
     assert "chat" in body, "essential-coverage.md does not say a chat steer triggers the fast-track"
     assert '"assumed"' in body or "`assumed`" in body, \
         "essential-coverage.md does not say fast-tracked decisions are sent as status assumed"
+
+
+def test_sdd_hand_off_keeps_the_tab() -> None:
+    for name, body in (("SKILL.md", skill()), ("visual-companion.md", guide())):
+        assert "Starting SDD in this tab" in body, f"{name} lacks the SDD hand-off message"

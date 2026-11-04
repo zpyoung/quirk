@@ -153,6 +153,11 @@ ran when and on which commit:
 - `hold`, `rework`, `merge-as-is`, `supersede`, `stop`: task ID and one-line reason
 - `cap-bind`, `lock-wait`, `checkpoint-cap`: which ready task or window waited, and on what
 
+**Live view.** The live run view is on by default and the `--no-view` skill argument turns it off.
+When it is on, SDD starts it before the preflight card and follows [live-view.md](live-view.md): it
+reports each event-log line to the companion tab and routes questions through the tab first. The
+view only reports and relays. It never changes when a task dispatches, merges or retries.
+
 ### Step 2: Tech spec, only when warranted
 
 Apply the complexity-tier gate: author one if execution spans more than one session, crosses a
@@ -829,7 +834,8 @@ that skill says so explicitly.
 **Three-tier human gate:** use `orca ask` when `ORCA_PANE_KEY` or `ORCA_WORKSPACE_ID` is set.
 Outside an Orca session, use synchronous `AskUserQuestion`; also fall back to it when `orca ask`
 returns `status: "unavailable"` or is not installed. Do not substitute worker-to-orchestrator
-messaging for a human decision.
+messaging for a human decision. When the live view is on, Tier 1 and Tier 2 questions go through
+the view first per [live-view.md](live-view.md), which decides when they also go to `orca ask`.
 
 - **Tier 1 (blocking, no `--timeout-ms`):** the consolidated preflight card, Step 10's five-round
   cap blocked handoff, or a twice-failed task with no safe default. On `declined`, stop cleanly;
@@ -958,6 +964,7 @@ they are listed because each one quietly rebuilds a barrier or skips a check:
 - **quirk:writing-specs** (`tech-spec.md`) — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — the in-context planning rubric run in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
+- **live-view.md** — the live run view protocol (reports, questions, tab actions)
 - **quirk:pi-dev** — `pi-watch` dispatch and failure signatures, for both the reviewer path and the pi implementer/fixer binding
 - **quirk:test-driven-development** — implementers follow TDD per task
 - **quirk:typed-artifacts** — genuine backlog only, never this run's defects

@@ -42,6 +42,7 @@ def test_constants():
     assert STAGES == ("context", "gray-areas", "questions", "approaches", "ux-review", "design", "spec", "hand-off")
     assert EVENT_TYPES == (
         "submit", "continue", "chat", "comment", "edit-request", "edit-decision", "review-export",
+        "run-answer", "run-stop", "run-retry",
     )
     assert issubclass(AppStateError, ValueError)
 

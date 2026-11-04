@@ -64,6 +64,11 @@ export function mermaidAssets(): LibAsset[] {
   return assets('mermaid')
 }
 
+/** The ELK layout bundle `q-flow` uses; it sets `window.quirkFlow.ELK`. */
+export function flowAssets(): LibAsset[] {
+  return assets('flow')
+}
+
 const loaded = new Map<string, Promise<void>>()
 
 function load(asset: LibAsset): Promise<void> {
