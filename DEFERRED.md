@@ -251,3 +251,19 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+## DEFER-31: full-code-review: UI lens that runs interface-design's Review job
+- **Deferred**: 2026-11-05
+- **Session context**: quirk:interface-design skill landed on branch zpyoung/interface-design; logic spec docs/quirk/specs/2026-11-05-interface-design/logic.md lists it under Deferred Ideas.
+- **Why deferred**: User chose to ship the skill first (scope decision during brainstorm).
+- **Estimated effort**: M
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-32: interface-design detector: Vue, Svelte and plain-HTML coverage, and a real TSX lexer
+- **Deferred**: 2026-11-05
+- **Session context**: Branch zpyoung/interface-design; the regex detector covers CSS/SCSS/JSX/TSX only and documents comment/template edge cases as known limits (review.md 'What the detector cannot see') after three review rounds kept finding lexing edge cases.
+- **Why deferred**: Out of scope per logic spec non-goals; user picked documented limits over writing a lexer.
+- **Estimated effort**: L
+- **Priority**: P4
+- **Proposed owner**: unassigned
+
