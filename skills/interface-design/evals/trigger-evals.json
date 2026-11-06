@@ -1,0 +1,101 @@
+{
+  "skill_name": "interface-design",
+  "queries": [
+    {
+      "query": "Build a settings page for our admin app",
+      "should_trigger": true
+    },
+    {
+      "query": "Improve our docs page layout",
+      "should_trigger": true
+    },
+    {
+      "query": "Review these React components for UI issues and accessibility problems",
+      "should_trigger": true
+    },
+    {
+      "query": "Clean up the UI slop on this branch",
+      "should_trigger": true
+    },
+    {
+      "query": "Make the dashboard table quieter, it feels too loud",
+      "should_trigger": true
+    },
+    {
+      "query": "Build a page where on-call engineers can triage failed deploys",
+      "should_trigger": true
+    },
+    {
+      "query": "Polish the billing settings screen before we ship it",
+      "should_trigger": true
+    },
+    {
+      "query": "Critique this admin screen and tell me what to fix first",
+      "should_trigger": true
+    },
+    {
+      "query": "Our SwiftUI settings screen looks off, can you refine it to feel native?",
+      "should_trigger": true
+    },
+    {
+      "query": "Audit our data table component for focus, labels and tiny text",
+      "should_trigger": true
+    },
+    {
+      "query": "The empty states in our app are confusing, rewrite the copy and layout",
+      "should_trigger": true
+    },
+    {
+      "query": "Redo the type hierarchy on our analytics dashboard",
+      "should_trigger": true
+    },
+    {
+      "query": "Make an HTML report of these results",
+      "should_trigger": false
+    },
+    {
+      "query": "Scaffold a mini app for tracking reading",
+      "should_trigger": false
+    },
+    {
+      "query": "Design our product's landing page",
+      "should_trigger": false
+    },
+    {
+      "query": "Build a marketing site for our launch with a hero and pricing section",
+      "should_trigger": false
+    },
+    {
+      "query": "Write an HTML explainer page about how our caching works",
+      "should_trigger": false
+    },
+    {
+      "query": "Create a local React app for managing my bookmarks",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a 30 second video announcing our new release",
+      "should_trigger": false
+    },
+    {
+      "query": "Fix the failing unit test in the payments service",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a Python script that parses these CSV files",
+      "should_trigger": false
+    },
+    {
+      "query": "Add a database migration for the new orders column",
+      "should_trigger": false
+    },
+    {
+      "query": "Review this merge request for correctness bugs in the backend",
+      "should_trigger": false
+    },
+    {
+      "query": "Draft a Slack message announcing the deploy",
+      "should_trigger": false
+    }
+  ]
+}
