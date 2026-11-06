@@ -58,9 +58,8 @@ Existing anchors the implementers touch or imitate:
 - `skills/making-videos/evals/trigger-evals.json` — eval file shape (below).
 - `tests/test_building_mini_apps_set_style.py:5-18` — the pattern for importing a skill script in
   tests (`importlib.util.spec_from_file_location` on `skills/<name>/scripts/<file>.py`).
-- `skills/brainstorming/references/ux-review.md:52` — the mock "Look and content" rule. The edit
-  here is decided by the open `mock-style-conflict` question; see
-  [Pending decision](#pending-decision).
+- `skills/brainstorming/references/ux-review.md:52` — the mock "Look and content" rule. The edit is
+  specified in [ux-review.md rule](#ux-reviewmd-rule).
 - Upstream inputs per reference file: see [Source map](#source-map).
 
 ## Contracts & interfaces
@@ -280,11 +279,13 @@ COMMAND: `python3 -m pytest -q tests/test_interface_design_skill.py tests/test_i
   malformed table gives exit 2.
 - README count tests listed under Code references must stay green.
 
-## Pending decision
+## ux-review.md rule
 
-`mock-style-conflict` (asked of the user): whether brainstorming mocks adopt system.md's structure,
-nothing, or its full direction. Until answered, no task edits `ux-review.md`, and SC-11 is not
-built. The logic spec is amended once answered.
+Back-link: [SC-11](logic.md#boundaries). Add one bullet to the "Look and content" list in
+`skills/brainstorming/references/ux-review.md` (after the neutral-house-style bullet, line 52): when
+the brainstorm targets the user's own product UI and `.quirk/design/system.md` exists, the mock keeps
+the neutral palette and system fonts but adopts that file's density, spacing base and type scale.
+Change nothing else in the file.
 
 ## Non-goals
 

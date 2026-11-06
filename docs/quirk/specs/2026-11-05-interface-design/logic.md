@@ -6,6 +6,7 @@
 
 **Amendments:**
 - 2026-11-05: quirk has no README skill table and using-quirk has no skill catalog. The listing becomes README.md's skill-count bullet (30 → 31) plus one clause in its prose list; using-quirk is unchanged.
+- 2026-11-05: brainstorming's UX review requires mocks in a neutral house style (`ux-review.md`, research-backed). The user chose: mocks keep the neutral palette and system fonts but adopt system.md's density, spacing base and type scale. SC-11 and the mock decision below are amended to match.
 
 quirk gains a skill, **quirk:interface-design**, that helps an agent build, review and refine product UI in the user's own codebase so the result looks decided rather than defaulted. It merges three upstream sources into one skill written in quirk's voice:
 
@@ -68,7 +69,7 @@ The agent doesn't announce modes or which file it loaded. That carries over upst
 - **Memory at `.quirk/design/system.md`, with no upstream migration.** It sits with quirk's other state. A returning upstream user starts a new system.
 - **Vercel's list is bundled as a snapshot.** That keeps reviews offline and repeatable, and no remote text runs as instructions. The drift script shows when the list has moved.
 - **The native references are included.** impeccable's iOS and Android files are short and load only for native targets.
-- **Brainstorming's mocks borrow the project's look.** When a brainstorm targets the user's product UI, the UX-review mock reads system.md, or runs Build's direction step when there's none. The mock then reads as the product, not quirk's theme.
+- **Brainstorming's mocks borrow the project's structure, not its palette.** When a brainstorm targets the user's product UI and `.quirk/design/system.md` exists, the UX-review mock keeps the neutral house palette and system fonts but adopts system.md's density, spacing base and type scale. Branded mocks pull review toward style and away from flow, which is why the palette stays neutral.
 
 ## Behavior and scenarios
 
@@ -150,7 +151,7 @@ The agent doesn't announce modes or which file it loaded. That carries over upst
 11. **SC-11 Brainstorming mock for product UI**
     - **Given** a brainstorm that adds a screen to the user's app, with a saved system.md
     - **When** the UX-review mock is built
-    - **Then** ✓ the mock uses the saved direction (palette, type, density) instead of quirk's house theme
+    - **Then** ✓ the mock uses system.md's density, spacing base and type scale; ✗ it keeps the neutral house palette and system fonts, never the saved palette or typefaces
 
 ### Maintenance
 
@@ -167,7 +168,7 @@ The agent doesn't announce modes or which file it loaded. That carries over upst
 
 In scope:
 - the skill, its references, the detector, the drift script, NOTICE.md and trigger evals
-- the one-line rule in brainstorming's `ux-review.md`
+- one rule added to the "Look and content" list in brainstorming's `ux-review.md`
 - README.md's skill-count bullet and one clause in its prose list
 
 Out of scope:
@@ -202,7 +203,7 @@ Out of scope:
 **Triggering and overlap**
 - Trigger: product UI in the user's codebase; quirk's own pages stay with writing-html-artifacts
 - writing-html-artifacts' design-reference.md: left separate
-- UX mocks: brainstorming mocks use system.md or Build's direction step
+- UX mocks: neutral palette and system fonts, with system.md's density, spacing base and type scale (amended)
 - full-code-review lens: deferred
 
 **Scope of surfaces**
