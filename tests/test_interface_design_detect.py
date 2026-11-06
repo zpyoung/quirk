@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import List, Sequence, Tuple
@@ -248,6 +249,11 @@ class TestCli:
 
 INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     # (rule, suffix, text, expected lines)
+    ("focus-outline-removed", ".scss", "a { color: red; // leave neutral\n  outline: none;\n}\n", [2]),
+    ("focus-outline-removed", ".scss", "a { // note\n  outline: none;\n}\n", [2]),
+    ("focus-outline-removed", ".scss", 'a { content: "x; // y";\n  outline: none;\n}\n', [2]),
+    ("focus-outline-removed", ".scss", "a { color: red; // outline: none;\n}\n", []),
+    ("motion-transition-all", ".scss", "a { color: red; // fade\n  transition: all 200ms;\n}\n", [2]),
     ("focus-outline-removed", ".tsx", '<button className="outline-none px-2">A</button>\n', [1]),
     ("focus-outline-removed", ".tsx", '<button className="outline-none focus-visible:ring-2">A</button>\n', []),
     ("focus-outline-removed", ".tsx", '<button className="focus:outline-none focus-visible:ring-2">A</button>\n', []),
@@ -277,6 +283,11 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("a11y-img-no-alt", ".tsx", 'const documentation = "<img src=x>";\n', []),
     ("a11y-img-no-alt", ".tsx", "const documentation = '<img src=x>';\n", []),
     ("a11y-img-no-alt", ".tsx", "<p>Don't <img src=\"a.png\" /> it's</p>\n", [1]),
+    ("a11y-img-no-alt", ".tsx", 'const documentation = `<img src="avatar.png">`;\n', []),
+    ("a11y-img-no-alt", ".tsx", 'const documentation = `\n  <img src="a.png">\n`;\n<img src="b.png" />\n', [4]),
+    ("a11y-img-no-alt", ".tsx", 'const x = `before ${<img src="a.png" />} after`;\n', [1]),
+    ("a11y-img-no-alt", ".tsx", 'const x = `a ${cond ? `<img src="a.png">` : ""} b`;\n', []),
+    ("a11y-img-no-alt", ".tsx", 'const x = `unterminated\n<img src="a.png" />\n', [2]),
     ("a11y-click-on-div", ".tsx", 'const html = "<div onClick={go}>";\n', []),
     ("a11y-positive-tabindex", ".tsx", "<div tabindex='1'></div>\n", [1]),
     ("a11y-positive-tabindex", ".tsx", "<div tabIndex={10}></div>\n", [1]),
@@ -334,6 +345,9 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("content-three-dots", ".tsx", "const [s, setS] = useState<string>(...initial);\n", []),
     ("content-three-dots", ".tsx", 'const x = <p>{busy ? "Saving" : "Done"} Loading...</p>;\n', [1]),
     ("content-three-dots", ".tsx", "const x = <p>{a}{b}\n  Loading...</p>;\n", [2]),
+    ("content-three-dots", ".tsx", "const x = <div><section><p>\n  Loading...</p></section></div>;\n", [2]),
+    ("content-three-dots", ".tsx", "const x = <div>{ok && <p>\n  Loading...</p>}\n</div>;\n", [2]),
+    ("content-three-dots", ".tsx", "const x = <>\n  <p>a</p>\n  <p>\n    Loading...</p>\n</>;\n", [4]),
     ("content-three-dots", ".tsx", "const x = <p><b>{n}</b> Loading...</p>;\n", [1]),
     ("content-three-dots", ".tsx", "const x = <><b>a</b> Wait...</>;\n", [1]),
     ("content-three-dots", ".tsx", "const out = <p>Hi</p>;\nconst next = [...items];\n", []),
@@ -416,6 +430,14 @@ class TestRobustness:
         result = _run([str(target)])
         assert result.returncode in (0, 1)
         assert "Traceback" not in result.stderr
+
+    @pytest.mark.parametrize("depth", [4000, 20000])
+    def test_deeply_nested_jsx_scans_in_linear_time(self, depth: int) -> None:
+        text = "const x = " + "<div>" * depth + "wait..." + "</div>" * depth + ";\n"
+        start = time.perf_counter()
+        results = detect.scan_text(text)
+        assert time.perf_counter() - start < 5
+        assert [(r.id, line) for r, line, _ in results] == [("content-three-dots", 1)]
 
     def test_shallow_nested_template_still_finds_class_strings(self) -> None:
         text = 'const c = cn(`a ${cond ? `b ${"outline-none"}` : ""}`);\n'
