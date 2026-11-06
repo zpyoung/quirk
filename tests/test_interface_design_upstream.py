@@ -117,6 +117,15 @@ class TestParseNotice:
         with pytest.raises(upstream.NoticeError):
             upstream.parse_notice(text)
 
+    @pytest.mark.parametrize("separator", ["|---|", "|---|---|", "|---|---|---|---|---|---|"])
+    def test_separator_column_count_must_match_header(self, separator: str) -> None:
+        text = (
+            "| source | repo | path | license | pinned |\n" + separator + "\n"
+            "| a | https://x | p | MIT | " + "a" * 40 + " |\n"
+        )
+        with pytest.raises(upstream.NoticeError):
+            upstream.parse_notice(text)
+
     def test_shipped_notice_parses_with_full_shas(self) -> None:
         sources = upstream.parse_notice(REAL_NOTICE.read_text())
         assert [s.name for s in sources] == [
@@ -217,6 +226,24 @@ class TestCli:
         )
         assert result.returncode == 2
         assert result.stderr.strip()
+
+    @pytest.mark.parametrize("separator", ["|---|", "|---|---|---|---|---|---|"])
+    def test_wrong_separator_column_count_exits_two_before_git(
+        self, tmp_path: Path, separator: str
+    ) -> None:
+        notice = tmp_path / "NOTICE.md"
+        notice.write_text(
+            "| source | repo | path | license | pinned |\n" + separator + "\n"
+            "| a | file:///nonexistent | p | MIT | " + "a" * 40 + " |\n"
+        )
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--notice", str(notice)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2
+        assert "separator" in result.stderr
+        assert result.stdout == ""
 
     def test_missing_notice_exits_two(self, tmp_path: Path) -> None:
         result = subprocess.run(
