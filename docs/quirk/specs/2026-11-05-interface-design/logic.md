@@ -2,9 +2,10 @@
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystems, >3 files)
 
-**Amendments:** none.
+**Amendments:**
+- 2026-11-05: quirk has no README skill table and using-quirk has no skill catalog. The listing becomes README.md's skill-count bullet (30 → 31) plus one clause in its prose list; using-quirk is unchanged.
 
 quirk gains a skill, **quirk:interface-design**, that helps an agent build, review and refine product UI in the user's own codebase so the result looks decided rather than defaulted. It merges three upstream sources into one skill written in quirk's voice:
 
@@ -167,7 +168,7 @@ The agent doesn't announce modes or which file it loaded. That carries over upst
 In scope:
 - the skill, its references, the detector, the drift script, NOTICE.md and trigger evals
 - the one-line rule in brainstorming's `ux-review.md`
-- one row each in the README skill table and using-quirk's catalog
+- README.md's skill-count bullet and one clause in its prose list
 
 Out of scope:
 - marketing, landing and portfolio pages (impeccable's Persuade and Experience modes)
