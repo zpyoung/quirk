@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "kind": "spec-review",
+  "stage": "spec",
+  "title": "spec-review step",
+  "format": "interactive"
+}

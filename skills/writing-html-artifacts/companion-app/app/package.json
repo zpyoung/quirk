@@ -1,0 +1,41 @@
+{
+  "name": "quirk-companion-shell",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open /shell.html",
+    "typecheck": "tsc --noEmit",
+    "tokens": "python3 scripts/gen_tokens.py > src/quirk-tokens.css",
+    "tokens-check": "tsx scripts/check-tokens.ts",
+    "steps-check": "tsx scripts/check-steps.ts",
+    "drafts-check": "tsx scripts/check-drafts.ts",
+    "chat-check": "tsx scripts/check-chat.ts",
+    "run-check": "tsx scripts/check-run.ts && tsx scripts/check-run-graph.ts && tsx scripts/check-run-panels.ts && tsx scripts/check-run-pages.ts && tsx scripts/check-run-fixtures.ts",
+    "template-check": "tsx scripts/check-template.ts",
+    "harness-check": "tsx scripts/check-harness.ts",
+    "check": "pnpm run typecheck && pnpm run tokens-check && pnpm run steps-check && pnpm run drafts-check && pnpm run chat-check && pnpm run run-check && pnpm run template-check && pnpm run harness-check",
+    "e2e": "tsx e2e/run.ts",
+    "e2e:run": "tsx e2e/run-view.ts",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.6.2",
+    "@astryxdesign/theme-neutral": "0.6.2",
+    "markdown-it": "15.0.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "26.6.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
+    "playwright-core": "1.64.0",
+    "tsx": "4.20.5",
+    "typescript": "6.0.2",
+    "vite": "8.3.0",
+    "vite-plugin-singlefile": "2.3.3"
+  }
+}

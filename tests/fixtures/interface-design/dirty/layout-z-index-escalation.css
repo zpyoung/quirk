@@ -1,0 +1,19 @@
+.modal-backdrop {
+  position: fixed;
+  z-index: 9999; /* expect */
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 999; /* expect */
+}
+
+.dropdown {
+  position: absolute;
+  z-index: 50;
+}
+
+.sticky-header {
+  position: sticky;
+  z-index: 10;
+}

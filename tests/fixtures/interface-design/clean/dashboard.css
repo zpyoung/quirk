@@ -1,0 +1,141 @@
+:root {
+  --surface-1: #ffffff;
+  --surface-2: #f6f7f9;
+  --border: #e3e6ea;
+  --text: #15181d;
+  --text-muted: #5b6470;
+  --accent: #0f766e;
+  --danger: #b42318;
+  --radius: 6px;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+  padding: 16px 8px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.nav-link:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nav-link:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.deploy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.deploy-table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.deploy-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.deploy-table tr:hover td {
+  background: var(--surface-2);
+}
+
+.status-failed {
+  border-left: 3px solid var(--danger);
+  padding-left: 12px;
+}
+
+.status-pill {
+  border-radius: 999px;
+  border-left: 1px solid var(--border);
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: 0 2px 8px rgba(15, 24, 29, 0.12);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.popover {
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.18);
+  z-index: 50;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2400ms;
+  }
+
+  .toast,
+  .nav-link {
+    transition: none;
+  }
+}
+
+.release-notes {
+  max-width: 68ch;
+  text-align: left;
+  hyphens: auto;
+}

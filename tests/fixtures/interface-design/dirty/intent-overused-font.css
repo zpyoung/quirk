@@ -1,0 +1,15 @@
+body {
+  font-family: Inter, sans-serif; /* expect */
+}
+
+.legacy {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+.report {
+  font-family: Arial, Helvetica, sans-serif; /* expect */
+}
+
+.display {
+  font-family: "Source Serif 4", Georgia, serif;
+}

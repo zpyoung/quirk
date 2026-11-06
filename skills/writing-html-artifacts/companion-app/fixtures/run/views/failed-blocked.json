@@ -1,0 +1,204 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [],
+  "counts": {
+    "failed": 1,
+    "missing": 0,
+    "needs-you": 0,
+    "passed": 2,
+    "queued": 2,
+    "retrying": 0,
+    "running": 1,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T7"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T7"
+    },
+    {
+      "from": "T6",
+      "kind": "dep",
+      "to": "T9"
+    },
+    {
+      "from": "T7",
+      "kind": "dep",
+      "to": "T10"
+    }
+  ],
+  "last_update_at": 1793664605.0,
+  "now": 1793664630.0,
+  "questions": [],
+  "rounds": [],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664020.0,
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T7",
+        "T9",
+        "T10"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T7",
+        "T9",
+        "T10"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T9"
+      ],
+      "files": 1,
+      "id": "T6",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "running",
+      "title": "Snapshot run key",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "attempt": 2,
+      "attempts": [
+        {
+          "end": 1793664505.0,
+          "n": 1,
+          "outcome": "failed",
+          "start": 1793664400.0
+        },
+        {
+          "end": 1793664605.0,
+          "n": 2,
+          "outcome": "failed",
+          "start": 1793664510.0
+        }
+      ],
+      "blocked_by": [],
+      "contract_md": "Accept `run-stop` and `run-retry` on `/_quirk/app/event`.",
+      "downstream": [
+        "T10"
+      ],
+      "ended_at": 1793664605.0,
+      "files": 2,
+      "id": "T7",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "reason": "wrote appstate.py (out of scope)",
+      "started_at": 1793664400.0,
+      "status": "failed",
+      "title": "Run events route",
+      "worktree": "/work/recharge/.worktrees/T7"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 0,
+      "id": "T9",
+      "labels": [],
+      "level": 3,
+      "mismatch": null,
+      "ready": false,
+      "status": "queued",
+      "title": "Shell run view"
+    },
+    {
+      "attempt": 0,
+      "attempts": [],
+      "blocked_by": [
+        "T7"
+      ],
+      "downstream": [],
+      "files": 0,
+      "id": "T10",
+      "labels": [
+        "blocked by T7"
+      ],
+      "level": 3,
+      "mismatch": null,
+      "ready": false,
+      "status": "queued",
+      "title": "Summary page"
+    }
+  ]
+}

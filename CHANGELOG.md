@@ -5,6 +5,26 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.6
+
+### Changes
+- feat: add interface-design skill (#66)
+
+## 2026.11.4
+
+### Changes
+- Brainstorming UX review: click through full mocks before the design (#65)
+
+## 2026.11.3.1
+
+### Changes
+- Live SDD task view: follow and steer an SDD run from the companion tab (#64)
+
+## 2026.11.3
+
+### Changes
+- Companion-first brainstorming: run a whole brainstorm in the browser (#62)
+
 ## 2026.11.2.2
 
 ### Changes

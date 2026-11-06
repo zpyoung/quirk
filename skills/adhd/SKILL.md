@@ -142,7 +142,7 @@ Example:
 
 ## Integration with Brainstorming
 
-The `brainstorming` skill offers ADHD to the user during checklist step 4, "Resolve gray areas" (see its Gray Areas → Step 0). The offer is an `AskUserQuestion` whose recommended answer is the cheap no-ADHD path, so this remains opt-in, not a gate.
+The `brainstorming` skill offers ADHD to the user during checklist step 4, "Resolve gray areas" (see its Gray Areas → Step 0). The offer is a question on the companion's first question batch (an `AskUserQuestion` or orca ask only in the terminal flow) whose recommended answer is the cheap no-ADHD path, so this remains opt-in, not a gate.
 
 That delegation is **discovery-framed**: the decision point handed to ADHD is *"what latent ambiguous decisions are in this request?"*, so the options you return are candidate **gray areas**, not solutions. Frames that hunt blind spots — failure pre-mortem, stakeholder rotation, expert blind spots — fit this best.
 

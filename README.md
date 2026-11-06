@@ -6,7 +6,7 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **30 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, driving web, Electron, and native macOS apps like a user with a no-false-pass guard script, making local MP4 videos from a brief with a checked render and a review page, and more.
+- **31 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, driving web, Electron, and native macOS apps like a user with a no-false-pass guard script, making local MP4 videos from a brief with a checked render and a review page, designing, reviewing and refining product UI so it looks decided, and more.
 - **building-mini-apps** scaffolds a small local React app from proven interaction patterns (list-peek, action-palette, view-switcher and others) through a local shadcn registry.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
@@ -74,9 +74,10 @@ The page and decision exports are not committed. See
 ## HTML artifacts and the visual companion
 
 The `writing-html-artifacts` skill builds offline, single-file HTML pages from templates and
-vendored libraries, and runs the brainstorming visual companion: a small local Python server
-that shows option screens in a browser and sends clicks back to the agent. Brainstorming and
-exploring-ideas both use it. Markdown stays the canonical source for specs; the companion needs
+vendored libraries, and runs the visual companion: a small local Python server
+that shows screens in a browser and sends the user's input back to the agent. Brainstorming runs
+inside the companion's app mode (batched questions, chat, comments and spec review in one tab);
+exploring-ideas uses its screen mode, and subagent-driven-development runs show live in the same tab. Markdown stays the canonical source for specs; the companion needs
 Python 3 only.
 
 ## Development

@@ -1,0 +1,55 @@
+{
+  "v": 1,
+  "kind": "questions",
+  "stage": "questions",
+  "title": "questions step",
+  "intro_md": "Three quick ones.",
+  "questions": [
+    {
+      "id": "scope",
+      "type": "single",
+      "prompt": "How wide?",
+      "header": "Scope",
+      "recommended": "narrow",
+      "options": [
+        {
+          "id": "wide",
+          "label": "Option wide",
+          "description": "Everything"
+        },
+        {
+          "id": "narrow",
+          "label": "Option narrow",
+          "description": "Just the core",
+          "preview_html": "<p>core</p>"
+        }
+      ],
+      "content_html": "<p>Context for the scope question.</p>"
+    },
+    {
+      "id": "extras",
+      "type": "multi",
+      "prompt": "Which extras?",
+      "options": [
+        {
+          "id": "docs",
+          "label": "Option docs"
+        },
+        {
+          "id": "tests",
+          "label": "Option tests"
+        },
+        {
+          "id": "ci",
+          "label": "Option ci"
+        }
+      ],
+      "diagram": "graph TD; A-->B"
+    },
+    {
+      "id": "notes",
+      "type": "text",
+      "prompt": "Anything else we should know?"
+    }
+  ]
+}

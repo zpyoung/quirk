@@ -153,6 +153,11 @@ ran when and on which commit:
 - `hold`, `rework`, `merge-as-is`, `supersede`, `stop`: task ID and one-line reason
 - `cap-bind`, `lock-wait`, `checkpoint-cap`: which ready task or window waited, and on what
 
+**Live view.** The live run view is on by default and the `--no-view` skill argument turns it off.
+When it is on, SDD starts it before the preflight card and follows [live-view.md](live-view.md): it
+reports each event-log line to the companion tab and routes questions through the tab first. The
+view only reports and relays. It never changes when a task dispatches, merges or retries.
+
 ### Step 2: Tech spec, only when warranted
 
 Apply the complexity-tier gate: author one if execution spans more than one session, crosses a
@@ -186,6 +191,12 @@ mechanically anyway — through the scope audit, the build/test gate, or the fin
 costs more than it returns. Skipping it is a decision already made, not an oversight for you to
 correct — and "this plan is unusually high-stakes" is not new information, because every run
 believes that.
+
+When the logic spec has a Screens section, the signed-off mock it links is the UX source of truth
+wherever the text is silent. Each UI task cites the mock screens it implements and carries the
+Screens acceptance items for them in its acceptance. The implementation is rebuilt in the project's
+stack and never lifts mock code. A deliberate departure from the mock needs a one-line note in the
+tech spec or the PR, or the acceptance item fails.
 
 Before scheduling, audit every declared `dependencies` edge for semantic motivation: keep it as a
 **dependency edge** only when the target genuinely needs the source's output. An edge motivated
@@ -675,7 +686,7 @@ Each invocation gets:
 | `lens` | this reviewer's lens, from the three above |
 | `id_prefix` | a distinct prefix per lens — `C` correctness, `S` spec, `X` security. Each gate numbers from 1 on its own, so without this all three lenses return an `F1` and Step 9's merge cannot tell them apart |
 | `depth` | `standard` at checkpoints, `deep` in the final loop, passed **explicitly** |
-| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim**, plus per-lens closure verification when applicable |
+| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** (including the logic spec's Screens acceptance items when it has a Screens section), plus per-lens closure verification when applicable |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
 | `author_family` | the recorded `AUTHOR_FAMILY` |
 | `model` | the recorded `REVIEWER_ALIAS` — only when preflight verified it reachable. Omitted when the record holds `task-fallback` |
@@ -823,7 +834,8 @@ that skill says so explicitly.
 **Three-tier human gate:** use `orca ask` when `ORCA_PANE_KEY` or `ORCA_WORKSPACE_ID` is set.
 Outside an Orca session, use synchronous `AskUserQuestion`; also fall back to it when `orca ask`
 returns `status: "unavailable"` or is not installed. Do not substitute worker-to-orchestrator
-messaging for a human decision.
+messaging for a human decision. When the live view is on, Tier 1 and Tier 2 questions go through
+the view first per [live-view.md](live-view.md), which decides when they also go to `orca ask`.
 
 - **Tier 1 (blocking, no `--timeout-ms`):** the consolidated preflight card, Step 10's five-round
   cap blocked handoff, or a twice-failed task with no safe default. On `declined`, stop cleanly;
@@ -952,6 +964,7 @@ they are listed because each one quietly rebuilds a barrier or skips a check:
 - **quirk:writing-specs** (`tech-spec.md`) — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — the in-context planning rubric run in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
+- **live-view.md** — the live run view protocol (reports, questions, tab actions)
 - **quirk:pi-dev** — `pi-watch` dispatch and failure signatures, for both the reviewer path and the pi implementer/fixer binding
 - **quirk:test-driven-development** — implementers follow TDD per task
 - **quirk:typed-artifacts** — genuine backlog only, never this run's defects
