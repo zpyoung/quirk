@@ -105,16 +105,30 @@ class GitError(Exception):
 
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_LINE_COMMENT = re.compile(r"(?m)^[ \t]*//[^\n]*")
+_LINE_COMMENT = re.compile(r"(?m)(?:^|(?<=[;{}]))[ \t]*//[^\n]*")
 
 
 def _blank(match: "re.Match[str]") -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
+def _blank_line_comment(match: "re.Match[str]") -> str:
+    """Blank a `//` comment, unless the `//` sits inside a string opened earlier on its line."""
+    text = match.string
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    before = text[line_start : match.start()]
+    for quote in _QUOTES:
+        if len(re.findall(rf"(?<!\\){quote}", before)) % 2:
+            return match.group(0)
+    return _blank(match)
+
+
 def strip_comments(text: str) -> str:
-    """Blank out comments in place so offsets and line numbers stay valid."""
-    return _LINE_COMMENT.sub(_blank, _BLOCK_COMMENT.sub(_blank, text))
+    """Blank out comments in place so offsets and line numbers stay valid.
+
+    A `//` comment runs to the end of its line, whether it starts the line or follows a `;`, `{` or `}`.
+    """
+    return _LINE_COMMENT.sub(_blank_line_comment, _BLOCK_COMMENT.sub(_blank, text))
 
 
 _QUOTES = "\"'`"
@@ -420,6 +434,62 @@ def _plain_string_spans(text: str) -> List[Tuple[int, int]]:
             pos = i + 1
 
 
+def _template_text_spans(text: str, plain: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Sorted (start, end) of the literal text of template literals, `${...}` bodies excluded.
+
+    Bodies are searched for further templates, down to MAX_TEMPLATE_DEPTH. At an unterminated
+    template the search of that range stops, so a stray backtick leaves the text after it
+    scannable and no later backtick re-walks the same tail.
+    """
+    spans: List[Tuple[int, int]] = []
+    plain_starts = [span[0] for span in plain]
+
+    def in_plain(offset: int) -> bool:
+        k = bisect.bisect_right(plain_starts, offset) - 1
+        return k >= 0 and offset < plain[k][1]
+
+    pending = [(0, len(text), 0)]
+    while pending:
+        lo, hi, depth = pending.pop()
+        pos = lo
+        while pos < hi:
+            i = text.find("`", pos, hi)
+            if i < 0:
+                break
+            if in_plain(i):
+                pos = i + 1
+                continue
+            parts: List[Tuple[int, int]] = []
+            bodies: List[Tuple[int, int]] = []
+            seg = j = i + 1
+            closed = False
+            while j < hi:
+                ch = text[j]
+                if ch == "\\":
+                    j += 2
+                elif ch == "`":
+                    parts.append((seg, j))
+                    closed = True
+                    break
+                elif text.startswith("${", j):
+                    end = _match_close(text, j + 1, "{", "}")
+                    if end is None or end > hi:
+                        break
+                    parts.append((seg, j))
+                    bodies.append((j + 2, end - 1))
+                    seg = j = end
+                else:
+                    j += 1
+            if not closed:
+                break
+            spans.extend(parts)
+            if depth < MAX_TEMPLATE_DEPTH:
+                pending.extend((b_lo, b_hi, depth + 1) for b_lo, b_hi in bodies)
+            pos = j + 1
+    spans.sort()
+    return spans
+
+
 class Analysis:
     """Everything the rules need about one file, computed once."""
 
@@ -435,9 +505,15 @@ class Analysis:
         spans = _plain_string_spans(self.text)
         starts = [span[0] for span in spans]
 
+        template_text = _template_text_spans(self.text, spans)
+        template_starts = [span[0] for span in template_text]
+
         def in_string(offset: int) -> bool:
             k = bisect.bisect_right(starts, offset) - 1
-            return k >= 0 and offset < spans[k][1]
+            if k >= 0 and offset < spans[k][1]:
+                return True
+            k = bisect.bisect_right(template_starts, offset) - 1
+            return k >= 0 and offset < template_text[k][1]
 
         self.tags = [
             tag
@@ -764,23 +840,31 @@ _FRAGMENT_OPEN = re.compile(r"<>")
 _CLOSING_TAG = re.compile(r"</[\w.:-]*\s*>")
 
 
-def _jsx_text_dots(a: Analysis, start: int, by_start: Dict[int, Tag]) -> Optional[List[int]]:
-    """Lines of `...` in the text children of the JSX element whose content begins at `start`.
+_DotWalk = Optional[Tuple[int, List[int]]]
+
+
+def _jsx_text_dots(
+    a: Analysis, start: int, by_start: Dict[int, Tag], memo: Dict[int, _DotWalk]
+) -> _DotWalk:
+    """(end offset, lines of `...`) for the text children of the JSX element whose content begins at `start`.
 
     Expressions in `{}` are skipped and nested elements followed; the walk ends at the matching
     close tag. None when the element never closes, so JS after it is not mistaken for text.
+    A nested element already in `memo` is jumped over instead of walked again, so nesting costs
+    one pass in total; callers walk innermost elements first. The result is stored in `memo`.
     """
     text = a.text
     stop = min(len(text), start + SCAN_SPAN_LIMIT)
     found: List[int] = []
     depth = 1
     pos = start
+    result: _DotWalk = None
     while pos < stop:
         ch = text[pos]
         if ch == "{":
             end = _match_close(text, pos, "{", "}")
             if end is None:
-                return None
+                break
             pos = end
         elif ch == "<":
             child = by_start.get(pos)
@@ -788,23 +872,39 @@ def _jsx_text_dots(a: Analysis, start: int, by_start: Dict[int, Tag]) -> Optiona
             if child is not None:
                 pos = child.end
                 if not (child.self_closing or child.name in _VOID_ELEMENTS):
-                    depth += 1
+                    if pos in memo:
+                        inner = memo[pos]
+                        if inner is None:
+                            break
+                        pos = inner[0]
+                        found.extend(inner[1])
+                    else:
+                        depth += 1
             elif closing is not None:
                 pos = closing.end()
                 depth -= 1
                 if depth == 0:
-                    return found
+                    result = (pos, found)
+                    break
             elif text.startswith("<>", pos):
                 pos += 2
-                depth += 1
+                if pos in memo:
+                    inner = memo[pos]
+                    if inner is None:
+                        break
+                    pos = inner[0]
+                    found.extend(inner[1])
+                else:
+                    depth += 1
             else:
-                return None
+                break
         elif text.startswith("...", pos):
             found.append(a.line(pos))
             pos += 3
         else:
             pos += 1
-    return None
+    memo[start] = result
+    return result
 
 
 def _check_three_dots(text: str) -> List[Hit]:
@@ -819,8 +919,11 @@ def _check_three_dots(text: str) -> List[Hit]:
         if tag.jsx_like and not tag.self_closing and tag.name not in _VOID_ELEMENTS
     ]
     roots += [m.end() for m in _FRAGMENT_OPEN.finditer(a.text)]
-    for root in roots:
-        lines.update(_jsx_text_dots(a, root, by_start) or [])
+    memo: Dict[int, _DotWalk] = {}
+    for root in sorted(set(roots), reverse=True):
+        walk = _jsx_text_dots(a, root, by_start, memo)
+        if walk is not None:
+            lines.update(walk[1])
     return [(line, _DOTS_MESSAGE) for line in sorted(lines)]
 
 
