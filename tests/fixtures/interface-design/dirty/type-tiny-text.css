@@ -1,0 +1,20 @@
+.badge {
+  font-size: 10px; /* expect */
+  font-weight: 600;
+}
+
+.caption {
+  font-size: 0.6875rem; /* expect */
+}
+
+.footnote {
+  font-size: 0.7em; /* expect */
+}
+
+.meta {
+  font-size: 12px;
+}
+
+.small {
+  font-size: 0.75rem;
+}
