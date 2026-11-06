@@ -1,0 +1,21 @@
+.drawer {
+  position: fixed;
+  transition: width 200ms ease; /* expect */
+}
+
+.panel {
+  transition: opacity 150ms ease, height 200ms ease; /* expect */
+}
+
+.menu {
+  transition-property: margin-left, opacity; /* expect */
+  transition-duration: 200ms;
+}
+
+.link {
+  transition: border-left-color 150ms ease, color 150ms ease;
+}
+
+.toast {
+  transition: transform 200ms ease, opacity 200ms ease;
+}
