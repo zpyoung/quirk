@@ -18,7 +18,7 @@ Use this for a new screen or a major redesign of product UI. The goal is an inte
 
 ## Start from what exists
 
-Read `.quirk/design/system.md` if it exists. If it does, the direction is already decided. Skip the exploration and the direction block, apply the saved spacing base, depth strategy, palette and patterns, and go to [Build](#build). The format is in [system-md.md](system-md.md).
+Read `.quirk/design/system.md` if it exists. If it does, the direction is already decided. Skip the exploration and the direction block and apply the saved spacing base, depth strategy, palette and patterns. Still state who the person is and what verb the screen serves, in a line or two, because those belong to this screen. The feel comes from system.md. Then go to [Build](#build). The format is in [system-md.md](system-md.md).
 
 Then look at the project: its tokens, its component library, its styling convention. Reuse before you write.
 

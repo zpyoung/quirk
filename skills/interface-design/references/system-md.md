@@ -22,7 +22,7 @@ One Markdown file with six sections, in this order. Record values, not adjective
 - `## Color`: the tokens. Foreground in four levels (primary, secondary, tertiary, muted), borders, surfaces and the second neutral, the one accent, and the state colors. Use values or token names, not "a calm blue".
 - `## Patterns`: the reusable components with their measurements, one line each. The form is `Button primary — 36px h · 12px 16px pad · 6px radius · 14px/500`.
 
-Keep the file short enough to read in one pass. If a section has nothing yet, leave it out of the file rather than filling it with guesses.
+Keep the file short enough to read in one pass. Always keep all six headings. A section with nothing decided yet says so in one line, such as `Not decided yet.`, rather than being omitted or filled with guesses.
 
 ## When to save
 
