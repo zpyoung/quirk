@@ -56,6 +56,10 @@ Exit 0 means no findings, 1 means findings, 2 means a usage or git error on stde
 
 The script reads only CSS, SCSS, JSX and TSX. For Vue, Svelte, plain HTML and native code, skip it and rely on the checklist. Say so in the closing note.
 
+### What the detector cannot see
+
+The detector matches text with regular expressions and does not parse JavaScript. A comment in an unusual position, a template literal, or a backtick inside JSX text can produce a false hit or hide a real one. Confirm every hit in context, and walk [checklist.md](checklist.md) for anything a regex cannot settle.
+
 ## Confirm every hit
 
 A hit is a candidate. Open the file at that line and read the code around it before you report it.

@@ -111,8 +111,8 @@ def _blank(match: "re.Match[str]") -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
-def _blank_scss_line_comments(text: str) -> str:
-    """Blank `//` comments that start a line or follow `;`, `{` or `}`; a `//` inside a quoted string is kept."""
+def _blank_line_comments(text: str, boundaries: str) -> str:
+    """Blank `//` comments that start a line or follow one of `boundaries`; a `//` inside a quoted string is kept."""
     spans: List[Tuple[int, int]] = []
     n = len(text)
     quote = ""
@@ -138,7 +138,7 @@ def _blank_scss_line_comments(text: str) -> str:
             spans.append((i, end))
             i = end
             continue
-        elif ch in ";{}":
+        elif ch in boundaries:
             boundary = True
         elif ch not in " \t":
             boundary = False
@@ -152,11 +152,12 @@ def _blank_scss_line_comments(text: str) -> str:
 def strip_comments(text: str, scss: bool = False) -> str:
     """Blank out comments in place so offsets and line numbers stay valid.
 
-    `/* */` comments go in every file type. `//` line comments exist only in SCSS, so they are
-    blanked only when `scss` is set; in JSX text `//` is visible content.
+    `/* */` comments go in every file type. A `//` comment is blanked only where it starts a line
+    or follows `;` (and, in SCSS, `{` or `}`), so commented-out code goes while JSX text such as
+    `Home // Settings` stays visible.
     """
     text = _BLOCK_COMMENT.sub(_blank, text)
-    return _blank_scss_line_comments(text) if scss else text
+    return _blank_line_comments(text, ";{}" if scss else ";")
 
 
 _QUOTES = "\"'`"
@@ -462,7 +463,7 @@ def _plain_string_spans(text: str) -> List[Tuple[int, int]]:
             pos = i + 1
 
 
-_BACKTICK_CONTEXT = re.compile(r"(?:[=(,:?\[{&|!+;]|=>|\b(?:return|typeof|in|of|case))\Z")
+_BACKTICK_CONTEXT = re.compile(r"(?:[=(,:?\[{&|!+;]|=>|\b(?:return|throw|default|yield|await|typeof|in|of|case))\Z")
 
 
 def _opens_template(text: str, i: int) -> bool:
@@ -1128,7 +1129,7 @@ RULES: Sequence[Rule] = (
 def scan_text(text: str, scss: bool = False) -> List[Tuple[Rule, int, str]]:
     """Run every rule over one file's text; one result per rule and line, sorted by line then rule id.
 
-    `scss` enables `//` line comments, which only SCSS has.
+    `scss` also lets `//` comments follow `{` and `}`, as SCSS allows.
     """
     results: Dict[Tuple[str, int], Tuple[Rule, int, str]] = {}
     for rule in RULES:
