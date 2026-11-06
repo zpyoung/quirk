@@ -27,15 +27,15 @@ Ask only about a performance constraint you can't infer, such as a low-end targe
    Don't animate a static area because it exists.
 2. **Write a three-line plan before coding.** Continuity (what changes need explaining), feedback (which controls need acknowledging), budget (which effects cost something and how often they run). Skip the plan for a one-control change.
 3. **Pick the smallest change that makes cause and result clear.** Opacity, a short translate, a color change, a size change on an element the user just acted on. Reach for shared-element motion or view transitions only when continuity across states is the point. One idea per interaction; don't stack techniques.
-4. **Time it for product use.**
+4. **Time it for product use.** Product motion stays in 150-250 ms and conveys state only. Go outside that range only when the user explicitly asks.
 
    | Duration | Use |
    |---|---|
-   | 100-150 ms | press and hover feedback |
-   | 150-250 ms | state change, menu, popover, tab switch |
-   | up to 300 ms | overlay or panel that travels a long way |
+   | 150 ms | press and hover feedback, exits |
+   | 200 ms | state change, menu, popover, tab switch |
+   | 250 ms | overlay or panel that travels a long way |
 
-   Exit faster than enter. Use ease-out for arrivals, such as `cubic-bezier(0.16, 1, 0.3, 1)`. No bounce or elastic curves by reflex. Long feedback reads as latency. Stagger a list only when it appears as a list, and cap the total delay at about 200 ms.
+   Exit faster than enter, both inside the range. Use ease-out for arrivals, such as `cubic-bezier(0.16, 1, 0.3, 1)`. No bounce or elastic curves by reflex. Long feedback reads as latency. Stagger a list only when it appears as a list, and cap the total delay at about 200 ms.
 5. **Implement with the stack you have.** CSS transitions for state, keyframes for bounded sequences, the Web Animations API or the existing library for interruption and dynamic values. Don't add a dependency for an effect CSS can do.
 6. **Name properties.** Never `transition: all`. Don't animate `width`, `height`, `top`, `left` or margins; use transforms, FLIP or grid-row tricks. Keep blur, filter and shadow work in small regions. Set `will-change` only during a known animation.
 7. **Keep content visible by default.** If the script fails or the animation never starts, the UI must still show everything.
