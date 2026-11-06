@@ -24,7 +24,7 @@ from typing import List, Optional, Sequence
 
 HEADER = ("source", "repo", "path", "license", "pinned")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-SEPARATOR_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
+SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 
 
 class NoticeError(Exception):
@@ -48,6 +48,11 @@ def _cells(line: str) -> List[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
+def _is_separator(line: str) -> bool:
+    cells = _cells(line)
+    return len(cells) == len(HEADER) and all(SEPARATOR_CELL_RE.match(cell) for cell in cells)
+
+
 def parse_notice(text: str) -> List[Source]:
     """Return the rows of the sources table; raise NoticeError if it is missing or malformed."""
     lines = text.splitlines()
@@ -58,8 +63,10 @@ def parse_notice(text: str) -> List[Source]:
             break
     if start is None:
         raise NoticeError(f"no sources table with header: | {' | '.join(HEADER)} |")
-    if start + 1 >= len(lines) or not SEPARATOR_RE.match(lines[start + 1].strip()):
-        raise NoticeError("sources table header is not followed by a separator row")
+    if start + 1 >= len(lines) or not _is_separator(lines[start + 1]):
+        raise NoticeError(
+            f"sources table header must be followed by a separator row with {len(HEADER)} columns"
+        )
 
     sources: List[Source] = []
     for line in lines[start + 2:]:
