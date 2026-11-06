@@ -15,6 +15,7 @@ import argparse
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ from typing import List, Optional, Sequence
 HEADER = ("source", "repo", "path", "license", "pinned")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+GIT_TIMEOUT_SECONDS = 120.0
 
 
 class NoticeError(Exception):
@@ -87,17 +89,36 @@ def parse_notice(text: str) -> List[Source]:
 
 
 def _git(args: Sequence[str], cwd: Optional[Path] = None) -> str:
+    """Run git and return stdout; a failure or a run past GIT_TIMEOUT_SECONDS raises GitError."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=False
+        # own process group so a timeout can take down git's helper processes with it
+        proc = subprocess.Popen(
+            ["git", *args],
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
     except OSError as exc:
         raise GitError(f"cannot run git: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or f"exit {result.returncode}"
+    try:
+        stdout, stderr = proc.communicate(timeout=GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.wait()
+        raise GitError(
+            f"git {' '.join(args[:2])} timed out after {GIT_TIMEOUT_SECONDS:g}s"
+        ) from exc
+    if proc.returncode != 0:
+        detail = stderr.strip() or f"exit {proc.returncode}"
         raise GitError(f"git {' '.join(args[:2])} failed: {detail}")
-    return result.stdout
+    return stdout
 
 
 def remote_head(repo: str) -> str:

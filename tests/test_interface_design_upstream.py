@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import List
@@ -212,6 +213,33 @@ class TestDrift:
         code, out = self._run(tmp_path, [_row("gone", missing, "skill", "a" * 40)], capsys)
         assert code == 2
         assert out.err.strip()
+
+
+class TestGitTimeout:
+    def test_stalled_git_exits_two_instead_of_hanging(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text("#!/bin/sh\nsleep 30 &\nwait\n")
+        fake_git.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+        monkeypatch.setattr(upstream, "GIT_TIMEOUT_SECONDS", 0.5)
+
+        notice = tmp_path / "NOTICE.md"
+        notice.write_text(_notice([_row("slow", tmp_path / "repo", "skill", "a" * 40)]))
+        started = time.monotonic()
+        code = upstream.main(["--notice", str(notice)])
+        elapsed = time.monotonic() - started
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "slow:" in err and "timed out" in err
+        assert elapsed < 10
 
 
 class TestCli:
