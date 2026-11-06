@@ -84,7 +84,7 @@ class Rule(NamedTuple):
     id: str
     severity: str
     title: str
-    check: Callable[[str], List[Hit]]
+    check: Callable[[str, bool], List[Hit]]
     file_level: bool = False
 
 
@@ -105,30 +105,58 @@ class GitError(Exception):
 
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_LINE_COMMENT = re.compile(r"(?m)(?:^|(?<=[;{}]))[ \t]*//[^\n]*")
 
 
 def _blank(match: "re.Match[str]") -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
-def _blank_line_comment(match: "re.Match[str]") -> str:
-    """Blank a `//` comment, unless the `//` sits inside a string opened earlier on its line."""
-    text = match.string
-    line_start = text.rfind("\n", 0, match.start()) + 1
-    before = text[line_start : match.start()]
-    for quote in _QUOTES:
-        if len(re.findall(rf"(?<!\\){quote}", before)) % 2:
-            return match.group(0)
-    return _blank(match)
+def _blank_scss_line_comments(text: str) -> str:
+    """Blank `//` comments that start a line or follow `;`, `{` or `}`; a `//` inside a quoted string is kept."""
+    spans: List[Tuple[int, int]] = []
+    n = len(text)
+    quote = ""
+    boundary = True
+    i = 0
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote or ch == "\n":
+                quote = ""
+                boundary = ch == "\n"
+        elif ch == "\n":
+            boundary = True
+        elif ch in "\"'":
+            quote = ch
+            boundary = False
+        elif boundary and text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            spans.append((i, end))
+            i = end
+            continue
+        elif ch in ";{}":
+            boundary = True
+        elif ch not in " \t":
+            boundary = False
+        i += 1
+    chars = list(text)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars)
 
 
-def strip_comments(text: str) -> str:
+def strip_comments(text: str, scss: bool = False) -> str:
     """Blank out comments in place so offsets and line numbers stay valid.
 
-    A `//` comment runs to the end of its line, whether it starts the line or follows a `;`, `{` or `}`.
+    `/* */` comments go in every file type. `//` line comments exist only in SCSS, so they are
+    blanked only when `scss` is set; in JSX text `//` is visible content.
     """
-    return _LINE_COMMENT.sub(_blank_line_comment, _BLOCK_COMMENT.sub(_blank, text))
+    text = _BLOCK_COMMENT.sub(_blank, text)
+    return _blank_scss_line_comments(text) if scss else text
 
 
 _QUOTES = "\"'`"
@@ -434,6 +462,24 @@ def _plain_string_spans(text: str) -> List[Tuple[int, int]]:
             pos = i + 1
 
 
+_BACKTICK_CONTEXT = re.compile(r"(?:[=(,:?\[{&|!+;]|=>|\b(?:return|typeof|in|of|case))\Z")
+
+
+def _opens_template(text: str, i: int) -> bool:
+    """True when the backtick at text[i] sits in JavaScript position, not in JSX child text.
+
+    A tagged template (`css`...``) has its tag flush against the backtick.
+    """
+    k = i
+    while k > 0 and text[k - 1].isspace():
+        k -= 1
+    if k == 0:
+        return True
+    if k == i and (text[k - 1].isalnum() or text[k - 1] in "_$)]"):
+        return True
+    return _BACKTICK_CONTEXT.search(text, max(0, k - 16), k) is not None
+
+
 def _template_text_spans(text: str, plain: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     """Sorted (start, end) of the literal text of template literals, `${...}` bodies excluded.
 
@@ -456,7 +502,7 @@ def _template_text_spans(text: str, plain: List[Tuple[int, int]]) -> List[Tuple[
             i = text.find("`", pos, hi)
             if i < 0:
                 break
-            if in_plain(i):
+            if in_plain(i) or not _opens_template(text, i):
                 pos = i + 1
                 continue
             parts: List[Tuple[int, int]] = []
@@ -493,8 +539,8 @@ def _template_text_spans(text: str, plain: List[Tuple[int, int]]) -> List[Tuple[
 class Analysis:
     """Everything the rules need about one file, computed once."""
 
-    def __init__(self, raw: str) -> None:
-        self.text = strip_comments(raw)
+    def __init__(self, raw: str, scss: bool = False) -> None:
+        self.text = strip_comments(raw, scss)
         self._line_starts = [0] + [m.end() for m in re.finditer("\n", self.text)]
         self.blocks, self.decls = parse_css(self.text)
         items = class_strings(self.text)
@@ -533,8 +579,8 @@ class Analysis:
 
 
 @lru_cache(maxsize=8)
-def analyze(text: str) -> Analysis:
-    return Analysis(text)
+def analyze(text: str, scss: bool = False) -> Analysis:
+    return Analysis(text, scss)
 
 
 # ---------------------------------------------------------------------------
@@ -645,11 +691,11 @@ def _line_of_token(a: Analysis, tok: Token) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Rule checks. Each takes one file's text and returns (line, message) pairs.
+# Rule checks. Each takes one file's text and whether it is SCSS, and returns (line, message) pairs.
 
 
-def _check_focus_outline_removed(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_focus_outline_removed(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits: List[Hit] = []
     if not any(":focus-visible" in block.selector.lower() for block in a.blocks):
         for decl in a.decls:
@@ -664,8 +710,8 @@ def _check_focus_outline_removed(text: str) -> List[Hit]:
     return hits
 
 
-def _check_click_on_div(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_click_on_div(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for tag in a.tags:
         if tag.name in ("div", "span"):
@@ -678,13 +724,13 @@ def _check_click_on_div(text: str) -> List[Hit]:
 _ZOOM = re.compile(r"user-scalable\s*=\s*[\"']?no\b|maximum-scale\s*=\s*[\"']?1(?:\.0+)?(?![\d.])", re.I)
 
 
-def _check_zoom_disabled(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_zoom_disabled(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     return [(a.line(m.start()), "pinch zoom disabled: remove user-scalable=no and maximum-scale=1") for m in _ZOOM.finditer(a.text)]
 
 
-def _check_img_no_alt(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_img_no_alt(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     return [
         (a.line(tag.start), "<img> has no alt attribute: describe the image, or use alt=\"\" when it is decorative")
         for tag in a.tags
@@ -692,8 +738,8 @@ def _check_img_no_alt(text: str) -> List[Hit]:
     ]
 
 
-def _check_positive_tabindex(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_positive_tabindex(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for tag in a.tags:
         attr = tag.find("tabindex")
@@ -705,8 +751,8 @@ def _check_positive_tabindex(text: str) -> List[Hit]:
     return hits
 
 
-def _check_placeholder_as_label(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_placeholder_as_label(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for tag in a.tags:
         if tag.name not in ("input", "textarea"):
@@ -723,8 +769,8 @@ def _check_placeholder_as_label(text: str) -> List[Hit]:
 _ON_PASTE = re.compile(r"\bonPaste\s*=")
 
 
-def _check_paste_blocked(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_paste_blocked(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for match in _ON_PASTE.finditer(a.text):
         i = match.end()
@@ -738,8 +784,8 @@ def _check_paste_blocked(text: str) -> List[Hit]:
     return hits
 
 
-def _check_autofocus(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_autofocus(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for tag in a.tags:
         attr = tag.find("autofocus")
@@ -748,8 +794,8 @@ def _check_autofocus(text: str) -> List[Hit]:
     return hits
 
 
-def _check_transition_all(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_transition_all(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         if decl.prop not in ("transition", "transition-property"):
@@ -771,8 +817,8 @@ _LAYOUT_PROP = re.compile(
 _LAYOUT_MESSAGE = "animating a layout property reflows the page: animate transform or opacity instead"
 
 
-def _check_layout_property(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_layout_property(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         if decl.prop in ("transition", "transition-property", "animation", "animation-name") and _LAYOUT_PROP.search(decl.value):
@@ -787,8 +833,8 @@ def _check_layout_property(text: str) -> List[Hit]:
 _MOTION_START = re.compile(r"@(?:-\w+-)?keyframes\b|(?<![\w-])animation\s*:", re.I)
 
 
-def _check_no_reduced_motion(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_no_reduced_motion(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     match = _MOTION_START.search(a.text)
     if match and "prefers-reduced-motion" not in a.text.lower():
         return [(a.line(match.start()), "animation with no prefers-reduced-motion handling: add a reduce override")]
@@ -799,8 +845,8 @@ _FONT_SIZE = re.compile(r"(\d*\.?\d+)(px|rem|em)")
 _TEXT_PX = re.compile(r"text-\[(\d*\.?\d+)px\]")
 
 
-def _check_tiny_text(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_tiny_text(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         if decl.prop != "font-size":
@@ -819,8 +865,8 @@ def _check_tiny_text(text: str) -> List[Hit]:
     return hits
 
 
-def _check_justified(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_justified(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         if decl.prop == "text-align" and _first_word(decl.value) == "justify":
@@ -907,8 +953,8 @@ def _jsx_text_dots(
     return result
 
 
-def _check_three_dots(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_three_dots(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     lines: Set[int] = set()
     for match in _ELLIPSIS_STRING.finditer(a.text):
         lines.add(a.line(match.end() - 4))
@@ -930,8 +976,8 @@ def _check_three_dots(text: str) -> List[Hit]:
 _Z_ARBITRARY = re.compile(r"z-\[(\d+)\]")
 
 
-def _check_z_index(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_z_index(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         value = _clean_value(decl.value)
@@ -944,8 +990,8 @@ def _check_z_index(text: str) -> List[Hit]:
     return hits
 
 
-def _check_gradient_text(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_gradient_text(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for block in a.blocks:
         clips = [d for d in block.decls if d.prop in ("background-clip", "-webkit-background-clip") and _first_word(d.value) == "text"]
@@ -975,8 +1021,8 @@ def _shadow_values(a: Analysis) -> Iterable[Tuple[int, List[Shadow]]]:
             yield a.line(tok.offset), _shadow_layers(value)
 
 
-def _check_hard_offset_shadow(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_hard_offset_shadow(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     return [
         (line, "hard offset shadow: use a soft elevation shadow or a border")
         for line, layers in _shadow_values(a)
@@ -984,8 +1030,8 @@ def _check_hard_offset_shadow(text: str) -> List[Hit]:
     ]
 
 
-def _check_glow_shadow(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_glow_shadow(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     return [
         (line, "colored glow shadow: use a neutral elevation shadow")
         for line, layers in _shadow_values(a)
@@ -998,8 +1044,8 @@ _BORDER_L_SCALE = re.compile(r"border-l-([2-8])")
 _BORDER_L_ARBITRARY = re.compile(r"border-l-\[(\d+(?:\.\d+)?)px\]")
 
 
-def _check_side_stripe(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_side_stripe(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for block in a.blocks:
         if not any(d.prop == "border-radius" for d in block.decls):
@@ -1031,8 +1077,8 @@ def _first_family(value: str) -> str:
     return families[0].strip().strip("\"'").strip().lower() if families else ""
 
 
-def _check_overused_font(text: str) -> List[Hit]:
-    a = analyze(text)
+def _check_overused_font(text: str, scss: bool = False) -> List[Hit]:
+    a = analyze(text, scss)
     hits = []
     for decl in a.decls:
         if decl.prop == "font-family":
@@ -1079,13 +1125,20 @@ RULES: Sequence[Rule] = (
 # Scanning
 
 
-def scan_text(text: str) -> List[Tuple[Rule, int, str]]:
-    """Run every rule over one file's text; one result per rule and line, sorted by line then rule id."""
+def scan_text(text: str, scss: bool = False) -> List[Tuple[Rule, int, str]]:
+    """Run every rule over one file's text; one result per rule and line, sorted by line then rule id.
+
+    `scss` enables `//` line comments, which only SCSS has.
+    """
     results: Dict[Tuple[str, int], Tuple[Rule, int, str]] = {}
     for rule in RULES:
-        for line, message in rule.check(text):
+        for line, message in rule.check(text, scss):
             results.setdefault((rule.id, line), (rule, line, message))
     return sorted(results.values(), key=lambda item: (item[1], item[0].id))
+
+
+def _is_scss(path: Path) -> bool:
+    return path.suffix.lower() == ".scss"
 
 
 def _read(path: Path) -> str:
@@ -1094,7 +1147,8 @@ def _read(path: Path) -> str:
 
 def scan_file(path: Path) -> List[Tuple[str, int, str]]:
     """(rule id, line, message) triples for one file."""
-    return [(rule.id, line, message) for rule, line, message in scan_text(_read(Path(path)))]
+    path = Path(path)
+    return [(rule.id, line, message) for rule, line, message in scan_text(_read(path), _is_scss(path))]
 
 
 def _raise(error: OSError) -> None:
@@ -1204,7 +1258,7 @@ def run(paths: Sequence[str], changed_since: Optional[str]) -> Tuple[List[Findin
         verify_ref(changed_since)
     findings: List[Finding] = []
     for path in files:
-        results = scan_text(_read(path))
+        results = scan_text(_read(path), _is_scss(path))
         changed = changed_lines(path, changed_since) if changed_since is not None else None
         shown = display_path(path)
         for rule, line, message in results:
