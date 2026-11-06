@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -255,6 +256,8 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("focus-outline-removed", ".css", "a:focus { outline: none; }\na:focus-visible { outline: 2px solid red; }\n", []),
     ("focus-outline-removed", ".css", "a { outline: 0 }\n", [1]),
     ("focus-outline-removed", ".css", "a { outline: 2px solid red; }\n", []),
+    ("focus-outline-removed", ".css", 'a { outline: none; content: ":focus-visible"; }\n', [1]),
+    ("focus-outline-removed", ".css", "a { outline: none; &:focus-visible { outline: 2px solid red; } }\n", []),
     ("focus-outline-removed", ".css", "/* outline: none is banned */\na { color: red; }\n", []),
     ("focus-outline-removed", ".css", ".x { @apply outline-none; }\n", [1]),
     ("a11y-click-on-div", ".tsx", "<div\n  className='x'\n  onClick={() => go()}\n>t</div>\n", [3]),
@@ -271,6 +274,10 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("a11y-img-no-alt", ".tsx", '<img src="a.png" alt="" />\n', []),
     ("a11y-img-no-alt", ".tsx", '<img src="alt.png" className="alt" />\n', [1]),
     ("a11y-img-no-alt", ".tsx", '<imgx src="a.png" />\n', []),
+    ("a11y-img-no-alt", ".tsx", 'const documentation = "<img src=x>";\n', []),
+    ("a11y-img-no-alt", ".tsx", "const documentation = '<img src=x>';\n", []),
+    ("a11y-img-no-alt", ".tsx", "<p>Don't <img src=\"a.png\" /> it's</p>\n", [1]),
+    ("a11y-click-on-div", ".tsx", 'const html = "<div onClick={go}>";\n', []),
     ("a11y-positive-tabindex", ".tsx", "<div tabindex='1'></div>\n", [1]),
     ("a11y-positive-tabindex", ".tsx", "<div tabIndex={10}></div>\n", [1]),
     ("a11y-positive-tabindex", ".tsx", "<div tabIndex={0}></div>\n", []),
@@ -282,6 +289,9 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("forms-placeholder-as-label", ".tsx", '<select placeholder="Name"></select>\n', []),
     ("forms-paste-blocked", ".tsx", "<input onPaste={(e) => { e.preventDefault(); }} />\n", [1]),
     ("forms-paste-blocked", ".tsx", "<input onPaste={logPaste} />\n", []),
+    ("forms-paste-blocked", ".tsx", "<input onPaste={handlePaste} onClick={(e) => e.preventDefault()} />\n", []),
+    ("forms-paste-blocked", ".tsx", "<input onClick={(e) => e.preventDefault()} onPaste={logPaste} />\n", []),
+    ("forms-paste-blocked", ".tsx", "<input onPaste={(e) => {\n  e.preventDefault();\n}} />\n", [1]),
     ("a11y-autofocus", ".tsx", "<input autoFocus />\n", [1]),
     ("a11y-autofocus", ".tsx", "<input autoFocus={true} />\n", [1]),
     ("a11y-autofocus", ".tsx", "<input id='a' />\n", []),
@@ -322,6 +332,13 @@ INLINE_CASES: List[Tuple[str, str, str, List[int]]] = [
     ("content-three-dots", ".tsx", "const a = <p {...rest}>Saved</p>;\n", []),
     ("content-three-dots", ".tsx", "const a = \"Don't wait... it's fine\";\n", []),
     ("content-three-dots", ".tsx", "const [s, setS] = useState<string>(...initial);\n", []),
+    ("content-three-dots", ".tsx", 'const x = <p>{busy ? "Saving" : "Done"} Loading...</p>;\n', [1]),
+    ("content-three-dots", ".tsx", "const x = <p>{a}{b}\n  Loading...</p>;\n", [2]),
+    ("content-three-dots", ".tsx", "const x = <p><b>{n}</b> Loading...</p>;\n", [1]),
+    ("content-three-dots", ".tsx", "const x = <><b>a</b> Wait...</>;\n", [1]),
+    ("content-three-dots", ".tsx", "const out = <p>Hi</p>;\nconst next = [...items];\n", []),
+    ("content-three-dots", ".tsx", "const out = <p>{a}</p>;\nconst opts = [...rest];\nf(...args);\n", []),
+    ("content-three-dots", ".tsx", "const out = <p><b>Hi</b></p>;\nconst opts = [...rest];\n", []),
     ("content-three-dots", ".css", 'a::after { content: "More..."; }\n', [1]),
     ("layout-z-index-escalation", ".css", "a { z-index: 999; }\n", [1]),
     ("layout-z-index-escalation", ".css", "a { z-index: 998; }\n", []),
@@ -387,6 +404,46 @@ def test_inline_forms_and_near_misses(
 def test_every_rule_has_an_inline_case_that_fires() -> None:
     fired = {case[0] for case in INLINE_CASES if case[3]}
     assert fired == set(_rule_ids())
+
+
+class TestRobustness:
+    @pytest.mark.parametrize("depth", [100, 600, 5000])
+    def test_deeply_nested_templates_do_not_crash(self, depth: int, tmp_path: Path) -> None:
+        text = "const c = cn(" + "`x${" * depth + '"outline-none"' + "}`" * depth + ");\n"
+        assert detect.scan_text(text) is not None
+        target = tmp_path / "deep.tsx"
+        target.write_text(text, encoding="utf-8")
+        result = _run([str(target)])
+        assert result.returncode in (0, 1)
+        assert "Traceback" not in result.stderr
+
+    def test_shallow_nested_template_still_finds_class_strings(self) -> None:
+        text = 'const c = cn(`a ${cond ? `b ${"outline-none"}` : ""}`);\n'
+        assert [r.id for r, _, _ in detect.scan_text(text)] == ["focus-outline-removed"]
+
+    def test_unreadable_directory_exits_two_with_a_stderr_message(self, tmp_path: Path) -> None:
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        (locked / "a.css").write_text("a { text-align: justify; }\n", encoding="utf-8")
+        (tmp_path / "ok.css").write_text("a { color: red; }\n", encoding="utf-8")
+        locked.chmod(0)
+        try:
+            if os.access(locked, os.R_OK):
+                pytest.skip("directory permissions are not enforced for this user")
+            result = _run([str(tmp_path)])
+        finally:
+            locked.chmod(0o755)
+        assert result.returncode == 2
+        assert "locked" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_walk_error_is_raised_not_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def denied(*args: object, **kwargs: object) -> None:
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(detect.os, "scandir", denied)
+        with pytest.raises(OSError):
+            detect.collect_files([str(tmp_path)])
 
 
 class TestChangedSince:

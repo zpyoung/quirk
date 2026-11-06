@@ -117,74 +117,103 @@ def strip_comments(text: str) -> str:
     return _LINE_COMMENT.sub(_blank, _BLOCK_COMMENT.sub(_blank, text))
 
 
+_QUOTES = "\"'`"
+
+
+def _walk(text: str, i: int, brackets: Optional[Tuple[str, str]]) -> Optional[int]:
+    """Index just past the string at text[i] (brackets None) or the bracket pair opening at text[i].
+
+    Iterative with an explicit stack so nested `${}` templates cannot exhaust the interpreter
+    stack. None means unbalanced (bracket mode only); string mode then returns len(text).
+    """
+    n = len(text)
+    stop = n if brackets is None else min(n, i + SCAN_SPAN_LIMIT)
+    # frames: a one-char str is a string frame (its quote); a list is a code frame [open, close, depth]
+    stack: List[object] = [text[i]] if brackets is None else [[brackets[0], brackets[1], 0]]
+    j = i + 1 if brackets is None else i
+    while j < stop:
+        frame = stack[-1]
+        ch = text[j]
+        if isinstance(frame, str):
+            if ch == "\\":
+                j += 2
+            elif ch == frame:
+                stack.pop()
+                j += 1
+                if not stack:
+                    return j
+            elif frame == "`" and text.startswith("${", j):
+                stack.append(["{", "}", 1])
+                j += 2
+            elif ch == "\n" and frame != "`":
+                stack.pop()
+                if not stack:
+                    return j
+            else:
+                j += 1
+        else:
+            if ch in _QUOTES:
+                stack.append(ch)
+            elif ch == frame[0]:
+                frame[2] += 1
+            elif ch == frame[1]:
+                frame[2] -= 1
+                if frame[2] == 0:
+                    stack.pop()
+                    if not stack:
+                        return j + 1
+            j += 1
+    return n if brackets is None else None
+
+
 def _skip_string(text: str, i: int) -> int:
     """Index just past the string literal opening at text[i]."""
-    quote = text[i]
-    n = len(text)
-    j = i + 1
-    while j < n:
-        ch = text[j]
-        if ch == "\\":
-            j += 2
-        elif ch == quote:
-            return j + 1
-        elif quote == "`" and text.startswith("${", j):
-            end = _match_close(text, j + 1, "{", "}")
-            j = n if end is None else end
-        elif ch == "\n" and quote != "`":
-            return j
-        else:
-            j += 1
-    return n
+    end = _walk(text, i, None)
+    return len(text) if end is None else end
 
 
 def _match_close(text: str, i: int, open_ch: str, close_ch: str) -> Optional[int]:
     """Index just past the bracket matching text[i], skipping strings; None if unbalanced."""
-    depth = 0
-    j = i
-    stop = min(len(text), i + SCAN_SPAN_LIMIT)
-    while j < stop:
-        ch = text[j]
-        if ch in "\"'`":
-            j = _skip_string(text, j)
-            continue
-        if ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return j + 1
-        j += 1
-    return None
+    return _walk(text, i, (open_ch, close_ch))
+
+
+MAX_TEMPLATE_DEPTH = 32
 
 
 def _literals(text: str, start: int, end: int, out: List[ClassString]) -> None:
-    """Collect string literals in text[start:end]; template `${}` parts are blanked and scanned too."""
-    j = start
-    while j < end:
-        ch = text[j]
-        if ch not in "\"'`":
-            j += 1
-            continue
-        stop = _skip_string(text, j)
-        closed = stop - 1 > j and text[stop - 1] == ch
-        body_end = stop - 1 if closed else stop
-        body = list(text[j + 1 : body_end])
-        if ch == "`":
-            k = j + 1
-            while k < body_end:
-                if text.startswith("${", k):
-                    close = _match_close(text, k + 1, "{", "}")
-                    if close is None:
-                        break
-                    _literals(text, k + 2, close - 1, out)
-                    for m in range(k, min(close, body_end)):
-                        body[m - (j + 1)] = " "
-                    k = close
-                else:
-                    k += 2 if text[k] == "\\" else 1
-        out.append(ClassString(j + 1, "".join(body)))
-        j = stop
+    """Collect string literals in text[start:end]; template `${}` parts are blanked and scanned too.
+
+    Templates nested deeper than MAX_TEMPLATE_DEPTH are blanked but not scanned.
+    """
+    pending = [(start, end, 0)]
+    while pending:
+        lo, hi, depth = pending.pop()
+        j = lo
+        while j < hi:
+            ch = text[j]
+            if ch not in _QUOTES:
+                j += 1
+                continue
+            stop = _skip_string(text, j)
+            closed = stop - 1 > j and text[stop - 1] == ch
+            body_end = stop - 1 if closed else stop
+            body = list(text[j + 1 : body_end])
+            if ch == "`":
+                k = j + 1
+                while k < body_end:
+                    if text.startswith("${", k):
+                        close = _match_close(text, k + 1, "{", "}")
+                        if close is None:
+                            break
+                        if depth < MAX_TEMPLATE_DEPTH:
+                            pending.append((k + 2, close - 1, depth + 1))
+                        for m in range(k, min(close, body_end)):
+                            body[m - (j + 1)] = " "
+                        k = close
+                    else:
+                        k += 2 if text[k] == "\\" else 1
+            out.append(ClassString(j + 1, "".join(body)))
+            j = stop
 
 
 _CLASS_ATTR = re.compile(r"(?<![\w$.-])(?:className|class)\s*=\s*")
@@ -302,7 +331,6 @@ def parse_css(text: str) -> Tuple[List[Block], List[Decl]]:
 
 
 _TAG_OPEN = re.compile(r"<([A-Za-z][\w.:-]*)(?=[\s/>])")
-_TAG_CLOSE = re.compile(r"</[\w.:-]*\s*>|<>")
 _ATTR_NAME = re.compile(r"[^\s=/>{}\"'`]+")
 _BARE_VALUE = re.compile(r"[^\s>]+")
 
@@ -361,6 +389,37 @@ def _parse_tag(text: str, match: "re.Match[str]") -> Optional[Tag]:
     return None
 
 
+_STRING_CONTEXT = re.compile(r"(?:[=(,:?\[{&|!+;]|=>|\b(?:return|typeof|in|of|case))\s*\Z")
+_PLAIN_QUOTE = re.compile(r"[\"']")
+
+
+def _plain_string_spans(text: str) -> List[Tuple[int, int]]:
+    """(start, end) of single-line '...' and "..." literals written in code position.
+
+    A quote only opens a literal after an operator or bracket, so an apostrophe in JSX text
+    ("don't") never swallows the tags that follow it.
+    """
+    spans: List[Tuple[int, int]] = []
+    pos = 0
+    while True:
+        match = _PLAIN_QUOTE.search(text, pos)
+        if match is None:
+            return spans
+        i = match.start()
+        if not _STRING_CONTEXT.search(text, max(0, i - 16), i):
+            pos = i + 1
+            continue
+        quote = text[i]
+        j = i + 1
+        while j < len(text) and text[j] != quote and text[j] != "\n":
+            j += 2 if text[j] == "\\" else 1
+        if j < len(text) and text[j] == quote:
+            spans.append((i, j + 1))
+            pos = j + 1
+        else:
+            pos = i + 1
+
+
 class Analysis:
     """Everything the rules need about one file, computed once."""
 
@@ -373,9 +432,18 @@ class Analysis:
             if decl.prop == "@apply":
                 items.append(ClassString(decl.value_offset, decl.value))
         self.classes: List[Tuple[ClassString, List[Token]]] = [(item, tokenize(item)) for item in items]
+        spans = _plain_string_spans(self.text)
+        starts = [span[0] for span in spans]
+
+        def in_string(offset: int) -> bool:
+            k = bisect.bisect_right(starts, offset) - 1
+            return k >= 0 and offset < spans[k][1]
+
         self.tags = [
             tag
-            for tag in (_parse_tag(self.text, m) for m in _TAG_OPEN.finditer(self.text))
+            for tag in (
+                _parse_tag(self.text, m) for m in _TAG_OPEN.finditer(self.text) if not in_string(m.start())
+            )
             if tag is not None
         ]
 
@@ -507,7 +575,7 @@ def _line_of_token(a: Analysis, tok: Token) -> int:
 def _check_focus_outline_removed(text: str) -> List[Hit]:
     a = analyze(text)
     hits: List[Hit] = []
-    if ":focus-visible" not in a.text.lower():
+    if not any(":focus-visible" in block.selector.lower() for block in a.blocks):
         for decl in a.decls:
             if decl.prop == "outline" and _first_word(decl.value) in ("none", "0", "0px"):
                 hits.append((a.line(decl.offset), "outline removed with no :focus-visible rule in this file: add a visible focus style"))
@@ -582,10 +650,15 @@ _ON_PASTE = re.compile(r"\bonPaste\s*=")
 def _check_paste_blocked(text: str) -> List[Hit]:
     a = analyze(text)
     hits = []
-    for number, line in enumerate(a.text.split("\n"), start=1):
-        match = _ON_PASTE.search(line)
-        if match and "preventDefault" in line[match.end() :]:
-            hits.append((number, "onPaste handler calls preventDefault: let people paste"))
+    for match in _ON_PASTE.finditer(a.text):
+        i = match.end()
+        while i < len(a.text) and a.text[i].isspace():
+            i += 1
+        if i >= len(a.text) or a.text[i] not in "{\"'`":
+            continue
+        end = _match_close(a.text, i, "{", "}") if a.text[i] == "{" else _skip_string(a.text, i)
+        if end is not None and "preventDefault" in a.text[i:end]:
+            hits.append((a.line(match.start()), "onPaste handler calls preventDefault: let people paste"))
     return hits
 
 
@@ -683,8 +756,55 @@ def _check_justified(text: str) -> List[Hit]:
 
 
 _ELLIPSIS_STRING = re.compile(r"""(?<![\w$])(?P<q>["'`])(?:\\.|(?!(?P=q))[^\\\n])*?\.\.\.(?P=q)""")
-_BOUNDARY = re.compile(r"[<{]")
 _DOTS_MESSAGE = "three dots in user-facing text: use the ellipsis character …"
+_VOID_ELEMENTS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+)
+_FRAGMENT_OPEN = re.compile(r"<>")
+_CLOSING_TAG = re.compile(r"</[\w.:-]*\s*>")
+
+
+def _jsx_text_dots(a: Analysis, start: int, by_start: Dict[int, Tag]) -> Optional[List[int]]:
+    """Lines of `...` in the text children of the JSX element whose content begins at `start`.
+
+    Expressions in `{}` are skipped and nested elements followed; the walk ends at the matching
+    close tag. None when the element never closes, so JS after it is not mistaken for text.
+    """
+    text = a.text
+    stop = min(len(text), start + SCAN_SPAN_LIMIT)
+    found: List[int] = []
+    depth = 1
+    pos = start
+    while pos < stop:
+        ch = text[pos]
+        if ch == "{":
+            end = _match_close(text, pos, "{", "}")
+            if end is None:
+                return None
+            pos = end
+        elif ch == "<":
+            child = by_start.get(pos)
+            closing = _CLOSING_TAG.match(text, pos)
+            if child is not None:
+                pos = child.end
+                if not (child.self_closing or child.name in _VOID_ELEMENTS):
+                    depth += 1
+            elif closing is not None:
+                pos = closing.end()
+                depth -= 1
+                if depth == 0:
+                    return found
+            elif text.startswith("<>", pos):
+                pos += 2
+                depth += 1
+            else:
+                return None
+        elif text.startswith("...", pos):
+            found.append(a.line(pos))
+            pos += 3
+        else:
+            pos += 1
+    return None
 
 
 def _check_three_dots(text: str) -> List[Hit]:
@@ -692,15 +812,15 @@ def _check_three_dots(text: str) -> List[Hit]:
     lines: Set[int] = set()
     for match in _ELLIPSIS_STRING.finditer(a.text):
         lines.add(a.line(match.end() - 4))
-    starts = [m.end() for m in _TAG_CLOSE.finditer(a.text)]
-    starts += [tag.end for tag in a.tags if tag.jsx_like]
-    for start in starts:
-        boundary = _BOUNDARY.search(a.text, start)
-        end = boundary.start() if boundary else len(a.text)
-        pos = a.text.find("...", start, end)
-        while pos != -1:
-            lines.add(a.line(pos))
-            pos = a.text.find("...", pos + 3, end)
+    by_start = {tag.start: tag for tag in a.tags}
+    roots = [
+        tag.end
+        for tag in a.tags
+        if tag.jsx_like and not tag.self_closing and tag.name not in _VOID_ELEMENTS
+    ]
+    roots += [m.end() for m in _FRAGMENT_OPEN.finditer(a.text)]
+    for root in roots:
+        lines.update(_jsx_text_dots(a, root, by_start) or [])
     return [(line, _DOTS_MESSAGE) for line in sorted(lines)]
 
 
@@ -874,8 +994,12 @@ def scan_file(path: Path) -> List[Tuple[str, int, str]]:
     return [(rule.id, line, message) for rule, line, message in scan_text(_read(Path(path)))]
 
 
+def _raise(error: OSError) -> None:
+    raise error
+
+
 def collect_files(paths: Sequence[str]) -> List[Path]:
-    """Expand PATH arguments into scannable files; raises OSError for a path that does not exist."""
+    """Expand PATH arguments into scannable files; raises OSError for a path that is missing or unreadable."""
     files: List[Path] = []
     seen: Set[str] = set()
 
@@ -888,7 +1012,7 @@ def collect_files(paths: Sequence[str]) -> List[Path]:
     for raw in paths:
         root = Path(raw)
         if root.is_dir():
-            for current, dirs, names in os.walk(root):
+            for current, dirs, names in os.walk(root, onerror=_raise):
                 dirs[:] = sorted(d for d in dirs if d not in SKIPPED_DIRS)
                 for name in sorted(names):
                     add(Path(current) / name)
