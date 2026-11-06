@@ -50,6 +50,7 @@ The mock is one HTML file that shows every inventory screen in every state, styl
 **Look and content**
 
 - Neutral house style: greys and one accent, system fonts, no brand palette. Color and polish pull review toward style and away from flow.
+- When the brainstorm targets the user's own product UI and `.quirk/design/system.md` exists, keep the neutral palette and system fonts but adopt that file's density, spacing base and type scale, so the mock's structure matches the product.
 - Real, specific content (names, dates, counts, plausible copy). No lorem ipsum.
 - Reflow at 390px, because the viewport toggle only changes the frame width.
 
