@@ -32,15 +32,16 @@ from jsonio import write_json
 from prepare_diff import count_changed_lines, split_diff_by_file
 
 FLOORS = ("Must fix", "Should fix", "Nit")
-MODELS = ("sonnet", "opus", "haiku", "fable", "codex", "codex-max", "codex-mini",
-          "codex-spark", "terra", "gemini", "flash", "grok")
+MODELS = ("sonnet", "opus", "haiku", "fable", "astra", "sol", "luna", "codex",
+          "codex-max", "codex-mini", "codex-spark", "terra", "argon", "hydrogen",
+          "gemini", "flash", "grok")
 VENDORS = ("anthropic", "openai", "google", "xai", "auto")
 VENDOR_TIER_MAP = {
-    "anthropic": {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
-    "openai": {"opus": "codex-max", "sonnet": "codex", "haiku": "codex-mini"},
-    "google": {"opus": "gemini", "sonnet": "gemini", "haiku": "flash"},
-    "xai": {"opus": "grok", "sonnet": "grok", "haiku": "grok"},
-    "auto": {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
+    "anthropic": {"fable": "fable", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
+    "openai": {"fable": "astra", "opus": "sol", "sonnet": "sol", "haiku": "luna"},
+    "google": {"fable": "argon", "opus": "argon", "sonnet": "hydrogen", "haiku": "flash"},
+    "xai": {"fable": "grok", "opus": "grok", "sonnet": "grok", "haiku": "grok"},
+    "auto": {"fable": "fable", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
 }
 RUN_WHEN = ("always", "has_description", "code_changed", "source_or_config_changed",
             "tests_changed", "source_without_tests", "not_diff_only")

@@ -32,6 +32,14 @@ import render_report
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 
+VENDOR_QUICK_MAP = {
+    "anthropic": {"sonnet": "sonnet", "haiku": "haiku"},
+    "openai": {"sonnet": "sol", "haiku": "luna"},
+    "google": {"sonnet": "hydrogen", "haiku": "flash"},
+    "xai": {"sonnet": "grok", "haiku": "grok"},
+    "auto": {"sonnet": "sonnet", "haiku": "haiku"},
+}
+
 QUICK_PACKS = (
     ("correctness-and-state", "sonnet", "correctness"),
     ("safety-and-db", "sonnet", "safety"),
@@ -846,7 +854,9 @@ def prepare_quick(args: argparse.Namespace) -> int:
     guidance_summary = _format_guidance_summary(guidance_doc)
 
     pack_manifests = []
-    for pack_name, model, default_dim in QUICK_PACKS:
+    v_map = VENDOR_QUICK_MAP.get(getattr(args, "vendor", "anthropic") or "anthropic", VENDOR_QUICK_MAP["anthropic"])
+    for pack_name, base_model, default_dim in QUICK_PACKS:
+        model = v_map.get(base_model, base_model)
         prompt_text = _build_pack_prompt(
             pack_name,
             model,
@@ -1278,7 +1288,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_prep = sub.add_parser("prepare", help="Prepare context, source windows, cross-refs, and 7 quick-pack prompts")
     p_prep.add_argument("--run-dir", required=True)
-    p_prep.add_argument("--mr", type=int, default=None)
+    p_prep.add_argument("--change", type=int, default=None)
+    p_prep.add_argument("--mr", "--pr", dest="mr", type=int, default=None)
+    p_prep.add_argument("--forge", default=None)
+    p_prep.add_argument("--host", default=None)
     p_prep.add_argument("--branch", default=None)
     p_prep.add_argument("--local", action="store_true")
     p_prep.add_argument("-R", "--project", default=None)
@@ -1286,12 +1299,14 @@ def main(argv: list[str] | None = None) -> int:
     p_prep.add_argument("--seat", choices=("author", "reviewer"), default=None)
     p_prep.add_argument("--repo", default=".")
     p_prep.add_argument("--quirk-guidance-dir", default=None)
+    p_prep.add_argument("--vendor", default="anthropic", choices=("anthropic", "openai", "google", "xai", "auto"))
     p_prep.add_argument("--headless", action="store_true")
 
     p_fin = sub.add_parser("finalize", help="Wait for quick-pack outputs, deduplicate, and render report.json + markdown/html")
     p_fin.add_argument("--run-dir", required=True)
     p_fin.add_argument("--wait", nargs="?", const=240, type=int, default=240)
     p_fin.add_argument("--format", choices=("html", "md", "both"), default="md")
+    p_fin.add_argument("--vendor", default="anthropic", choices=("anthropic", "openai", "google", "xai", "auto"))
     p_fin.add_argument("--no-open", action="store_true")
     p_fin.add_argument("--headless", action="store_true")
 

@@ -30,14 +30,14 @@ VENDOR_PRESETS = {
         "quick": {"deep_pack": "sonnet", "fast_pack": "haiku"},
     },
     "openai": {
-        "standard": {"prepass": "codex", "swarm": "codex-mini", "verifier": "codex", "shards": 4},
-        "deep": {"prepass": "codex-max", "swarm": "codex-mini", "verifier": "codex-max", "shards": 1},
-        "quick": {"deep_pack": "codex", "fast_pack": "codex-mini"},
+        "standard": {"prepass": "sol", "swarm": "luna", "verifier": "sol", "shards": 4},
+        "deep": {"prepass": "astra", "swarm": "luna", "verifier": "astra", "shards": 1},
+        "quick": {"deep_pack": "sol", "fast_pack": "luna"},
     },
     "google": {
-        "standard": {"prepass": "gemini", "swarm": "flash", "verifier": "gemini", "shards": 4},
-        "deep": {"prepass": "gemini", "swarm": "flash", "verifier": "gemini", "shards": 1},
-        "quick": {"deep_pack": "gemini", "fast_pack": "flash"},
+        "standard": {"prepass": "argon", "swarm": "flash", "verifier": "hydrogen", "shards": 4},
+        "deep": {"prepass": "argon", "swarm": "flash", "verifier": "argon", "shards": 1},
+        "quick": {"deep_pack": "hydrogen", "fast_pack": "flash"},
     },
     "xai": {
         "standard": {"prepass": "grok", "swarm": "grok", "verifier": "grok", "shards": 4},
