@@ -692,3 +692,14 @@ def test_escalation_false_leaves_the_adjudicator_model_opus(tmp_path, monkeypatc
     assert rc == 0
     assert policy["escalation"] is False
     assert policy["adjudicator"]["model"] == "opus"
+
+
+def test_vendor_preset_maps_default_lenses_and_adjudicator_across_providers(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nvendor: openai\nmodels:\n  db: google/gemini-3.8-flash\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["vendor"] == "openai"
+    assert _lens(policy, "correctness")["model"] == "codex"
+    assert _lens(policy, "db")["model"] == "google/gemini-3.8-flash"
+    assert policy["adjudicator"]["model"] == "codex-max"

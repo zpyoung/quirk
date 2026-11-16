@@ -16,12 +16,28 @@ You return **both** a claim verdict table (the coordinator puts it in the report
 `dimension: "adversarial"` — see Output below.
 
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `adversarial` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## When this dimension runs
 
 Only when the context file's `has_description` is true. The description and title are
-in its `change` object. If you are spawned anyway with `has_description` false (a
-`--local` run, a git fallback with no change request, or a change request whose description is empty), return
-an empty table and `[]`, noting "no description to verify".
+in its `mr` object. If you are spawned anyway with `has_description` false (a
+`--local` run, a git fallback with no MR, or an MR whose description is empty), return
+an empty table and `[]`, noting "no description to verify". The coordinator, not this
+dimension, reports that gap (see "Unverified claims are a reported gap" in
+`references/orchestration.md`).
 
 ## Method
 
@@ -29,7 +45,10 @@ an empty table and `[]`, noting "no description to verify".
    behavioral changes, performance properties, scope limits ("refactor only", "no
    behavior change", "tests only"), coverage claims ("added tests for X"), and
    negative claims ("does not affect Y"). Paraphrase each as a checkable statement.
-   Vague prose ("cleaned up the code") is not a claim — ignore it.
+   Vague prose ("cleaned up the code") is not a claim — ignore it. Do the same for the
+   claims the diff itself makes: docstrings it adds or changes, log messages (a log
+   line saying "charge skipped" claims the charge was skipped), and test names (a test
+   named `test_refund_is_idempotent` claims refunds are idempotent).
 
 2. **Map each claim to code.** Identify the file(s) and line range(s) in the diff
    that should prove or disprove it. **A claim with no corresponding diff region is
@@ -72,14 +91,32 @@ ask for is owned by `scope`.
 
 Two parts.
 
-**1. Claim table** — the coordinator puts it in the report's `process_notes`:
+**1. Claim table** — your enumeration table (see "Enumeration tables" in
+`references/orchestration.md`), written to your tables file; the coordinator also
+puts it in the report's `process_notes`. One row per claim from step 1, each naming where it is made:
 
 ```
-| Claim | Verdict | Evidence |
-|---|---|---|
-| "no behavior change" | misleading | `client.py:88` — retry count 3 → 5 |
-| "added tests for the guard" | wrong | no test file in the diff |
+| Claim | Verdict | Evidence | Branch that makes it false | Test that pins it |
+|---|---|---|---|---|
+| description: "no behavior change" | misleading [#0] | `charge.py:88` — retry count 3 → 5 | any charge that fails 4-5 times | none [#1] |
+| test name: `test_refund_is_idempotent` | confirmed | `refunds.py:40` checks the stored key first | none found | `test_refunds.py:12` |
 ```
+
+"Branch that makes it false" is the input or path under which the claim stops holding,
+or `none found` after you looked. "Test that pins it" is the test that would fail if the
+claim stopped holding, `none`, or `n/a: <why>` for a claim about wording rather than
+behavior.
+
+**An empty, unguarded or "no" row is a finding**: a claim with a reachable branch that
+makes it false is `wrong` or `partial`, and a behavioral claim with no test that pins
+it is an untested behavior (the code-or-tests remedy below).
+
+Cite each problem in the cell that records it: put `[#<n>]` right after the problem
+text, n being the finding's index (from 0) in your findings file, and leave a cell with no
+problem uncited. Two problems in one row are two findings, each cited in its own cell; one
+finding may cover two cells only when it carries a `single_fix` naming the one change that
+fixes both. A problem cell is yours to file even when another dimension owns its topic;
+the merge drops duplicates, so never clear a cell by deferring it.
 
 **2. Findings** — standard schema, for any claim that is `wrong`, `misleading`, or
 `partial`, and any claim-shaped hole. Severity follows the remedy, not the size of
@@ -95,10 +132,22 @@ the gap between words and code:
   path, `Should fix` otherwise. If the description also needs correcting, that is a
   separate `Nit`.
 
-A `confirmed` or `unverifiable` claim produces a table row but no finding.
+A wrong docstring, log message or test name follows the same rule: rewording it is a
+`Nit`, and a defect it hides is its own finding.
+
+A `confirmed` or `unverifiable` claim produces a table row but no finding, unless it is
+a behavioral claim no test pins.
 
 ## Verification gate
 
 A verdict of `wrong` or `misleading` requires reading the source at the correct ref —
 never assign it from the diff alone. When you cannot reach the code, the verdict is
 `unverifiable`, not `wrong`. Record what would settle it in `assumptions`.
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`. A table-owning focus writes only the claim-table rows its line names.
+
+- `description-and-no-change-claims` [table: claim table]: claim-table rows for every falsifiable claim the MR title and description make (behavioral, performance, scope-limit, coverage, "no behavior change", "pure refactor", "internal only", "no user impact" and "does not affect Y" claims, tracing at least one concrete call path through the changed code before accepting any of them), and claim-shaped holes: work the description implies that the diff lacks.
+- `code-and-test-claims` [table: claim table]: claim-table rows for the claims made by docstrings, log messages (a log line saying "charge skipped" claims the charge was skipped) and test names (`test_refund_is_idempotent` claims refunds are idempotent) that the diff adds or changes.

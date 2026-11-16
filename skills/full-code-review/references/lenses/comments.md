@@ -20,6 +20,20 @@ failure mode — see the doc-comment section.
 This file is self-contained: it carries the comment standard in full and is the only
 source this lens reads. A pack can replace this file to apply an org's own standard.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `comments` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Scope — only what the diff touches
 
 Pre-existing comments are **out of scope**: never flag a comment the diff did not add
@@ -46,9 +60,9 @@ justifying cases:
 
 Flag an added inline comment that fits none of the four, and specifically:
 
-- **Restatements of the code** — `# loop over orders`, `// return the result`
+- **Restatements of the code** — `# loop over charges`, `// return the result`
 - **Section banners** — `# === helpers ===`, `// --- setup ---`
-- **Ticket / pull-request / feature-flag references** — `# added for CX-1234`, `// remove once
+- **Ticket / MR / feature-flag references** — `# added for CX-1234`, `// remove once
   billing_v2 is cleaned up`. These rot the moment the ticket or flag closes, and a
   stale comment actively misleads both humans and models.
 - **References to local-only files** — a plan doc, scratch notes, a design file that
@@ -115,13 +129,13 @@ Default **`Nit`** — a comment problem is almost never a merge blocker.
 `conventions` owns naming, reuse, and pattern/layer adherence. This dimension
 owns **every** comment finding — including the "rename instead of commenting" case,
 which is raised here with the rename as the recommendation. If conventions also
-emits a comment finding, the coordinator dedups by `file:line`.
+emits a comment finding, the coordinator merges the two as one root cause.
 
 ## Out of scope
 
 Non-comment code (other specialists own it). Docstring **formatting** a linter
 already enforces (`pydocstyle`, `eslint-plugin-jsdoc`) — drop it. Commit messages and
-change descriptions: rationale belongs in the change request, but the change request text is not this dimension's
+MR descriptions: rationale belongs in the MR, but the MR text is not this dimension's
 target.
 
 ## Verification gate
@@ -135,3 +149,10 @@ checked-in doc is a legitimate reference), or that the new symbol really is publ
 (imported elsewhere) before calling its missing docstring a gap. Also confirm from the
 diff that the comment line is genuinely on the `+` side rather than context. Record
 uncertain bases in `assumptions`.
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `inline-and-doc-comments`: added inline comments that record none of the four justifying decisions (restatements of the code, section banners, ticket, MR or flag references, local-only file references, temporal framing, implementation play-by-play, trailing comments after assignments, `TODO` or placeholder comments, commented-out code, emoji, and paragraph-length comments on a one-line change), and docstrings or doc comments the diff adds or modifies (drift from what the code does, a missing doc comment on a new public function, class or module or one with a non-trivial contract, and narration of the implementation in place of intent).

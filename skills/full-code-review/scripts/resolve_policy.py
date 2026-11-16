@@ -32,12 +32,32 @@ from jsonio import write_json
 from prepare_diff import count_changed_lines, split_diff_by_file
 
 FLOORS = ("Must fix", "Should fix", "Nit")
-MODELS = ("sonnet", "opus", "haiku")
+MODELS = ("sonnet", "opus", "haiku", "fable", "codex", "codex-max", "codex-mini",
+          "codex-spark", "terra", "gemini", "flash", "grok")
+VENDORS = ("anthropic", "openai", "google", "xai", "auto")
+VENDOR_TIER_MAP = {
+    "anthropic": {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
+    "openai": {"opus": "codex-max", "sonnet": "codex", "haiku": "codex-mini"},
+    "google": {"opus": "gemini", "sonnet": "gemini", "haiku": "flash"},
+    "xai": {"opus": "grok", "sonnet": "grok", "haiku": "grok"},
+    "auto": {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
+}
 RUN_WHEN = ("always", "has_description", "code_changed", "source_or_config_changed",
             "tests_changed", "source_without_tests", "not_diff_only")
-KNOWN_KEYS = ("severity_floor", "escalation", "models", "skip", "cross_family",
+KNOWN_KEYS = ("severity_floor", "escalation", "models", "vendor", "skip", "cross_family",
               "critical_paths", "skip_globs", "cross_repo", "adjudicator")
 ADJUDICATOR_MODEL = "opus"
+
+
+def _is_valid_model(model):
+    if not isinstance(model, str) or not model.strip():
+        return False
+    if model in MODELS:
+        return True
+    if "/" in model:
+        provider, name = model.split("/", 1)
+        return bool(provider.strip() and name.strip() and " " not in model)
+    return False
 PROJECT_PACK = ".quirk/review"
 MAX_SYMLINK_DEPTH = 8
 
@@ -175,6 +195,7 @@ class Policy:
         self.lenses = {}
         self.order = []
         self.settings = {"severity_floor": "Should fix", "escalation": True, "models": {},
+                         "vendor": "anthropic",
                          "cross_family": {"enabled": False, "alias": None},
                          "critical_paths": [], "skip_globs": [],
                          "cross_repo": {"search_agent": None},
@@ -209,13 +230,17 @@ class Policy:
             if not isinstance(values["escalation"], bool):
                 raise PolicyError("%s: escalation must be true or false" % label)
             self.settings["escalation"] = values["escalation"]
+        if "vendor" in values:
+            if values["vendor"] not in VENDORS:
+                raise PolicyError("%s: vendor must be one of %s" % (label, ", ".join(VENDORS)))
+            self.settings["vendor"] = values["vendor"]
         if "models" in values:
             models = values["models"]
             if not isinstance(models, dict):
                 raise PolicyError("%s: models must be a mapping of lens id to model" % label)
             for lens_id, model in models.items():
-                if model not in MODELS:
-                    raise PolicyError("%s: models.%s must be one of %s" % (label, lens_id, ", ".join(MODELS)))
+                if not _is_valid_model(model):
+                    raise PolicyError("%s: models.%s must be one of %s or <provider>/<model>" % (label, lens_id, ", ".join(MODELS)))
                 self.settings["models"][lens_id] = model
                 if lens_id == "adjudicator":
                     continue
@@ -260,8 +285,8 @@ class Policy:
         lens_id = meta.get("id") or Path(label).stem
         if not isinstance(lens_id, str):
             raise PolicyError("%s: lens id must be a string" % label)
-        if meta.get("model", "sonnet") not in MODELS:
-            raise PolicyError("%s: model must be one of %s" % (label, ", ".join(MODELS)))
+        if not _is_valid_model(meta.get("model", "sonnet")):
+            raise PolicyError("%s: model must be one of %s or <provider>/<model>" % (label, ", ".join(MODELS)))
         if lens_id in self.lenses:
             lens = self.lenses[lens_id]
             lens.update({"checklist": checklist, "source": source})
@@ -319,8 +344,15 @@ class Policy:
         for lens_id in self.skipped:
             if lens_id not in self.lenses:
                 self.warnings.append("skip: unknown lens %s ignored" % lens_id)
+        vendor = self.settings["vendor"]
+        tier_map = VENDOR_TIER_MAP.get(vendor, VENDOR_TIER_MAP["anthropic"])
+        for lens_id, lens in self.lenses.items():
+            if self.model_stamp.get(lens_id, (-1, -1))[1] < 1 and lens["model"] in tier_map:
+                lens["model"] = tier_map[lens["model"]]
+        default_adj = tier_map.get("opus", ADJUDICATOR_MODEL)
         return {
             "schema": 1,
+            "vendor": vendor,
             "lenses": [self.lenses[i] for i in self.order if i not in self.skipped],
             "skipped": [{"id": i, "by": self.skipped[i]} for i in self.order if i in self.skipped],
             "severity_floor": self.settings["severity_floor"],
@@ -330,7 +362,7 @@ class Policy:
             "skip_globs": self.settings["skip_globs"],
             "cross_repo": self.settings["cross_repo"],
             "adjudicator": {"enabled": self.settings["adjudicator"]["enabled"],
-                            "model": self.settings["models"].get("adjudicator", ADJUDICATOR_MODEL)},
+                            "model": self.settings["models"].get("adjudicator", default_adj)},
             "diff_only": self.diff_only,
             "sources": self.sources,
             "guidance_files": self.guidance,
@@ -355,7 +387,7 @@ def _user_pack_dir(pack_flag):
 
 
 def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, pack=None,
-                   diff_only=False):
+                   diff_only=False, vendor=None):
     """Return the merged policy dict.
 
     Raises PolicyError on a malformed pack or REVIEW.md, and when the context's seat is
@@ -387,6 +419,9 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
                                    "no pack policy was applied" % pack)
 
     if diff_only:
+        if vendor:
+            policy.layer += 1
+            policy.apply_settings({"vendor": vendor}, "--vendor")
         policy.warnings.append("diff-only: the project pack and REVIEW.md were not read; "
                                "repo-local review policy was not applied")
         return policy.finish()
@@ -404,6 +439,9 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
         policy.apply_settings(settings, label)
         policy.sources.append({"kind": "review-md", "path": label, "ref": policy_ref})
         policy.guidance.append(repo.readable_path(rel, text))
+    if vendor:
+        policy.layer += 1
+        policy.apply_settings({"vendor": vendor}, "--vendor")
     return policy.finish()
 
 
@@ -494,6 +532,7 @@ def main(argv=None):
                       help="no source checkout: skip the project pack and REVIEW.md")
     ap.add_argument("--policy-ref")
     ap.add_argument("--pack")
+    ap.add_argument("--vendor", choices=VENDORS, help="override default model vendor tier mapping")
     ap.add_argument("--lenses-dir", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--apply", action="store_true")
@@ -503,7 +542,8 @@ def main(argv=None):
             context = json.load(fh)
         policy = resolve_policy(context, args.source_root, args.lenses_dir,
                                 os.path.dirname(os.path.abspath(args.out)),
-                                policy_ref=args.policy_ref, pack=args.pack, diff_only=args.diff_only)
+                                policy_ref=args.policy_ref, pack=args.pack, diff_only=args.diff_only,
+                                vendor=args.vendor)
         if args.apply:
             apply_policy(context, policy, args.source_root, args.policy_ref)
             write_json(args.context, context)

@@ -13,6 +13,20 @@ immediate context) in the shared context file for the **quality and correctness 
 logs and metrics** — not merely whether logging exists. Return findings in the schema
 from `references/orchestration.md` with `dimension: "observability"`.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `observability` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Boundary with `safety`
 
 `safety` flags when a failure is **swallowed or unlogged** (broad `except`,
@@ -25,7 +39,7 @@ swallowed," leave it to `safety`.
 
 - **Exception detail in log context** — an `except` block that logs a bare message
   without the exception object and the identifiers needed to triage it (record id,
-  tenant, operation). The failure is "logged" but not debuggable. Recommend attaching the
+  store, op). The failure is "logged" but not debuggable. Recommend attaching the
   exception and relevant context.
 - **Structured context over scattered lines** — several sequential `logger.*` calls
   that should be one structured context update; per-item logging inside a loop where
@@ -58,3 +72,10 @@ enum), that the failure metric really fires on a transient path (trace the
 exception/return type), or that the renamed metric really has no dashboard update in
 the diff. Record the basis in `assumptions` when you can't fully confirm (e.g.
 "assumes no dashboard repo is updated alongside this change").
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `logs-metrics-and-monitoring`: an `except` block that logs a bare message without the exception and the identifiers needed to triage it, and several sequential log calls or per-item loop logging where one structured context update or aggregate field would do; metric names or labels built from free-form strings or high-cardinality values; counters or timers that fire on the wrong condition (failure metrics on retryable failures, windows that reset or double-count across retries, success on a partial-success path); renamed, retyped or removed metrics with no dashboard or alert update, a client or service initialized without the identity or labels it needs to emit, and a new code path that emits nothing where its sibling paths do.

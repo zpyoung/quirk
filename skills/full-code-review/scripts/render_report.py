@@ -16,6 +16,7 @@ import webbrowser
 import highlight
 from forge import change_label
 from md_render import render_inline, render_markdown
+from check_anchors import check_anchors
 
 
 SEVERITY_ORDER = {"Must fix": 0, "Should fix": 1, "Nit": 2}
@@ -1996,6 +1997,8 @@ def main(argv=None):
     parser.add_argument("--out-dir")
     parser.add_argument("--out")
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--source-root",
+                        help="reviewed source at head; every new-side finding line must exist there")
     args = parser.parse_args(argv)
 
     try:
@@ -2004,6 +2007,13 @@ def main(argv=None):
         with open(args.in_path, "r", encoding="utf-8") as handle:
             report = json.load(handle)
         prepared, warnings = _prepare_report(report)
+        if args.source_root:
+            problems, notes = check_anchors(prepared["findings"], args.source_root)
+            if problems:
+                raise ValueError("finding lines must be new-file line numbers at head, not diff or "
+                                 "bundle positions; re-anchor these against the source: %s" %
+                                 "; ".join(problems))
+            warnings.extend(notes)
         slug = target_slug(prepared["meta"])
         out_dir = args.out_dir or os.environ.get("REVIEW_OUT_DIR") or "/tmp"
         out_dir = os.path.abspath(out_dir)

@@ -16,6 +16,20 @@ Unlike the other lenses, you return **a rendered risk block, not a findings list
 (see `orchestration.md`). An org pack may replace this file with its own rubric; keep
 the Output block shape if you do, because the report renders it verbatim.
 
+## Coordinator pre-read
+
+Your dispatch carries the pre-read slots (see "Pre-read" in `references/orchestration.md`).
+You run beside the coordinator's pre-read, so they usually read "none": then read the
+diff and the source it touches yourself before rating.
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `risk` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Risk matrix
 
 | Likelihood \ Severity | Critical | Major | Minor | No Incident |
