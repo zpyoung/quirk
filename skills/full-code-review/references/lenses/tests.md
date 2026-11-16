@@ -49,16 +49,37 @@ about whether the tests that exist are *good*.
    need the removed values — and whether a schema, enum, `OneOf`, or DB constraint at
    another layer just lost its only coverage.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `tests` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Out of scope
 
 Missing assertions, coverage gaps, flakiness, and implementation-detail assertions
-(`test-adequacy` owns them). Production code with no test changes (`test-coverage` owns
-it).
+(`test-adequacy` owns them). Production code with no test changes
+(`test-coverage` owns it).
 
 ## Verification gate
 
-All test lenses obey the skill's verification gate: no Must/Should fix from the diff
+All test dimensions obey the skill's verification gate: no Must/Should fix from the diff
 alone; read the source at the correct ref first. The mutation probe in
-`lenses/_mutation-probe.md` is the strongest form of that gate; apply it only when the
-dispatch says `mutation probe: enabled`. Without that line, do not run tests, builds, or
-any mutant, even on a scratch copy; argue from the source you read.
+`dimensions/_mutation-probe.md` is the strongest form of that gate; apply it only when
+the dispatch says `mutation probe: enabled`. Without that line, do not run tests, builds,
+or any mutant, even on a scratch copy; argue from the source you read.
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `test-quality-and-hygiene`: integration or E2E tests for behavior a unit test proves, more than two nested `with patch(...)`, mocks of a seam a real implementation or fixture would cover, patches on the definition site instead of the use site, conftest or autouse fixtures that contradict the test's assumption, redundant or overlapping tests that could be consolidated (never tests of distinct behaviors), field-by-field assertions against an object that supports whole-object equality, fixtures or data that create more than the behavior needs, `parametrize` values or shared fixture data changed out from under other tests or under a constraint at another layer, `skip` or `xfail` with no linked ticket and rationale, and tests slower than five seconds because of heavy setup.

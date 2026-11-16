@@ -13,6 +13,20 @@ context) in the shared context file for **database-layer risk and hot-path
 performance**. Return findings in the schema from `references/orchestration.md` with
 `dimension: "db"`.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `db` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Checklist
 
 - **N+1 queries** — a list/queryset is loaded, then a relationship is accessed
@@ -68,3 +82,10 @@ Before any `Must fix` / `Should fix`, read the source at the correct ref (see
 really is unindexed (check models + migrations), or the migration really targets a
 large/hot table. Record the basis in `assumptions` when you can't fully confirm
 (e.g. "assumes `orders` is a large table").
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `queries-indexes-and-transactions`: N+1 queries, over-fetching with `SELECT *` or full ORM objects, unbounded user-facing list queries or `OFFSET` pagination on large tables; new `WHERE`, `JOIN` and `ORDER BY` columns with no supporting index; migration safety (table-locking `ALTER`, index builds, unchunked backfills, and deploy-versus-migrate ordering); multi-write changes outside a transaction, begin, commit and rollback split across function boundaries, a `finally` that cleans up on a dead connection and masks the original exception, retry loops that diverge from the repo's helper, a write path that does not invalidate the cache its read path uses, a read after a write that may hit a lagging replica; synchronous I/O in a request handler or tight loop, a regex compiled inside a loop or per call, and unbounded in-memory accumulation where the work could stream or chunk.

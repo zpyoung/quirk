@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "source": "Staff reviewer's inline comments on engineering/frontend/frontend!17170, posted 2026-11-13 against head 0495fdb",
+  "target": {
+    "project": "engineering/frontend/frontend",
+    "number": 17170,
+    "head_sha": "0495fdb39536d5f7d581b76ac784c75835e8e90e"
+  },
+  "defects": [
+    {
+      "id": "H1",
+      "title": "validationBehavior is a no-op because the wrappers call validate() by hand",
+      "kind": "dead-option",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/components/forms/FormSparkCheckbox.tsx",
+          "line_min": 12,
+          "line_max": 30
+        },
+        {
+          "file": "packages/merchant-portal/core/app/components/forms/FormSparkMultiSelect.tsx",
+          "line_min": 14,
+          "line_max": 32
+        }
+      ],
+      "keywords": [
+        "validationBehavior",
+        "getInputProps",
+        "never read",
+        "no effect",
+        "does nothing"
+      ]
+    },
+    {
+      "id": "H2",
+      "title": "validate() after a submit validates the whole form, so checking the box shows the months error and disables Save",
+      "kind": "library-contract",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/components/forms/FormSparkCheckbox.tsx",
+          "line_min": 43,
+          "line_max": 49
+        }
+      ],
+      "keywords": [
+        "whole form",
+        "every field",
+        "all fields",
+        "entire form",
+        "every touched field",
+        "other fields",
+        "before the merchant"
+      ]
+    },
+    {
+      "id": "H3",
+      "title": "Unmounting the month picker leaves its error in fieldErrors, keeping Save disabled with nothing visible",
+      "kind": "ui-lifecycle",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/components/forms/FormSparkMultiSelect.tsx",
+          "line_min": 36,
+          "line_max": 44
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/form-sections/ChargeAndCutoffSection.tsx",
+          "line_min": 100,
+          "line_max": 108
+        }
+      ],
+      "keywords": [
+        "clearError",
+        "fieldErrors",
+        "stale error",
+        "error stays",
+        "error left",
+        "hidden error",
+        "lingering error"
+      ]
+    },
+    {
+      "id": "H4",
+      "title": "Adding a plan on a legacy store copies the template plan's months but resets its alignment and gap",
+      "kind": "entry-point",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/add/AddPlanPanel.tsx",
+          "line_min": 50,
+          "line_max": 54
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/add/AddPlanPanel.tsx",
+          "line_min": 168,
+          "line_max": 172
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/planFormUtils.ts",
+          "line_min": 330,
+          "line_max": 335
+        }
+      ],
+      "keywords": [
+        "stored",
+        "first_cycle_alignment",
+        "minimum_gap_days",
+        "alignment",
+        "template",
+        "getLegacyNewPlanDefaultValues"
+      ]
+    },
+    {
+      "id": "H5",
+      "title": "The Pick<AvailabilityPayloadOptions, 'enabled'> parameter should be a plain boolean",
+      "kind": "dead-option",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/edit/EditPlanPanel.tsx",
+          "line_min": 34,
+          "line_max": 38
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/edit/EditPlanPanel.tsx",
+          "line_min": 72,
+          "line_max": 77
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/edit/EditPlanPanel.tsx",
+          "line_min": 89,
+          "line_max": 93
+        }
+      ],
+      "keywords": [
+        "boolean",
+        "one-field",
+        "single-field",
+        "one field",
+        "unwrap",
+        "rewrap"
+      ]
+    },
+    {
+      "id": "H6",
+      "title": "Legacy cascade copies the first plan's window to every sibling and nulls theirs; say so in the description",
+      "kind": "cascade",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/edit/EditPlanPanel.tsx",
+          "line_min": 99,
+          "line_max": 105
+        },
+        {
+          "file": "packages/merchant-portal/core/app/routes/merchant+/products/$id/_index/product-subscription-plans/edit/EditPlanPanel.tsx",
+          "line_min": 186,
+          "line_max": 191
+        }
+      ],
+      "keywords": [
+        "cascade",
+        "sibling"
+      ]
+    },
+    {
+      "id": "H7",
+      "title": "formatAvailabilityLine ignores order_day_of_month, unlike planToFormData; one supportsAvailabilityWindow helper should replace five checks",
+      "kind": "repeated-predicate",
+      "anchors": [
+        {
+          "file": "packages/merchant-portal/core/app/utils/plan.ts",
+          "line_min": 165,
+          "line_max": 172
+        }
+      ],
+      "keywords": [
+        "order_day_of_month",
+        "supportsAvailabilityWindow",
+        "no charge day",
+        "without a charge day",
+        "no specific charge day",
+        "five places"
+      ]
+    }
+  ]
+}

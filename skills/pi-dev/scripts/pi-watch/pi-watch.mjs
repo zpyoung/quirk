@@ -62,6 +62,28 @@ const ALIASES = {
             "openai-codex/gpt-5.6-luna", "openai/gpt-5.6-luna", "github-copilot/gpt-5.6-luna",
         ],
     },
+    sol: {
+        thinking: "high",
+        prefs: [
+            "openai-codex/gpt-6.1-sol", "openai/gpt-6.1-sol", "github-copilot/gpt-6.1-sol",
+            "openai-codex/gpt-6-sol", "openai/gpt-6-sol", "github-copilot/gpt-6-sol",
+            "openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "github-copilot/gpt-5.6-sol",
+        ],
+    },
+    astra: {
+        thinking: "max",
+        prefs: [
+            "openai-codex/gpt-6.1-astra", "openai/gpt-6.1-astra", "github-copilot/gpt-6.1-astra",
+            "openai-codex/gpt-6-astra", "openai/gpt-6-astra", "github-copilot/gpt-6-astra",
+        ],
+    },
+    luna: {
+        thinking: "medium",
+        prefs: [
+            "openai-codex/gpt-6-luna", "openai/gpt-6-luna", "github-copilot/gpt-6-luna",
+            "openai-codex/gpt-5.6-luna", "openai/gpt-5.6-luna", "github-copilot/gpt-5.6-luna",
+        ],
+    },
     "codex-spark": {
         thinking: "high",
         prefs: ["openai-codex/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark"],
@@ -109,6 +131,20 @@ const ALIASES = {
     gemini: {
         thinking: "high",
         prefs: ["google/gemini-3.1-pro-preview"],
+    },
+    argon: {
+        thinking: "high",
+        prefs: [
+            "google/gemini-4-argon", "github-copilot/gemini-4-argon",
+            "google/gemini-3.1-pro-preview",
+        ],
+    },
+    hydrogen: {
+        thinking: "high",
+        prefs: [
+            "google/gemini-4-hydrogen", "github-copilot/gemini-4-hydrogen",
+            "google/gemini-3.1-pro-preview",
+        ],
     },
     flash: {
         thinking: "medium",

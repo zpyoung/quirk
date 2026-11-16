@@ -50,7 +50,8 @@ values such as `[a, b]` are fine.
 ```yaml
 severity_floor: Should fix     # Must fix | Should fix | Nit; findings below it never post
 escalation: true               # escalate lenses one model tier on High risk / Critical
-models:                        # per-lens model tier: sonnet | opus | haiku
+vendor: anthropic              # anthropic | openai (fable=astra, opus/sonnet=sol, haiku=luna) | google (fable/opus=argon, sonnet=hydrogen, haiku=flash) | xai | auto
+models:                        # per-lens model alias (sonnet|opus|haiku|fable|astra|sol|luna|argon|hydrogen|flash|codex|gemini|grok) or <provider>/<model>
   correctness: opus
 skip: [observability]          # lenses to skip; a union across layers
 critical_paths: ["src/payments/**"]   # union across layers; feeds the risk lens

@@ -34,15 +34,36 @@ step 3 below is what decides whether a finding is warranted.
    - Severity: Should fix for risky paths; Nit for low-risk. Never Must fix on
      coverage alone.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `test-coverage` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Out of scope
 
-The quality of tests the diff adds or edits (`test-adequacy` and `tests` own them), and
-demanding tests for pure formatting, renames, comments, config, or docs.
+The quality of tests the diff adds or edits (`test-adequacy` and `tests`
+own them), and demanding tests for pure formatting, renames, comments, config, or docs.
 
 ## Verification gate
 
-All test lenses obey the skill's verification gate: no Must/Should fix from the diff
+All test dimensions obey the skill's verification gate: no Must/Should fix from the diff
 alone; read the source at the correct ref first. The mutation probe in
-`lenses/_mutation-probe.md` is the strongest form of that gate; apply it only when the
-dispatch says `mutation probe: enabled`. Without that line, do not run tests, builds, or
-any mutant, even on a scratch copy; argue from the source you read.
+`dimensions/_mutation-probe.md` is the strongest form of that gate; apply it only when
+the dispatch says `mutation probe: enabled`. Without that line, do not run tests, builds,
+or any mutant, even on a scratch copy; argue from the source you read.
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `missing-test-coverage`: changed production behavior on money, auth, data-mutation and external-service-call paths, and other new or changed branches, error paths and public-API or contract changes that no existing test covers and that warrant a test, naming the test to add.

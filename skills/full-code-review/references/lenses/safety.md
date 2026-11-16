@@ -13,6 +13,20 @@ context) in the shared context file for **realistic production failure modes,
 security holes, and data-integrity risks**. Return findings in the schema from
 `references/orchestration.md` with `dimension: "safety"`.
 
+
+## Coordinator pre-read
+
+Your dispatch carries slots the coordinator filled from its own pre-read of the
+whole diff (see "Pre-read" in `references/orchestration.md`):
+
+- **Promise:** `<promise>`. What the change guarantees, for whom, under which setting.
+  Review against it.
+- **Repo facts:** `<repo facts>`. Each cites the file it came from; read the cited line
+  before a finding rests on a fact.
+- **Hints for `safety` (not exhaustive):** `<hints>`. Places to look and open
+  questions, not findings and not a scope limit. Work every item of this checklist
+  anyway, and report only what the code shows.
+
 ## Scope
 
 Review only the diff hunks and their immediate context. Find realistic failure
@@ -72,3 +86,10 @@ middleware, and the framework's default auth), that the query really is
 unparameterized, and that the caller really can supply the untrusted value. Record
 the basis in `assumptions` when you can't fully confirm (e.g. "assumes `/webhook`
 is not authenticated by the upstream gateway").
+
+## Haiku focuses
+
+One haiku agent per line, each told "your focus is only" its line. Dispatch, output files and the
+table rules are "Focus dispatch" in `references/orchestration.md`.
+
+- `security-bounds-and-integrity`: missing guards and validation on untrusted, optional or user-controlled input; SQL built by string formatting and command injection through `subprocess` or `os.system`; user input reaching `eval`, `exec`, `pickle` or template rendering; mass assignment into ORM fields; a user-controlled URL handed to a server-side HTTP client; missing auth or authz on new endpoints or newly reachable code paths; credentials, tokens or keys hardcoded, logged or returned in an error response; missing rate limiting on endpoints that accept unauthenticated requests; mis-handled external dependencies (HTTP clients, Redis, DB sessions, filesystem, third-party SDKs), a non-idempotent operation on a retryable path, and a multi-step side effect with no way to resume or roll back; missing timeouts, resource leaks, unbounded loops and unbounded payload or in-memory growth, broad `except Exception`, empty handlers and rescue paths with no logging; writes outside a proper transaction boundary and partial updates, missing cache invalidation after a write the read path caches, a missing soft-delete filter on a new query, and unchunked bulk operations that can time out and leave partial state.

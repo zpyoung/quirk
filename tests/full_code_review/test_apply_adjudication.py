@@ -192,8 +192,8 @@ def test_jobs_emit_one_job_per_disagreement_with_exact_claims(tmp_path, capsys):
 
 def test_jobs_randomize_sides_per_job_and_leak_nothing(tmp_path, capsys):
     count = 24
-    findings = [finding(n, severity="Must fix", dimension="security-sentinel",
-                        dimensions=["security-sentinel"]) for n in range(1, count + 1)]
+    findings = [finding(n, severity="Must fix", dimension="safety",
+                        dimensions=["safety"]) for n in range(1, count + 1)]
     rulings = [issue_wrong("A%d" % n) for n in range(1, count + 1)]
     mod, paths = build(tmp_path, capsys, findings, rulings)
     sides = {}
@@ -206,7 +206,7 @@ def test_jobs_randomize_sides_per_job_and_leak_nothing(tmp_path, capsys):
         for job in doc["jobs"]:
             text = json.dumps(job["packet"])
             assert not IDENTITY_WORDS.search(text)
-            assert not re.search(r"Must fix|Should fix|Nit|security-sentinel|correctness", text)
+            assert not re.search(r"Must fix|Should fix|Nit|quirk:|safety|correctness", text)
     assert sides[1] != sides[2]
 
 
@@ -353,26 +353,42 @@ def test_fix_replacement_updates_present_fields_only(tmp_path, capsys):
     assert second["adjudication"]["original_fix"] == {"fix_md": "Short fix 2", "recommendation": "Fix text 2"}
 
 
-def test_severity_change_is_applied_and_recorded(tmp_path, capsys):
-    result = pipeline(tmp_path, capsys, [finding(1, severity="Must fix"), finding(2)],
-                      [agree("A1", severity="Should fix", severity_reason="Only a log line is wrong."),
+def test_severity_raise_is_applied_and_recorded(tmp_path, capsys):
+    result = pipeline(tmp_path, capsys, [finding(1, severity="Nit"), finding(2)],
+                      [agree("A1", severity="Should fix", severity_reason="The wrong total reaches the invoice."),
                        agree("A2", severity="Should fix", severity_reason="same")])
     first, second = result["findings"]
     assert first["severity"] == "Should fix"
     assert first["adjudication"]["severity_change"] == {
-        "from": "Must fix", "to": "Should fix", "reason": "Only a log line is wrong."}
+        "from": "Nit", "to": "Should fix", "reason": "The wrong total reaches the invoice."}
     assert second["adjudication"]["severity_change"] is None
+    assert result["warnings"] == []
+
+
+def test_severity_downgrade_is_refused_and_named_in_a_warning(tmp_path, capsys):
+    # the merge step's calibration outranks one unproven opinion that a finding matters less
+    result = pipeline(tmp_path, capsys, [finding(1, severity="Must fix"), finding(2, severity="Should fix")],
+                      [agree("A1", severity="Should fix", severity_reason="Only a log line is wrong."),
+                       issue_wrong("A2", severity="Nit", severity_reason="cosmetic")],
+                      {"A2": "lens"})
+    first, second = result["findings"]
+    assert first["severity"] == "Must fix" and first["adjudication"]["severity_change"] is None
+    assert second["severity"] == "Should fix" and second["adjudication"]["severity_change"] is None
+    assert result["warnings"] == [
+        "kept f1.py:11 at Must fix; adjudication proposed Should fix: Only a log line is wrong.",
+        "kept f2.py:12 at Should fix; adjudication proposed Nit: cosmetic"]
 
 
 def test_severity_change_applies_to_disputed_and_survived_but_not_dropped(tmp_path, capsys):
     result = pipeline(
-        tmp_path, capsys, [finding(n, severity="Must fix") for n in (1, 2, 3)],
-        [issue_wrong("A1", severity="Nit", severity_reason="r1"),
-         issue_wrong("A2", severity="Nit", severity_reason="r2"),
-         issue_wrong("A3", severity="Nit", severity_reason="r3")],
+        tmp_path, capsys, [finding(n, severity="Nit") for n in (1, 2, 3)],
+        [issue_wrong("A1", severity="Must fix", severity_reason="r1"),
+         issue_wrong("A2", severity="Must fix", severity_reason="r2"),
+         issue_wrong("A3", severity="Must fix", severity_reason="r3")],
         {"A1": "lens", "A2": "inconclusive", "A3": "adjudicator"})
-    assert [item["severity"] for item in result["findings"]] == ["Nit", "Nit"]
+    assert [item["severity"] for item in result["findings"]] == ["Must fix", "Must fix"]
     assert [item["adjudication"]["severity_change"]["reason"] for item in result["findings"]] == ["r1", "r2"]
+    assert result["warnings"] == []
 
 
 def test_merge_across_agreed_findings(tmp_path, capsys):
@@ -458,10 +474,12 @@ def test_tally_counts_every_outcome(tmp_path, capsys):
 def test_na_and_would_miss_labels_follow_the_dimension_rules(tmp_path, capsys):
     conventions = finding(1, dimension="conventions", dimensions=["conventions"])
     tests = finding(2, dimension="test-adequacy", dimensions=["test-adequacy"])
-    result = pipeline(tmp_path, capsys, [conventions, tests], [
+    bare = finding(3, dimension="comments", dimensions=["comments"])
+    result = pipeline(tmp_path, capsys, [conventions, tests, bare], [
         agree("A1", production={"label": "N/A", "path": "conventions"}),
-        agree("A2", production={"label": "Would miss", "path": "refunds over the charge being accepted"})])
-    assert [item["production"]["label"] for item in result["findings"]] == ["N/A", "Would miss"]
+        agree("A2", production={"label": "Would miss", "path": "refunds over the charge being accepted"}),
+        agree("A3", production={"label": "N/A", "path": "comments"})])
+    assert [item["production"]["label"] for item in result["findings"]] == ["N/A", "Would miss", "N/A"]
 
 
 def mutate(rulings, index, **changes):
@@ -914,3 +932,121 @@ def test_apply_rejects_a_job_with_a_tampered_packet_side(tmp_path, capsys):
 
     code, out, paths = jobs_apply(tmp_path, capsys, [finding(1)], [issue_wrong("A1")], swap)
     rejected(code, out, paths, "J1", "stale")
+
+
+def test_skip_nits_auto_agrees_nits_and_restores_input_order(tmp_path, capsys):
+    mod = module()
+    items = [
+        finding(1, severity="Nit", dimension="comments", dimensions=["comments"]),
+        finding(2, severity="Must fix"),
+        finding(3, severity="Nit", dimension="test-adequacy", dimensions=["test-adequacy"]),
+    ]
+    f_path = write(tmp_path / "findings.json", items)
+    in_path = str(tmp_path / "input.json")
+    assert run(mod, capsys, "prepare", "--findings", f_path, "--out", in_path, "--seed", "7", "--skip-nits")[0] == 0
+    doc = json.loads(Path(in_path).read_text())
+    assert [item["id"] for item in doc["findings"]] == ["A2"]
+    assert [item["id"] for item in doc["auto_agreed"]] == ["A1", "A3"]
+    r_path = write(tmp_path / "rulings.json", raw_rulings([agree("A2")]))
+    j_path = str(tmp_path / "jobs.json")
+    assert run(mod, capsys, "jobs", "--input", in_path, "--rulings", r_path, "--out", j_path, "--seed", "7")[0] == 0
+    v_path = write(tmp_path / "verdicts.json", {"verdicts": []})
+    out_path = str(tmp_path / "out.json")
+    assert run(mod, capsys, "apply", "--input", in_path, "--rulings", r_path, "--jobs", j_path,
+               "--verdicts", v_path, "--out", out_path)[0] == 0
+    res = json.loads(Path(out_path).read_text())
+    assert [f["title"] for f in res["findings"]] == ["Title 1", "Title 2", "Title 3"]
+    assert res["findings"][0]["production"]["label"] == "N/A"
+    assert res["findings"][2]["production"]["label"] == "Would miss"
+    assert res["adjudication"]["tally"]["checked"] == 3 and res["adjudication"]["tally"]["agreed"] == 3
+
+
+def test_must_shards_split_must_fix_findings_and_list_their_paths(tmp_path, capsys):
+    mod = module()
+    items = [finding(n, severity="Must fix") for n in range(1, 8)] + [finding(8), finding(9, severity="Nit")]
+    f_path = write(tmp_path / "findings.json", items)
+    must = str(tmp_path / "adjudication-input-must.json")
+    code, out = run(mod, capsys, "prepare", "--findings", f_path, "--out", str(tmp_path / "input.json"),
+                    "--seed", "7", "--must-out", must, "--should-out", str(tmp_path / "should.json"),
+                    "--must-shard-size", "3")
+    assert code == 0
+    assert out == {"must_shards": [str(tmp_path / ("adjudication-input-must-%d.json" % k)) for k in (1, 2, 3)]}
+    whole = json.loads(Path(must).read_text())["findings"]
+    shards = [json.loads(Path(p).read_text()) for p in out["must_shards"]]
+    assert [len(s["findings"]) for s in shards] == [3, 3, 1]
+    assert [f["id"] for s in shards for f in s["findings"]] == [f["id"] for f in whole]
+    assert all(s["seed"] == 7 for s in shards)
+
+
+def test_must_shards_are_empty_without_must_fix_findings(tmp_path, capsys):
+    mod = module()
+    f_path = write(tmp_path / "findings.json", [finding(1)])
+    code, out = run(mod, capsys, "prepare", "--findings", f_path, "--out", str(tmp_path / "input.json"),
+                    "--must-out", str(tmp_path / "must.json"), "--must-shard-size", "3")
+    assert code == 0 and out == {"must_shards": []}
+
+
+@pytest.mark.parametrize("argv, needle", [
+    (["--must-shard-size", "0", "--must-out", "MUST"], "at least 1"),
+    (["--must-shard-size", "3"], "needs --must-out"),
+])
+def test_bad_must_shard_size_exits_2(tmp_path, capsys, argv, needle):
+    mod = module()
+    f_path = write(tmp_path / "findings.json", [finding(1, severity="Must fix")])
+    argv = [str(tmp_path / "must.json") if a == "MUST" else a for a in argv]
+    code, out = run(mod, capsys, "prepare", "--findings", f_path, "--out", str(tmp_path / "input.json"), *argv)
+    assert code == 2 and needle in out["error"]
+
+
+def test_jobs_and_apply_combine_must_shard_rulings_instead_of_the_unsharded_file(tmp_path, capsys):
+    mod = module()
+    items = [finding(1, severity="Must fix"), finding(2, severity="Must fix"), finding(3)]
+    f_path = write(tmp_path / "findings.json", items)
+    in_path = str(tmp_path / "adjudication-input.json")
+    assert run(mod, capsys, "prepare", "--findings", f_path, "--out", in_path, "--seed", "7",
+               "--must-out", str(tmp_path / "adjudication-input-must.json"),
+               "--should-out", str(tmp_path / "adjudication-input-should.json"),
+               "--must-shard-size", "1")[0] == 0
+    shard_ids = [json.loads((tmp_path / ("adjudication-input-must-%d.json" % k)).read_text())["findings"][0]["id"]
+                 for k in (1, 2)]
+    write(tmp_path / "rulings-must-1.json", raw_rulings([agree(shard_ids[0])]))
+    write(tmp_path / "rulings-must-2.json", raw_rulings([issue_wrong(shard_ids[1])]))
+    # a stale unsharded lane file must not be read alongside the shard files
+    write(tmp_path / "rulings-must.json", raw_rulings([agree(shard_ids[1])]))
+    write(tmp_path / "rulings-should.json", raw_rulings([agree("A3")]))
+    rulings_path = str(tmp_path / "rulings.json")
+    j_path = str(tmp_path / "prover-jobs.json")
+    assert run(mod, capsys, "jobs", "--input", in_path, "--rulings", rulings_path, "--out", j_path, "--seed", "7")[0] == 0
+    combined = json.loads(Path(rulings_path).read_text())
+    assert sorted(r["id"] for r in combined["rulings"]) == ["A1", "A2", "A3"]
+    jobs = json.loads(Path(j_path).read_text())["jobs"]
+    assert [job["finding"] for job in jobs] == [shard_ids[1]]
+
+
+def test_preserve_unreproduced_keeps_quote_only_issue_wrong_as_disputed_and_drops_repro(tmp_path, capsys):
+    mod = module()
+    items = [finding(1), finding(2)]
+    f_path = write(tmp_path / "findings.json", items)
+    in_path = str(tmp_path / "adjudication-input.json")
+    r_path = str(tmp_path / "rulings.json")
+    j_path = str(tmp_path / "prover-jobs.json")
+    v_path = str(tmp_path / "verdicts.json")
+    out_path = str(tmp_path / "adjudicated.json")
+    assert run(mod, capsys, "prepare", "--findings", f_path, "--out", in_path, "--seed", "7")[0] == 0
+    write(Path(r_path), raw_rulings([issue_wrong("A1"), issue_wrong("A2")]))
+    assert run(mod, capsys, "jobs", "--input", in_path, "--rulings", r_path, "--out", j_path, "--seed", "7")[0] == 0
+    jobs = json.loads(Path(j_path).read_text())["jobs"]
+    verdicts = []
+    for job in jobs:
+        adj_side = "A" if job["a_is"] == "adjudicator" else "B"
+        kind = "quote" if job["finding"] == "A1" else "repro"
+        verdicts.append({"job": job["job"], "verdict": adj_side, "evidence_kind": kind, "evidence": "proof text"})
+    write(Path(v_path), {"verdicts": verdicts})
+    assert run(mod, capsys, "apply", "--input", in_path, "--rulings", r_path, "--jobs", j_path,
+               "--verdicts", v_path, "--out", out_path, "--preserve-unreproduced")[0] == 0
+    res = json.loads(Path(out_path).read_text())
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["adjudication"]["outcome"] == "disputed"
+    assert res["adjudication"]["tally"]["disputed"] == 1
+    assert res["adjudication"]["tally"]["dropped"] == 1
+    assert len(res["adjudication"]["checked_and_dropped"]) == 1

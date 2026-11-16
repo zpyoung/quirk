@@ -46,6 +46,24 @@ def test_deep_flag_routes_to_its_runbook_without_expanding_the_skill():
         assert "$REFS/lenses/" + lens_id + ".md" not in text
 
 
+
+def test_quick_and_vendor_flags_route_to_their_runbooks_and_scripts():
+    text = SKILL_MD.read_text(encoding="utf-8")
+    hint = _front_matter(text)["argument-hint"]
+    assert "[--quick]" in hint
+    assert "[--vendor anthropic|openai|google|xai|auto]" in hint
+    assert "$REFS/quick.md" in text
+    assert "$REFS/fable.md" in text
+    quick_doc = (SKILL_DIR / "references" / "quick.md").read_text(encoding="utf-8")
+    assert '"$SCRIPTS/quick_review.py" prepare' in quick_doc
+    assert '"$SCRIPTS/quick_review.py" finalize' in quick_doc
+    for doc_name in ("fable.md", "deep.md"):
+        doc = (SKILL_DIR / "references" / doc_name).read_text(encoding="utf-8")
+        assert '"$SCRIPTS/fable_pipeline.py" setup' in doc
+        assert '"$SCRIPTS/fable_pipeline.py" prepare-focuses' in doc
+        assert '"$SCRIPTS/fable_pipeline.py" wait-and-prepare-fable' in doc
+        assert '"$SCRIPTS/fable_pipeline.py" finalize' in doc
+
 def test_deep_prompts_are_separate_from_the_standard_lens_roster():
     assert not set(DEEP_PROMPTS) & set(_lens_ids())
     for lens_id, escalation in (("_area-finder", "false"), ("_contract", "false"),

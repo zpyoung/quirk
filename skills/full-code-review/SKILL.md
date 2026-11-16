@@ -2,7 +2,7 @@
 name: full-code-review
 description: Use when asked for a full, multi-lens code review of a GitHub pull request, a GitLab merge request, a branch, or local changes ("full review", "full code review", "review this PR", "review this MR"). Runs up to 14 specialist lenses in parallel (correctness, safety, risk, claim verification, scope, data layer, cross-repo impact, conventions, comments, observability, resilience, and three test lenses), merges them into one deduped, severity-ranked report with an HTML triage page, remembers triage decisions across re-reviews, and posts only human-approved findings (author inline comments, or one batched reviewer review). Advisory only; it never approves or merges on its own.
 user-invocable: true
-argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--deep [minutes]] [--since <ref>] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
+argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--vendor anthropic|openai|google|xai|auto] [--seat author|reviewer] [--fresh] [--quick] [--no-escalate] [--deep [minutes]] [--since <ref>] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
@@ -67,8 +67,10 @@ A review with no supported forge still runs and delivers locally.
 | `--pack <dir>` | Use this org pack instead of the user pack for this run. |
 | `--seat author\|reviewer` | Only when both you and another author committed to the change. |
 | `--fresh` | Discard remembered triage decisions for this target. |
+| `--vendor anthropic\|openai\|google\|xai\|auto` | Select model vendor preset across pre-pass, focus swarm, and verifier (`$REFS/fable.md`). |
+| `--quick` | Fast single-wave parallel review (`$REFS/quick.md`). When passed, follow `$REFS/quick.md` from Step 1. |
 | `--no-escalate` | Keep every lens on its default model tier. |
-| `--deep [minutes]` | Opt-in deep defect hunt; default 60m. Start its clock at invocation, before Step 1; follow `$REFS/deep.md`. |
+| `--deep [minutes]` | Opt-in deep defect hunt & high-reasoning 3-wave review with automatic sandbox execution/mutation-probe consent when trusted; default 60m. Start its clock at invocation, before Step 1; follow `$REFS/deep.md` (or `$REFS/fable.md` for default Standard mode). |
 | `--since <ref>` | Review only changes after `<ref>` (for example the head SHA of the last review, to check fix commits). Report only: no memory, no posting. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
 | `--add-guidance "<note>"` | Capture a review lesson, then stop. |
@@ -481,9 +483,7 @@ completion failure never undoes or misreports the published review.
 
 ## Degradation
 
-`$REFS/degradation.md` lists every degraded path and what the report must say about
-it. The short version: a degraded review still runs, and the report never claims
-coverage it did not have.
+`$REFS/degradation.md` lists every degraded path and what the report must say about it: a degraded review still runs, and the report never claims coverage it did not have.
 
 ## Boundaries
 
