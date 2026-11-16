@@ -173,13 +173,16 @@ def test_resolve_vendor_models_supports_all_vendors():
         "vendor": "anthropic", "prepass": "fable", "swarm": "haiku", "verifier": "fable", "shards": 1
     }
     assert fp.resolve_vendor_models("openai", "standard") == {
-        "vendor": "openai", "prepass": "codex", "swarm": "codex-mini", "verifier": "codex", "shards": 4
+        "vendor": "openai", "prepass": "sol", "swarm": "luna", "verifier": "sol", "shards": 4
     }
     assert fp.resolve_vendor_models("openai", "deep") == {
-        "vendor": "openai", "prepass": "codex-max", "swarm": "codex-mini", "verifier": "codex-max", "shards": 1
+        "vendor": "openai", "prepass": "astra", "swarm": "luna", "verifier": "astra", "shards": 1
     }
     assert fp.resolve_vendor_models("google", "standard") == {
-        "vendor": "google", "prepass": "gemini", "swarm": "flash", "verifier": "gemini", "shards": 4
+        "vendor": "google", "prepass": "argon", "swarm": "flash", "verifier": "hydrogen", "shards": 4
+    }
+    assert fp.resolve_vendor_models("google", "deep") == {
+        "vendor": "google", "prepass": "argon", "swarm": "flash", "verifier": "argon", "shards": 1
     }
     assert fp.resolve_vendor_models("xai", "deep") == {
         "vendor": "xai", "prepass": "grok", "swarm": "grok", "verifier": "grok", "shards": 1

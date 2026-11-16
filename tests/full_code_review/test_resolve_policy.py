@@ -700,6 +700,13 @@ def test_vendor_preset_maps_default_lenses_and_adjudicator_across_providers(tmp_
     rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
     assert rc == 0
     assert policy["vendor"] == "openai"
-    assert _lens(policy, "correctness")["model"] == "codex"
+    assert _lens(policy, "correctness")["model"] == "sol"
     assert _lens(policy, "db")["model"] == "google/gemini-3.8-flash"
-    assert policy["adjudicator"]["model"] == "codex-max"
+    assert policy["adjudicator"]["model"] == "sol"
+
+    _write(repo / "REVIEW.md", "---\nvendor: google\n---\n")
+    rc2, policy2, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc2 == 0
+    assert policy2["vendor"] == "google"
+    assert _lens(policy2, "correctness")["model"] == "hydrogen"
+    assert policy2["adjudicator"]["model"] == "argon"

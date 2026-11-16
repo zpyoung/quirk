@@ -4,7 +4,7 @@ When `--deep [minutes]` is passed, run the **Unified 3-Wave High-Reasoning + Aut
 
 ## Fast-Path 3-Wave Deep + Auto-Execution Runbook (`--deep`)
 
-1. **Stage 0 (Setup + Automatic Execution Consent + Area Map) & Wave 1 (Flagship Pre-Pass: `fable` / `codex-max` / `gemini` / `grok`):**
+1. **Stage 0 (Setup + Automatic Execution Consent + Area Map) & Wave 1 (Flagship Pre-Pass: `fable` / `astra` / `argon` / `grok`):**
    If `$REVIEW_OUT_DIR/prepass-bundle.md` does not yet exist, run:
    ```bash
    export REVIEW_OUT_DIR="${REVIEW_OUT_DIR:-$(mktemp -d -t quirk-review.XXXXXX)}"
@@ -12,19 +12,19 @@ When `--deep [minutes]` is passed, run the **Unified 3-Wave High-Reasoning + Aut
      [--change <number> -R <owner/repo> | --branch <name> | --local] [--forge github|gitlab|none] [--since <ref>] [--seat author|reviewer] [--vendor anthropic|openai|google|xai|auto]
    ```
    `setup --deep` automatically runs `deep_sandbox.py check-trust`, sets `consent: true` in `deep-trust.json` and `mutation_consent: true` in `review-source.json` when trusted, builds `area-map.json` via `build_area_map.py`, and writes `prepass-bundle.md` (including the coupled areas `A1..Ak`).
-   Perform the **Wave 1 Pre-Pass** on the vendor's deep flagship model (`fable` for `anthropic`, `codex-max` for `openai`, `gemini` for `google`, `grok` for `xai` — either directly/via `Agent` or via `python3 "$SCRIPTS/fable_pipeline.py" run-wave --run-dir "$REVIEW_OUT_DIR" --wave prepass --vendor <vendor> --deep`):
+   Perform the **Wave 1 Pre-Pass** on the vendor's deep flagship model (`fable` for `anthropic`, `astra` for `openai`, `argon` for `google`, `grok` for `xai` — either directly/via `Agent` or via `python3 "$SCRIPTS/fable_pipeline.py" run-wave --run-dir "$REVIEW_OUT_DIR" --wave prepass --vendor <vendor> --deep`):
    - Read `$REVIEW_OUT_DIR/prepass-bundle.md` in one `Read` call and write `$REVIEW_OUT_DIR/prepass.json` using `Write`.
    - Run:
      ```bash
      python3 "$SCRIPTS/fable_pipeline.py" prepare-focuses --run-dir "$REVIEW_OUT_DIR" --deep
      ```
 2. **Wave 2 (All 25 Focus Subagents in Parallel with Mutation Probe Enabled):**
-   Spawn all 25 focus prompts under `$REVIEW_OUT_DIR/focus/prompts/` (`haiku` for `anthropic`, `codex-mini` for `openai`, `flash` for `google`, `grok` for `xai` — or run `python3 "$SCRIPTS/fable_pipeline.py" run-wave --run-dir "$REVIEW_OUT_DIR" --wave swarm --vendor <vendor> --deep`), then run:
+   Spawn all 25 focus prompts under `$REVIEW_OUT_DIR/focus/prompts/` (`haiku` for `anthropic`, `luna` for `openai`, `flash` for `google`, `grok` for `xai` — or run `python3 "$SCRIPTS/fable_pipeline.py" run-wave --run-dir "$REVIEW_OUT_DIR" --wave swarm --vendor <vendor> --deep`), then run:
    ```bash
    python3 "$SCRIPTS/fable_pipeline.py" wait-and-prepare-fable --run-dir "$REVIEW_OUT_DIR" --shards 1 --verifier-model fable --deep
    ```
 3. **Wave 3 (Single Deep Verifier / De-duper with Live Sandbox Copy) & Finalize:**
-   Spawn **one foreground verifier** (`fable` / `codex-max` / `gemini` / `grok`, or `run-wave --wave verifier --deep`) to read `$REVIEW_OUT_DIR/fable-verifier-prompt.md` (using `deep_sandbox.py exec` on `copy-verifier.json` when live execution helps prove/refute a claim), write `$REVIEW_OUT_DIR/fable-ledger.json`, and run:
+   Spawn **one foreground verifier** (`fable` / `astra` / `argon` / `grok`, or `run-wave --wave verifier --deep`) to read `$REVIEW_OUT_DIR/fable-verifier-prompt.md` (using `deep_sandbox.py exec` on `copy-verifier.json` when live execution helps prove/refute a claim), write `$REVIEW_OUT_DIR/fable-ledger.json`, and run:
    ```bash
    python3 "$SCRIPTS/fable_pipeline.py" finalize --run-dir "$REVIEW_OUT_DIR" --prepass-model fable --verifier-model fable --deep
    ```

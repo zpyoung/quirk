@@ -6,9 +6,10 @@ Use this runbook for **Standard Mode** (default, when neither `--quick` nor `--d
 |---|---|---|---|---|
 | **`anthropic`** *(default)* | **Standard** | `opus` (`claude-opus-5-5`) | `25 × haiku` (`claude-haiku-5-5`) | `4 × sonnet` shards (`claude-sonnet-5-5`) |
 | **`anthropic`** | **`--deep`** | `fable` (`claude-fable-5-2`) | `25 × haiku` (`mutation probe: enabled`) | `1 × fable` (`copy-verifier.json` sandbox) |
-| **`openai`** | **Standard** | `codex` (`gpt-6.1-sol`) | `25 × codex-mini` (`gpt-6-luna`) | `4 × codex` shards (`gpt-6.1-sol`) |
-| **`openai`** | **`--deep`** | `codex-max` (`gpt-6.1-sol` max) | `25 × codex-mini` (`mutation probe: enabled`) | `1 × codex-max` (`copy-verifier.json` sandbox) |
-| **`google`** | **Standard / `--deep`** | `gemini` (`gemini-3.1-pro`) | `25 × flash` (`gemini-3.8-flash`) | `4 × gemini` shards / `1 × gemini` |
+| **`openai`** | **Standard** | `sol` (`gpt-6.1-sol`) | `25 × luna` (`gpt-6-luna`) | `4 × sol` shards (`gpt-6.1-sol`) |
+| **`openai`** | **`--deep`** | `astra` (`gpt-6-astra`) | `25 × luna` (`mutation probe: enabled`) | `1 × astra` (`copy-verifier.json` sandbox) |
+| **`google`** | **Standard** | `argon` (`gemini-4-argon`) | `25 × flash` (`gemini-3.8-flash`) | `4 × hydrogen` shards (`gemini-4-hydrogen`) |
+| **`google`** | **`--deep`** | `argon` (`gemini-4-argon`) | `25 × flash` (`mutation probe: enabled`) | `1 × argon` (`copy-verifier.json` sandbox) |
 | **`xai`** | **Standard / `--deep`** | `grok` (`grok-4.7`) | `25 × grok` (`grok-4.7`) | `4 × grok` shards / `1 × grok` |
 
 Never skip a wave and never run a focus or verifier pass inline yourself. The shell may be zsh, so keep commands POSIX or use `bash <file>`.

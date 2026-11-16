@@ -5,8 +5,8 @@ Use this runbook when `--quick` is passed. Quick mode replaces the multi-wave re
 | Vendor (`--vendor`) | 4 Deep Packs (`correctness`, `safety-db`, `cross-repo-and-callers`, `conventions-and-docs`) | 3 Fast Packs (`resilience-and-observability`, `adversarial-and-scope`, `tests-and-adequacy`) |
 |---|---|---|
 | **`anthropic`** *(default)* | `sonnet` (`claude-sonnet-5-5`) | `haiku` (`claude-haiku-5-5`) |
-| **`openai`** | `codex` (`gpt-6.1-sol`) | `codex-mini` (`gpt-6-luna`) |
-| **`google`** | `gemini` (`gemini-3.1-pro`) | `flash` (`gemini-3.8-flash`) |
+| **`openai`** | `sol` (`gpt-6.1-sol`) | `luna` (`gpt-6-luna`) |
+| **`google`** | `hydrogen` (`gemini-4-hydrogen`) | `flash` (`gemini-3.8-flash`) |
 | **`xai`** | `grok` (`grok-4.7`) | `grok` (`grok-4.7`) |
 
 Never read the diff, source files, or sibling repositories in the coordinator session — `$SCRIPTS/quick_review.py prepare` pre-bundles the annotated diff, line-numbered source windows, cross-repo sibling grep hits, and discovered guidance into each pack's self-contained prompt file.
