@@ -1,0 +1,27 @@
+{
+  "skill_name": "explaining-code",
+  "queries": [
+    {"query": "Explain this PR to the reviewers: https://github.com/acme/api/pull/412", "should_trigger": true},
+    {"query": "Make an explainer page for MR !42 so reviewers understand it", "should_trigger": true},
+    {"query": "Help reviewers understand what my branch feature/retry-queue changes", "should_trigger": true},
+    {"query": "Walk me through this diff in a page I can send to the team", "should_trigger": true},
+    {"query": "Explain my uncommitted changes to someone who hasn't seen the code", "should_trigger": true},
+    {"query": "Explain this design doc to the team: docs/specs/2026-11-01-billing-retries/tech.md", "should_trigger": true},
+    {"query": "Make a walkthrough video of this pull request for reviewers", "should_trigger": true},
+    {"query": "Turn the commits in main..release-2.4 into an explainer for the on-call team", "should_trigger": true},
+    {"query": "Write up what this GitLab merge request does, with a diagram and a worked example", "should_trigger": true},
+    {"query": "Can you explain this plan to the reviewers before we start building it? It's in PLAN.md", "should_trigger": true},
+    {"query": "I want a feature overview video and an explainer page for PR 88", "should_trigger": true},
+    {"query": "Review this PR for bugs", "should_trigger": false},
+    {"query": "Do a full code review of my branch", "should_trigger": false},
+    {"query": "Make a 30 second video announcing our new CLI release", "should_trigger": false},
+    {"query": "Make an HTML report of these test results", "should_trigger": false},
+    {"query": "Open a merge request for this branch", "should_trigger": false},
+    {"query": "Write a design doc for adding retries to the payment client", "should_trigger": false},
+    {"query": "What does this regex do?", "should_trigger": false},
+    {"query": "Address the review comments on my PR", "should_trigger": false},
+    {"query": "Split this branch into a stack of smaller PRs", "should_trigger": false},
+    {"query": "Write the PR description for this change", "should_trigger": false},
+    {"query": "Explain how the auth module in this repo works", "should_trigger": false}
+  ]
+}
