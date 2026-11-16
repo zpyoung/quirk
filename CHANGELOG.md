@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.11.16
+
+### Changes
+- feat: add explaining-code skill (#67)
+
 ## 2026.11.6
 
 ### Changes
