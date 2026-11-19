@@ -21,6 +21,7 @@ Commands below assume `P` is the video project folder (`~/Studio/videos/<date>-<
 
 - It runs the pinned version (0.8.185) with `pnpm dlx`, so a render made today matches one made next month.
 - It sets `HYPERFRAMES_NO_TELEMETRY=1`, `DO_NOT_TRACK=1` and `HYPERFRAMES_SKIP_SKILLS=1`, so `init` installs nothing global and no usage data leaves the machine.
+- It sets `pnpm_config_strict_dep_builds=false`. pnpm 12 otherwise fails every call with `ERR_PNPM_IGNORED_BUILDS` (esbuild's build script); the script stays ignored, as on older pnpm.
 - It removes every cloud key (Gemini, Google, provider keys) from the child's environment. A key in your shell is never permission to use it.
 - It appends `--describe false` to every `snapshot` and refuses `--describe true` (exit 2): describing sends frames to Gemini.
 - Output and exit code are the child's, unchanged. Pass `--project "$P"` so each call is logged to `calls.jsonl` for the review page.
@@ -118,7 +119,7 @@ Inline the brand's `:root` tokens in every composition and never link a styleshe
 - Bundled families need no `@font-face`: Inter, Montserrat, Outfit, Nunito, Oswald, League Gothic, Archivo Black, Space Mono, IBM Plex Mono, JetBrains Mono, EB Garamond, Playfair Display, Source Code Pro, Noto Sans JP, Roboto, Open Sans, Lato, Poppins.
 - Any other family needs an inline `@font-face` in the file that uses it (`src: url('assets/fonts/x.woff2')`, or `src: local('Exact Name')` for an installed font), or lint fails `font_family_without_font_face`.
 - Keep font files in `assets/fonts/`. Blender is stricter about formats than Chrome; see [3d.md](3d.md).
-- Proof is in the render log. Search it for `Injected deterministic @font-face rules for N requested font families`. `verify.py` fails when the line is missing or N is below the number of families in `brand.json`.
+- Proof is in the render log. Search it for `Injected deterministic @font-face rules for N requested font families` (Google-fetched families) and `Embedded local font file: assets/fonts/<file>` (a brand font loaded from its own file, such as a licensed face). `verify.py` counts a brand family as delivered when it is fetched by name or when one of its `brand.json` files is embedded, and fails when the brand has more families than were delivered.
 - The compiler fetches bundled families from Google Fonts into `~/.cache/hyperframes/fonts/` on first use. That is an outbound request for a public download, not an API call.
 
 ## Recipes
@@ -209,7 +210,8 @@ Lint and check do not see the compiler's `[WARN]` lines, which appear only in th
 
 | Log line | Meaning and fix |
 |---|---|
-| `Injected deterministic @font-face rules for N requested font families` | Should be present, with N at least the brand's family count. Missing means fallback fonts: inline the `:root` tokens and replace any `font:` shorthand ([Fonts](#fonts)). |
+| `Injected deterministic @font-face rules for N requested font families` | Should be present, with N plus any brand families embedded from local files at least the brand's family count. Missing means fallback fonts: inline the `:root` tokens and replace any `font:` shorthand ([Fonts](#fonts)). |
+| `Embedded local font file: assets/fonts/<file>` | A brand font served from its own file. It counts for the family whose `brand.json` `files` list that file name. |
 | `Video "<id>" has sparse keyframes ... causes seek failures and frame freezing` | The video has too few keyframes. `blender_render.py` encodes one per second; any other inserted video needs a re-encode with `-g <fps> -keyint_min <fps>` ([3d.md](3d.md#compositing-the-clip)). Re-render afterwards. |
 
 `verify.py` fails its `render_log` check on known-bad warnings such as the sparse-keyframes line ([review.md](review.md#the-verify-checks)). A warning it does not know still needs your eyes.

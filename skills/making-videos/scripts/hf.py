@@ -2,7 +2,8 @@
 """The one way making-videos runs HyperFrames: ``hf.py [--project DIR] -- <hyperframes args...>``.
 
 Runs ``pnpm dlx hyperframes@<HYPERFRAMES_VERSION> <args>`` with telemetry and skill installs
-switched off and every cloud credential removed from the child's environment. Unlike the other
+switched off, dependency build scripts left ignored rather than fatal, and every cloud credential
+removed from the child's environment. Unlike the other
 scripts it does not print one JSON object on success: the child's stdout and stderr pass through
 unchanged and the exit code is the child's. The wrapper itself reports problems as one JSON
 object on stdout.
@@ -42,6 +43,8 @@ FORCED_ENV = {
     "HYPERFRAMES_NO_TELEMETRY": "1",
     "DO_NOT_TRACK": "1",
     "HYPERFRAMES_SKIP_SKILLS": "1",
+    # pnpm 12 fails dlx on hyperframes' ignored esbuild build script; keep it ignored, not fatal
+    "pnpm_config_strict_dep_builds": "false",
 }
 
 

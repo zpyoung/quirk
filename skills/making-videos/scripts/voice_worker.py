@@ -210,20 +210,8 @@ def _cmd_say(args: argparse.Namespace) -> dict:
         raw = out_dir / f"{line['id']}.raw.wav"
         sf.write(str(raw), samples, rate)
         levels = normalize_clip(args.ffmpeg, raw, wav, rate)
-        clips.append(
-            {
-                "id": line["id"],
-                "wav": str(wav),
-                "raw": str(raw),
-                "duration_s": round(len(samples) / rate, 3),
-                **levels,
-            }
-        )
-        print(
-            f"{line['id']}: {clips[-1]['duration_s']}s {levels['lufs']} LUFS {levels['true_peak_dbtp']} dBTP {levels['normalization']}",
-            file=sys.stderr,
-        )
-    return {"clips": clips}
+        clips.append({"id": line["id"], "duration_s": round(len(samples) / rate, 3), **levels})
+    return {"dir": str(out_dir), "clips": clips}
 
 
 def _cmd_align(args: argparse.Namespace) -> dict:

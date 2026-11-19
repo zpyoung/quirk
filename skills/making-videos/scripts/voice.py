@@ -284,7 +284,46 @@ def _cmd_align(args: argparse.Namespace) -> None:
     result = _run_worker(
         ["align", "--model", args.model, "--ffmpeg", _ffmpeg_binary(), "--wavs", *map(str, wavs)]
     )
-    emit(result)
+    lines_path = Path(args.lines) if args.lines else project / "assets" / "lines.json"
+    mismatches: "Optional[list[dict]]" = None
+    checked = 0
+    if lines_path.is_file():
+        mismatches = []
+        for line in _load_lines(str(lines_path), need_text=False):
+            words_file = project / "assets" / "voice" / f"{line['id']}.words.json"
+            text = line.get("text")
+            if not (isinstance(text, str) and text.strip() and words_file.is_file()):
+                continue
+            heard = _read_json(words_file, "word timings")
+            if not isinstance(heard, list) or not all(isinstance(w, dict) and "start" in w for w in heard):
+                _fail(f"{words_file} must be a list of {{text, start, end}}")
+            checked += 1
+            mismatches.extend({"clip": line["id"], **d} for d in heard_differences(text, heard))
+    emit({**result, "mismatches": mismatches, "lines_checked": checked})
+
+
+def heard_differences(text: str, heard: "list[dict]") -> "list[dict]":
+    """Every span where Whisper's words differ from the script's, ignoring case and punctuation.
+
+    Stricter than ``script_words``: equal word counts are still compared word by word, so a misheard
+    "Absert" for "Upsert" is reported. A span whose joined letters match ("Claude-Code" heard as
+    "Claude Code") is not.
+    """
+    script = _script_tokens(text)
+    keys = [_key(t) for t in script]
+    heard_keys = [_key(str(h.get("text", ""))) for h in heard]
+    out = []
+    matcher = difflib.SequenceMatcher(None, keys, heard_keys, autojunk=False)
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        if tag == "equal" or "".join(keys[a0:a1]) == "".join(heard_keys[b0:b1]):
+            continue
+        at = heard[b0]["start"] if b1 > b0 else (heard[b0 - 1]["end"] if b0 else 0.0)
+        out.append({
+            "script": " ".join(script[a0:a1]),
+            "heard": " ".join(str(h.get("text", "")) for h in heard[b0:b1]),
+            "at_s": round(float(at), 3),
+        })
+    return out
 
 
 class Word(NamedTuple):
@@ -874,6 +913,7 @@ def build_parser() -> argparse.ArgumentParser:
     align = sub.add_parser("align", help="write <id>.words.json beside every clip in assets/voice")
     align.add_argument("--project", required=True, help="project directory")
     align.add_argument("--model", default="small.en", help="faster-whisper model name")
+    align.add_argument("--lines", help="lines file to check the heard words against (default assets/lines.json)")
     align.set_defaults(func=_cmd_align)
 
     caps = sub.add_parser("captions", help="build an SRT from word timings, optionally burn it in")

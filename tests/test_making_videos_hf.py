@@ -94,6 +94,13 @@ def test_telemetry_and_skills_env_set_and_secrets_scrubbed(env):
     assert "GEMINI_API_KEY" in common.SCRUB_ENV
 
 
+def test_ignored_dependency_builds_do_not_fail_the_dlx_install(env):
+    # pnpm 12 made an ignored build script (esbuild under hyperframes) fatal inside dlx
+    run_hf("--", "lint", env=env)
+    child_env = json.loads(Path(env["FAKE_ENV_DUMP"]).read_text())
+    assert child_env["pnpm_config_strict_dep_builds"] == "false"
+
+
 def test_snapshot_gets_describe_false_injected(env):
     proc = run_hf("--", "snapshot", "--at", "1.5", env=env)
     assert proc.returncode == 0
