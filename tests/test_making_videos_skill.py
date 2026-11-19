@@ -35,6 +35,10 @@ REQUIRED_STRINGS: dict[str, tuple[str, ...]] = {
     "references/cloud.md": ("cloud.py", "cloud_allow", "never permission", "calls.jsonl"),
     "references/gather.md": ("capture", "record.py", "native macOS"),
     "references/brand.md": ("brand save", "--confirm", "pronunciations", ":root"),
+    "references/quickref.md": (
+        "2.8 words per second", "one frame", "beats.json", "immediateRender: false", "title_safe", "review-notes.md",
+    ),
+    "references/code-walkthrough.md": ("code_walkthrough.py", "optional", "sync_shift", "excerpt", "custom"),
 }
 
 
