@@ -1,0 +1,19 @@
+.btn {
+  display: inline-flex;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+
+.btn:focus {
+  outline: none; /* expect */
+}
+
+.search-input {
+  outline: 0; /* expect */
+  border: 1px solid var(--border);
+}
+
+.btn:hover {
+  outline-offset: 2px;
+  background: var(--surface-2);
+}

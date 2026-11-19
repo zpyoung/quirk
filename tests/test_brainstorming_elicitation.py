@@ -80,8 +80,8 @@ def test_reference_file_is_linked_from_skill() -> None:
 def test_coverage_gate_is_a_checklist_step() -> None:
     body = skill()
     assert "Essential-coverage check" in body, "no coverage-gate checklist step"
-    assert "12. **Transition to implementation**" in body, \
-        "checklist not renumbered to 12 steps after inserting the gate"
+    assert "13. **Transition to implementation**" in body, \
+        "checklist not renumbered to 13 steps after inserting the gate and the UX review"
 
 
 def test_coverage_gate_in_flow_graph() -> None:

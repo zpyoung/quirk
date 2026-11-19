@@ -1,0 +1,30 @@
+{
+  "v": 1,
+  "kind": "design-section",
+  "stage": "design",
+  "title": "design-section step",
+  "index": 1,
+  "total": 3,
+  "sections": [
+    {
+      "id": "s0",
+      "title": "T",
+      "body_md": "x"
+    },
+    {
+      "id": "s1",
+      "title": "T",
+      "body_md": "x"
+    },
+    {
+      "id": "s2",
+      "title": "T",
+      "body_md": "x"
+    },
+    {
+      "id": "s3",
+      "title": "T",
+      "body_md": "x"
+    }
+  ]
+}

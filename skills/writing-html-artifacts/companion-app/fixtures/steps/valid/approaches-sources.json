@@ -1,0 +1,51 @@
+{
+  "v": 1,
+  "kind": "approaches",
+  "stage": "approaches",
+  "title": "approaches step",
+  "approaches": [
+    {
+      "id": "a",
+      "title": "Approach a",
+      "summary_md": "Summary **text**.",
+      "recommended": false,
+      "pros": [
+        "fast"
+      ],
+      "cons": [
+        "new"
+      ],
+      "sources": [
+        {
+          "title": "Docs",
+          "url": "https://example.com/a"
+        }
+      ],
+      "content_html": "<p>x</p>"
+    },
+    {
+      "id": "b",
+      "title": "Approach b",
+      "summary_md": "Summary **text**.",
+      "recommended": true,
+      "pros": [
+        "fast"
+      ],
+      "cons": [
+        "new"
+      ],
+      "sources": [
+        {
+          "title": "Local",
+          "url": "http://localhost:8080"
+        }
+      ]
+    },
+    {
+      "id": "c",
+      "title": "C",
+      "summary_md": "c",
+      "recommended": false
+    }
+  ]
+}

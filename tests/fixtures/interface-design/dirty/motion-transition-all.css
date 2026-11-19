@@ -1,0 +1,13 @@
+.card {
+  border: 1px solid var(--border);
+  transition: all 200ms ease; /* expect */
+}
+
+.chip {
+  transition-property: all; /* expect */
+  transition-duration: 150ms;
+}
+
+.tab {
+  transition: color 150ms ease, background-color 150ms ease;
+}

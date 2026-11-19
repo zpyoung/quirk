@@ -14,6 +14,7 @@ Write `<spec-dir>/logic.json` at `schemaVersion: 2`, `stage: 1`, `requirements: 
 - **Scenarios**: Given/When/Then plus `alternatives`, grouped under their behavior, plus an optional `example` for any scenario with something to show (data-state parts, a [details section](scenario-examples.md#details-sections), or both), written to [scenario-examples.md](scenario-examples.md) in the same pass. Write a scenario for every case a reviewer could rule on differently: each branch of the rule, each edge case, each known failure mode. There is no per-behavior limit, so never merge or cut a scenario to keep a behavior short; skip only one whose outcome another scenario under the same behavior already shows. A case no behavior's rule covers gets a new behavior rather than a stretched one. Specs written under the old three-per-behavior limit may still carry `extraReason`; it is ignored.
 - **Constraints**: non-behavioral requirements of kind `placement`, `verification`, `naming`, or `non-goal`, plus `other` for anything the four don't fit. Draw them from Decisions Locked and scope.
 - **Provenance**: a scenario or constraint Claude adds without asking carries `provenance: "claude"` and a `rationale`; anything decided in brainstorming carries the deciding `question` instead. A Claude-added item is preselected — Claude's `then` or `approve` shows as the value — but stays marked as Claude-added until a state entry exists; the preselection is not itself a decision.
+- **Screens**: when the brainstorm signed off a UX mock, add one `verification` constraint per screen and state, worded "<Screen>, <state>: matches mock" and linking `mock/mock.html` (and `mock/screens.md` for the inventory). Every gap in `screens.md` becomes an open question. When the review was skipped, record "UX review: skipped" in Decisions Locked and add no screen constraints. The `logic.json` schema is unchanged.
 - Point assumption `affects` and blind-spot `sources` / `resolvedBy` at scenario or constraint ids, not requirement ids — requirements do not exist yet.
 
 Keep IDs unique across every kind — behaviors, scenarios, constraints, assumptions, and blind spots all key one `itemHashes` map — and every cross-reference resolvable.
@@ -32,15 +33,25 @@ render_spec.py reapprove    <spec-dir> <export.json>
 render_spec.py challenges   <spec-dir> <export.json> [--json]
 ```
 
-`<spec-dir>` contains `logic.json`; its basename is the spec `slug`. Before opening a review, run `validate`, then `render --open`. `render` writes `review.html`, `logic.md`, and `.gitignore`, and prints the current `renderId`; it is deterministic for identical input. Do not install packages, build the page, or use a network path at spec time: the page is a local file and the renderer embeds the data in the prebuilt template.
+`<spec-dir>` contains `logic.json`; its basename is the spec `slug`. Before opening a review, run `validate`, then `render --open`; in a companion session run `render` without `--open`, because `--open` launches a separate browser tab (see [Review in a companion session](#review-in-a-companion-session)). `render` writes `review.html`, `logic.md`, and `.gitignore`, and prints the current `renderId`; it is deterministic for identical input. Do not install packages, build the page, or use a network path at spec time, except the local brainstorming companion described below: the page is a local file and the renderer embeds the data in the prebuilt template.
 
 Exit codes: 0 ok, 1 invalid input, 2 usage error, 3 stale render, wrong slug, or stage mismatch, 4 (fold/reapprove) unsigned export or a failed gate named on stderr, 5 (find-export) no export found, 6 the spec is a read-only v1 file — see [v1 specs are read-only](#v1-specs-are-read-only). Stage-3 exports use some codes differently; see [Stage 3: compare approaches](#stage-3-compare-approaches).
 
 Never work around an invalid or stale result by applying its decisions directly.
 
+### Review in a companion session
+
+When a brainstorming companion session is running, the review can run inside it instead of a browser tab, and exports come back without a download. Register the page, then show it as a step:
+
+```text
+python3 <writing-html-artifacts>/scripts/companion.py review SESSION <spec_dir>/review.html
+```
+
+Show a `spec-review` step with `format: "interactive"`; the companion iframes `/_quirk/review?t=<token>`. Wait for the reviewer with `companion.py next SESSION --after <cursor>`. Each export arrives as a `review-export` event whose payload is `{path, kind, stage?, signed?}`, and the file is already written beside `review.html`. Run `check-export`, `fold`, `reapprove`, and `challenges` on that path unchanged. Outside a companion session the page downloads the export as before.
+
 ## Stage-1 feedback rounds
 
-When the reviewer says they exported decisions, locate and check the export exactly as v1 does:
+When the reviewer says they exported decisions, or, in a companion session, when a `review-export` event arrives, locate and check the export exactly as v1 does:
 
 ```text
 render_spec.py find-export  <spec-dir> [--downloads <dir>]

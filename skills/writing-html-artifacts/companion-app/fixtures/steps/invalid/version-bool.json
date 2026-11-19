@@ -1,0 +1,23 @@
+{
+  "v": true,
+  "kind": "questions",
+  "stage": "questions",
+  "title": "questions step",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "prompt": "Pick one?",
+      "options": [
+        {
+          "id": "a",
+          "label": "Option a"
+        },
+        {
+          "id": "b",
+          "label": "Option b"
+        }
+      ]
+    }
+  ]
+}

@@ -72,7 +72,7 @@
 
 ## Integration with Brainstorming
 
-The `brainstorming` skill puts the ADHD decision to the user during checklist step 4, "Resolve gray areas" (its Gray Areas → Step 0). The offer is an `AskUserQuestion` with two answers — use the standard catalog set (recommended, no extra cost), or add ADHD-surfaced areas on top of it. The offer is skipped entirely on truly trivial work.
+The `brainstorming` skill puts the ADHD decision to the user during checklist step 4, "Resolve gray areas" (its Gray Areas → Step 0). The offer is a question on the companion's first question batch (an `AskUserQuestion` or orca ask only in the terminal flow) with two answers — use the standard catalog set (recommended, no extra cost), or add ADHD-surfaced areas on top of it. The offer is skipped entirely on truly trivial work.
 
 That path is **discovery-framed**: ADHD returns candidate gray areas rather than solutions, and they are appended to the standard set, never substituted for it.
 

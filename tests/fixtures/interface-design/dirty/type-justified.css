@@ -1,0 +1,8 @@
+.release-notes p {
+  text-align: justify; /* expect */
+  max-width: 68ch;
+}
+
+.release-notes li {
+  text-align: left;
+}

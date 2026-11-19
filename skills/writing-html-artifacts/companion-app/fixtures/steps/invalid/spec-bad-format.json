@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "kind": "spec-review",
+  "stage": "spec",
+  "title": "spec-review step",
+  "format": "html",
+  "spec_path": "docs/specs/x/logic.md",
+  "sections": [
+    {
+      "id": "goal",
+      "title": "Goal",
+      "body_md": "Ship it."
+    }
+  ]
+}

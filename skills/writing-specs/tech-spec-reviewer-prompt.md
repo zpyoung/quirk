@@ -35,7 +35,7 @@ Agent tool (general-purpose):
     | Fidelity | Every `logic.md` Decisions-Locked entry is implemented somewhere in the tech spec; none silently reinterpreted, narrowed, or dropped. |
     | Traceability | Every technical section back-links a `logic.md#anchor`; every link resolves to a real heading. |
     | No-Code | No pasted implementations or full test bodies. Any code block present is a justified, tagged exception — `CONTRACT:`, `SCHEMA:`, `COMMAND:`, `REGEX:`, `CONFIG:`, or `PSEUDOCODE (justified):` (≤3 lines). Flag any untagged code block. |
-    | Completeness | Each contract states preconditions, postconditions, invariants, and error behavior; each DO-NOT-CHANGE fence cites the reason it exists. |
+    | Completeness | Each contract states preconditions, postconditions, invariants, and error behavior; each DO-NOT-CHANGE fence cites the reason it exists. Every shape more than one unit builds against (a shared types file, sample data or fixtures, an API request/response) is pinned with the path of the file that will hold it. |
     | Buildability | Could a subagent with zero context for this conversation act on this spec without getting stuck or guessing? |
 
     ## Calibration

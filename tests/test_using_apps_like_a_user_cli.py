@@ -34,7 +34,7 @@ from harness import (  # noqa: E402
 )
 
 import _run  # noqa: E402
-from _types import Observation  # noqa: E402
+from _likeuser_types import Observation  # noqa: E402
 
 SECRET_PASSWORD = "s3cret-Pa55w0rd"
 SECRET_USER = "alice-the-tester"
@@ -1453,7 +1453,7 @@ class TestElectron:
 
     def test_a_native_observe_failure_on_an_electron_run_is_a_driver_error_not_a_renderer_snapshot(
             self, sb):
-        from _types import DriverError
+        from _likeuser_types import DriverError
 
         likeuser = load_cli_module()
         renderer = Observation(tree_text="- button Go", refs=["e1"], names={"e1": "Go"})

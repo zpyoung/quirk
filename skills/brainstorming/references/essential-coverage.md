@@ -62,6 +62,8 @@ asking them so the instruction can be honored.
 
 1. Every remaining Default-able item resolves to its recommended default.
 2. Each resolved item is recorded in Decisions Locked as `<decision> — assumed — fast-tracked`.
+   In a companion session, send each one through `decide` with `status: "assumed"`, which the
+   Decisions panel shows as "assumed, fast-tracked".
 3. Design proceeds immediately.
 
 The tag is what makes this safe. An assumed decision that reads identically to an approved one is
@@ -69,12 +71,14 @@ exactly what Decisions Locked exists to prevent.
 
 **How it is triggered.** A recognized free-text steer — "enough, design it", "go with your
 recommendations", "stop asking and build it", or a clear paraphrase. Recognize the intent, not a
-literal string. The fast-track skips the remaining questions, never the design presentation or its
-approval — the hard gate against implementation still holds.
+literal string. In a companion session the steer arrives as a chat message. The fast-track skips
+the remaining questions, never the design presentation or its approval — the hard gate against
+implementation still holds.
 
 **What it is never.** Never an option inside an `AskUserQuestion` call. That would consume one of
 only four slots, and it would put a delegation option in front of the user on every call — which
-the Checkpoint Rules forbid.
+the Checkpoint Rules forbid. It is likewise never an option on a companion question, for the same
+reason.
 
 ## The line this does not cross
 

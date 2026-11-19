@@ -1,0 +1,20 @@
+.alert {
+  border-left: 4px solid var(--danger); /* expect */
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+
+.note {
+  border-left: 3px solid var(--accent); /* expect */
+  border-radius: 4px;
+}
+
+.quote {
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+}
+
+.divider {
+  border-left: 1px solid var(--border);
+  border-radius: 2px;
+}

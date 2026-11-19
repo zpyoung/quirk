@@ -47,7 +47,7 @@ A `tech.md` is not free-form — it has required sections, because a fresh imple
 - **Architecture** — the real files and how they relate (and the key technologies/libraries in play), not a diagram of intent.
 - **Code references** — absolute paths, signatures, and symbols to create or modify, gathered by the deep-dive above.
 - **Contracts & interfaces** — for every unit other work depends on: preconditions, postconditions, invariants, error behavior.
-- **Data models / schemas** — exact field names and types, or request/response shapes, wherever the literal shape matters.
+- **Data models / schemas** — exact field names and types, or request/response shapes, wherever the literal shape matters. Pin every shape that more than one unit builds against, with the path of the file that will hold it: shared types files, sample data and fixtures, and API request/response shapes. `writing-plans` runs the units that share a pinned shape in parallel; a shape left unpinned here becomes a dependency edge in the plan.
 - **DO-NOT-CHANGE fences** — each names the exact region *and states why it's fenced*. A fence with no reason is not a fence, it's a suggestion; write the reason so a downstream re-check (at plan-build, and again at each task dispatch) can tell whether the fence still applies.
 - **Always / Ask / Never** — the same three-bucket constraint list a plan uses, but scoped to technical constraints (hard invariants to preserve vs. choices delegated to the implementer).
 - **Cross-cutting** — security, observability, data migration, and rollback concerns, where relevant.

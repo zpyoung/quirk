@@ -1,0 +1,240 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [
+    {
+      "id": "c1",
+      "tasks": [
+        "T4",
+        "T5"
+      ]
+    }
+  ],
+  "counts": {
+    "failed": 0,
+    "missing": 0,
+    "needs-you": 0,
+    "passed": 4,
+    "queued": 0,
+    "retrying": 0,
+    "running": 2,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T4"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T4",
+      "kind": "order",
+      "to": "T5"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T7"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T7"
+    }
+  ],
+  "last_update_at": 1793664503.0,
+  "now": 1793664505.0,
+  "questions": [],
+  "rounds": [],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664020.0,
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T7"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T6",
+        "T7"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664450.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "chain": "c1",
+      "downstream": [],
+      "ended_at": 1793664450.0,
+      "files": 1,
+      "id": "T4",
+      "labels": [],
+      "level": 2,
+      "mismatch": {
+        "git": "no commit",
+        "sdd": "passed",
+        "text": "SDD says passed; git has no commit for T4 yet"
+      },
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Report command",
+      "worktree": "/work/recharge/.worktrees/T4"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664503.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "chain": "c1",
+      "contract_md": "Add `ask`, `await` and `answer` to `companion.py`.",
+      "downstream": [],
+      "ended_at": 1793664503.0,
+      "files": 1,
+      "id": "T5",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Ask and answer commands",
+      "worktree": "/work/recharge/.worktrees/T5"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 1,
+      "id": "T6",
+      "labels": [],
+      "level": 2,
+      "mismatch": {
+        "git": "no worktree",
+        "sdd": "running",
+        "text": "SDD says running; git has no worktree for T6"
+      },
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "running",
+      "title": "Snapshot run key",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "contract_md": "Accept `run-stop` and `run-retry` on `/_quirk/app/event`.",
+      "downstream": [],
+      "files": 1,
+      "id": "T7",
+      "labels": [],
+      "level": 2,
+      "mismatch": {
+        "git": "merged",
+        "sdd": "running",
+        "text": "git shows T7 merged; SDD says running"
+      },
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "running",
+      "title": "Run events route",
+      "worktree": "/work/recharge/.worktrees/T7"
+    }
+  ]
+}

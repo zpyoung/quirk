@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "kind": "hand-off",
+  "stage": "hand-off",
+  "title": "hand-off step",
+  "choices": [
+    {
+      "id": "c0",
+      "label": "L",
+      "description": "D",
+      "recommended": true
+    },
+    {
+      "id": "c1",
+      "label": "L",
+      "description": "D",
+      "recommended": false
+    },
+    {
+      "id": "c2",
+      "label": "L",
+      "description": "D",
+      "recommended": false
+    },
+    {
+      "id": "c3",
+      "label": "L",
+      "description": "D",
+      "recommended": false
+    }
+  ]
+}

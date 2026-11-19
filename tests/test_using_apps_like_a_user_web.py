@@ -31,7 +31,7 @@ for _entry in (str(SCRIPTS), str(FAKES)):
 
 import _web  # noqa: E402
 import harness  # noqa: E402
-from _types import Action, DriverError  # noqa: E402
+from _likeuser_types import Action, DriverError  # noqa: E402
 
 LIVE = sys.platform == "darwin" and shutil.which("playwright-cli") is not None
 needs_live = pytest.mark.skipif(

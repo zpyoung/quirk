@@ -1,0 +1,215 @@
+{
+  "actions": [],
+  "git": {
+    "changed_at": 1793664431.0,
+    "observed_at": 1793664440.0,
+    "tasks": {
+      "F1": {
+        "commits": 0,
+        "files": [
+          "g.py"
+        ],
+        "merged": false,
+        "worktree_present": true
+      },
+      "T1": {
+        "commits": 1,
+        "files": [
+          "a.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T2": {
+        "commits": 1,
+        "files": [
+          "b.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T3": {
+        "commits": 1,
+        "files": [
+          "g.py"
+        ],
+        "merged": false,
+        "worktree_present": false
+      }
+    }
+  },
+  "now": 1793664445.0,
+  "questions": [],
+  "reports": [
+    {
+      "at": 1793664020.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T1",
+      "kind": "dispatch",
+      "n": 1,
+      "task": "T1",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "at": 1793664300.0,
+      "commit": "0101010101010101010101010101010101010101",
+      "kind": "commit",
+      "n": 2,
+      "task": "T1"
+    },
+    {
+      "at": 1793664025.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T2",
+      "kind": "dispatch",
+      "n": 3,
+      "task": "T2",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "at": 1793664320.0,
+      "commit": "0202020202020202020202020202020202020202",
+      "kind": "commit",
+      "n": 4,
+      "task": "T2"
+    },
+    {
+      "at": 1793664030.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T3",
+      "kind": "dispatch",
+      "n": 5,
+      "task": "T3",
+      "worktree": "/work/recharge/.worktrees/T3"
+    },
+    {
+      "at": 1793664340.0,
+      "commit": "0303030303030303030303030303030303030303",
+      "kind": "commit",
+      "n": 6,
+      "task": "T3"
+    },
+    {
+      "at": 1793664305.0,
+      "head": "0101010101010101010101010101010101010101",
+      "kind": "merge",
+      "n": 7,
+      "task": "T1"
+    },
+    {
+      "at": 1793664325.0,
+      "head": "0202020202020202020202020202020202020202",
+      "kind": "merge",
+      "n": 8,
+      "task": "T2"
+    },
+    {
+      "at": 1793664345.0,
+      "kind": "hold",
+      "n": 9,
+      "round": "CP1",
+      "task": "T3"
+    },
+    {
+      "at": 1793664350.0,
+      "covers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "kind": "round-open",
+      "n": 10,
+      "round": "CP1",
+      "round_kind": "checkpoint",
+      "title": "Checkpoint 1"
+    },
+    {
+      "at": 1793664420.0,
+      "findings": [
+        {
+          "fix_task": "F1",
+          "id": "CP1-X1",
+          "lens": "types",
+          "reason": "T3 type checks fail on the watcher result shape",
+          "ruling": "accepted",
+          "severity": "high"
+        },
+        {
+          "id": "CP1-S1",
+          "lens": "scope",
+          "reason": "covered by T4",
+          "ruling": "dismissed",
+          "severity": "low"
+        }
+      ],
+      "kind": "round-close",
+      "n": 11,
+      "outcome": "fixes",
+      "round": "CP1"
+    },
+    {
+      "at": 1793664425.0,
+      "kind": "task-add",
+      "n": 12,
+      "round": "CP1",
+      "task": {
+        "deps": [
+          "T3"
+        ],
+        "id": "F1",
+        "order_after": [],
+        "title": "Fix type checks in the git watcher"
+      }
+    },
+    {
+      "at": 1793664430.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/F1",
+      "kind": "dispatch",
+      "n": 13,
+      "task": "F1",
+      "worktree": "/work/recharge/.worktrees/F1"
+    }
+  ],
+  "run": {
+    "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+    "branch": "feature/sdd-run-view",
+    "branch_pattern": "sdd/{run}/{task}",
+    "repo": "/work/recharge",
+    "run_id": "sdd-run-view",
+    "tasks": [
+      {
+        "deps": [],
+        "id": "T1",
+        "order_after": [],
+        "title": "Run store"
+      },
+      {
+        "deps": [],
+        "id": "T2",
+        "order_after": [],
+        "title": "Run fold"
+      },
+      {
+        "deps": [],
+        "id": "T3",
+        "order_after": [],
+        "title": "Git watcher"
+      },
+      {
+        "deps": [
+          "T1",
+          "T2"
+        ],
+        "id": "T4",
+        "order_after": [],
+        "title": "Report command"
+      }
+    ],
+    "v": 1
+  }
+}

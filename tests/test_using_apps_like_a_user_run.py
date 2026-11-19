@@ -17,7 +17,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "using-apps-like-a
 sys.path.insert(0, str(SCRIPTS))
 
 import _run as run  # noqa: E402
-from _types import MissingError, RunStateError, UsageError  # noqa: E402
+from _likeuser_types import MissingError, RunStateError, UsageError  # noqa: E402
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 

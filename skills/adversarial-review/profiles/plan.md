@@ -18,7 +18,7 @@ would pass on broken work, two "parallel" tasks writing the same file.
 - **Dependency-graph errors.** Task N consumes an artifact task N−1 does not produce. Walk the graph
   forward and check each declared input against the declared outputs of everything upstream.
 - **False parallelism.** Two tasks marked independent that write the same file, or that both depend
-  on a third's side effect. The failure mode is a merge conflict at the end of a wave, discovered
+  on a third's side effect. The failure mode is a merge conflict after both are built, discovered
   after the work is done.
 - **Acceptance that does not verify the contract.** "Tests pass" is not acceptance for a task whose
   contract is a behavior no test exercises. An acceptance criterion that would be satisfied by an

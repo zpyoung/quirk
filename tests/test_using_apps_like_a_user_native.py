@@ -26,7 +26,7 @@ import _desktop  # noqa: E402
 import _effects  # noqa: E402
 import _native  # noqa: E402
 from _native import CuaDriver, OrcaDriver, get_native_driver, parse_orca_envelope  # noqa: E402
-from _types import Action, DriverError, MissingError  # noqa: E402
+from _likeuser_types import Action, DriverError, MissingError  # noqa: E402
 
 FIXTURE_BUNDLE = "dev.quirk.uala.fixture"
 

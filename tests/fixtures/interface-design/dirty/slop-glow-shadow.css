@@ -1,0 +1,16 @@
+.cta {
+  background: #0b0d10;
+  box-shadow: 0 0 24px rgba(99, 102, 241, 0.6); /* expect */
+}
+
+.metric {
+  box-shadow: 0 0 20px #22d3ee; /* expect */
+}
+
+.panel {
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.3);
+}
+
+.card {
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+}

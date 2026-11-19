@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "kind": "design-section",
+  "stage": "design",
+  "title": "design-section step",
+  "index": 1,
+  "total": 3,
+  "sections": [
+    {
+      "id": "arch",
+      "title": "Architecture",
+      "diagram": "graph LR; A-->B"
+    },
+    {
+      "id": "data",
+      "title": "Data",
+      "body_html": "<p>Data</p>"
+    }
+  ]
+}

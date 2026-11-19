@@ -1,224 +1,209 @@
-# Visual Companion Guide
+# Visual Companion Guide (App Mode)
 
-Browser-based visual brainstorming companion for showing mockups, diagrams, and options.
+The companion's app mode runs a whole brainstorm inside one browser tab. You send the tab one **step** at a time (a question batch, approach cards, a design section, a spec review), the user's answers, chat messages and comments come back as **events**, and you post a live status line while you work. The terminal stays quiet.
 
-You describe each screen in a small `screen.json`; `companion.py` builds it into a single offline
-HTML page, serves the newest one from a local Python server, and records the user's clicks as
-JSONL events you read back. You never hand-write HTML, CSS, or JavaScript. Full protocol details
-(routes, exit codes, state files, check results) are in
-`../writing-html-artifacts/references/companion.md`, relative to this file.
-
-## When to Use
-
-Decide per-question, not per-session. The test: **would the user understand this better by seeing it than reading it?**
-
-**Use the browser** when the content itself is visual:
-
-- **UI mockups** — wireframes, layouts, navigation structures, component designs
-- **Architecture diagrams** — system components, data flow, state machines, entity relationships (Mermaid)
-- **Side-by-side visual comparisons** — two layouts, two color schemes, two design directions
-- **Design polish** — look and feel, spacing, visual hierarchy
-
-**Use the terminal** when the content is text or tabular:
-
-- **Requirements and scope questions** — "what does X mean?", "which features are in scope?"
-- **Conceptual A/B/C choices** and **tradeoff lists** — approaches described in words, pros/cons
-- **Technical decisions** — API design, data modeling, architectural approach selection
-- **Clarifying questions** — anything where the answer is words, not a visual preference
-
-A question *about* a UI topic is not automatically a visual question. "What kind of wizard do you want?" is conceptual — use the terminal. "Which of these wizard layouts feels right?" is visual — use the browser.
-
-## How It Works
-
-`companion.py` has five subcommands, each printing exactly one JSON object to stdout (diagnostics
-go to stderr): `start` launches a detached local server for a session, `show` builds a screen from
-your spec and makes it current, `wait` blocks until the user clicks Proceed, `events` prints the
-recorded events, and `stop` stops the server.
-
-Every screen shows your question, 2 to 4 option cards (single or multi select), a note field, and
-a Proceed button. Each option toggle posts a `click` event; Proceed posts a `proceed` event with
-the current selection and note. Events append to `<session>/state/events`.
+`companion.py` keeps the session's state on disk (steps, decisions, chat, comment threads, drafts), so a refresh, a closed tab or a restarted server loses nothing. The full contract (step schema, event schema, HTTP routes, exit codes) is the CLI contract, HTTP contract and Data models sections of `docs/quirk/specs/2026-11-02-companion-first-brainstorming/tech.md`. This file is the working protocol. The one-question screen mode (`show`, `wait`) is unchanged and belongs to `quirk:exploring-ideas`; do not use it here.
 
 ## Requirements
 
-Python 3 only: no Node, npm, or network step. If `python3` is unavailable, fall back to
-terminal-only brainstorming and tell the user.
+Python 3 only. If `python3` is missing, or `start` fails (exit 2, a bind error, a port the browser can't reach), the companion can't run: say why once in the terminal and run the terminal flow in [SKILL.md](SKILL.md#terminal-flow).
 
-**Finding the script.** This skill's directory is the one holding its `SKILL.md`; the host shows
-it when the skill loads. The companion is:
+**Finding the script.** This skill's directory is the one holding its `SKILL.md`; the host shows it when the skill loads. The companion is:
 
 ```
 <this skill's directory>/../writing-html-artifacts/scripts/companion.py
 ```
 
-Below, `$COMPANION` stands for that path; set it in your shell command and quote it.
+Below, `$COMPANION` stands for that path; set it in your shell command and quote it. Every subcommand prints exactly one JSON object and exits `0` ok, `1` timeout, `2` usage error or no server.
 
-## Starting a Session
+## Starting the session
 
-Use a session directory **inside the user's project** under `.quirk/brainstorm/`, with a unique
-name such as `session-1`:
+Use a session directory **inside the user's project** under `.quirk/brainstorm/`, with a unique name such as `session-1`:
 
 ```bash
 SESSION=".quirk/brainstorm/session-1"
-python3 "$COMPANION" start "$SESSION"
-# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1","allowed_hosts":[],"url":"http://127.0.0.1:53143",
-#  "screen_dir":".../session-1/screens","state_dir":".../session-1/state"}
+python3 "$COMPANION" start "$SESSION" --app
+# {"type":"server-started","pid":92913,"port":53143,"url":"http://127.0.0.1:53143","mode":"app", ...}
 ```
 
-The server detaches itself and `start` returns at once, so you do NOT need `run_in_background`.
-`start` is idempotent: a live server for the session is reused. Tell the user to open the `url`.
+The server detaches, so `start` returns at once and needs no `run_in_background`. **Print the `url` in the terminal and do not open a browser**; the user opens it themselves. `start` is idempotent for a live server.
 
-**Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down,
-`<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, which is
-self-ignored by git.
+**Remote or containerized setups.** The server binds `127.0.0.1`. When the user asks for remote access, or the URL is unreachable from their browser, add `--host 0.0.0.0 --allow-host <the name and port the browser uses>`, because the server answers 403 to any other `Host` header. **This exposes the session to anyone who can reach the port**, so use it only on a trusted network and only when the user agrees. A live server keeps its host flags: `stop` it first.
 
-**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is
-unreachable from the user's browser, add `--host 0.0.0.0` and
-`--allow-host <the name and port the browser uses>`, because the server answers 403 to any other
-`Host` header. For a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. A browser
-omits a default port from the `Host` header, so for a port 80 or 443 mapping use a bare host name with
-no port. A running server keeps the settings it started with: `start` with different host flags
-exits 2, so run `stop` first, then `start --host 0.0.0.0 --allow-host ...`.
-**This exposes the session on the network: anyone who can reach the port can read the screens and
-send events.** Use it only on a trusted network and only when the user agrees.
+The server exits after 30 minutes with no request (`--idle-minutes N` tunes it). An open tab polls every second, so it stays alive while the tab is open.
 
-The server exits after 30 minutes without a request or a `show` (tune with `--idle-minutes N`).
+## Sending a step
 
-## The Loop
-
-1. **Write a `screen.json`** (see Authoring Screens) with the Write tool. Never use cat or a
-   heredoc; it dumps noise into the terminal. Give each spec a semantic name such as
-   `layout.json`.
-
-2. **Show it:**
-
-   ```bash
-   python3 "$COMPANION" show "$SESSION" "$SESSION/layout.json"
-   # {"screen":"0003-layout","nonce":"...","url":"...","checks":{...}}
-   ```
-
-   - Exit `1` means a static check failed. The screen is written but NOT made current, and
-     `checks` says why. Fix the spec and show again.
-   - Exit `2` means a malformed `screen.json` or a missing session. If the server stopped, run
-     `start` again first.
-   - **Never reuse a screen.** Each `show` creates a new numbered screen (`NNNN-<slug>.html`);
-     to change one, edit the spec and show it again.
-
-3. **Tell the user what to expect and end your turn:**
-   - Remind them of the URL (every step, not just the first).
-   - Briefly summarize what's on screen ("Showing 3 layout options for the homepage") and ask
-     them to respond in the terminal, clicking an option if they like.
-
-4. **On your next turn**, read the events:
-
-   ```bash
-   python3 "$COMPANION" events "$SESSION" --screen 0003-layout
-   # {"events":[{"type":"click","screen":"0003-layout","choice":"two-col", ...}]}
-   ```
-
-   Merge them with the user's terminal text. **Terminal input outranks clicks**: if the two
-   disagree, the terminal message wins, and the clicks are context about what they explored.
-
-5. **Iterate or advance.** If feedback changes the screen, show a new one; move on only when the
-   current question is validated.
-
-6. **Unload when returning to the terminal.** When the next step doesn't need the browser, show a
-   short "continuing in the terminal" screen (it still needs 2 to 4 options) so the user isn't
-   staring at a resolved choice. Repeat until done.
-
-## Advancing with a Proceed button (no terminal round-trip)
-
-Every screen has a Proceed button, so you can skip the "end your turn and wait for the user to
-type" step. The tighter loop is: **show, `wait`, continue**.
+Write the step to a JSON file with the Write tool (never cat or a heredoc, which dumps noise into the terminal), then send it:
 
 ```bash
-python3 "$COMPANION" wait "$SESSION"
+python3 "$COMPANION" step "$SESSION" "$SESSION/layout.json"
+# {"step":"0004-questions","nonce":"...","url":"..."}
 ```
 
-`wait` blocks until the user clicks Proceed on the current screen, then prints:
+The open tab switches to it in place. A background tab gets the "(1) Your turn" title, a favicon badge and a sound. An invalid step exits `2` with `{"error","field"}` and nothing becomes current: fix the field and send again. Never reuse a step; each `step` call creates a new numbered one, so revise by sending a new step.
 
-```json
-{"proceed": {"type":"proceed","screen":"0003-layout","choice":null,"text":"Proceed","selected":["two-col"],"note":"keep the sidebar narrow","timestamp":1781015420.4},
- "clicks": [{"type":"click","choice":"two-col","selected":["two-col"], "...": "..."}]}
-```
+Every step has `v: 1`, `kind`, `stage` (`context`, `gray-areas`, `questions`, `approaches`, `ux-review`, `design`, `spec` or `hand-off`) and `title`, plus optional `intro_md` or `intro_html`. The `ux-review` stage shows in the rail only in UI sessions (a `ux-review` step or decision, or a registered mock). Unknown keys and kinds are rejected. Ids match `[a-z0-9-]{1,40}`.
 
-Read `proceed.selected` and `proceed.note`, then continue. `clicks` holds the click events for
-this screen in order.
+| Kind | Body | The user does |
+|---|---|---|
+| `questions` | 1 to 4 questions: `type` (`single`, `multi`, `text`), `prompt`, optional `header`, `recommended` (an option id), 2 to 4 `options` (`label`, `description`, `preview_html`), per-question `content_html` or Mermaid `diagram` | answers, skips, comments, submits once |
+| `approaches` | 2 to 3 cards: `title`, `summary_md`, `recommended`, `pros`, `cons`, `sources` (`title`, `url`) | picks one, optionally with a comment |
+| `mock-review` | `version` (a registered mock version, see [Mock review](#mock-review)) | clicks through the mock, pins comments, then picks Looks right, Needs changes or Skip review |
+| `design-section` | `index`, `total`, 1 to 3 `sections` (`title`, `body_md` or `body_html`, Mermaid `diagram`) | Looks right, or Needs changes plus a comment |
+| `spec-review` | `format: "markdown"` with `spec_path` and `sections`; or `format: "interactive"` | comments per section and signs off, or uses the review page |
+| `edit-card` | `decision_id`, `from`, `to`, `invalidates` (`label`, `step_id`), `origin` (`rail` or `chat`) | Confirms or cancels |
+| `hand-off` | 2 to 3 `choices` (`label`, `description`, `recommended`) | picks the execution skill |
+| `done` | `message_md` | nothing; the tab can close |
 
-- **Exit codes.** `0` is the payload above. `1` is a timeout (`{"status":"timeout","screen":...}`):
-  **re-run `wait`**, since the events file is append-only and nothing is lost between runs. `2`
-  is no live server (`{"status":"no-server"}`): run `start` again, then `show` the screen again.
-- **Timeout.** The default 110 seconds sits under a host's 120-second tool limit, so a timeout is
-  a clean exit 1 you can re-run. If you raise `--timeout`, raise the tool's own timeout above it.
-- **Stale screens.** `wait` returns only a Proceed for the screen that was current when it
-  started. When you `show` a newer screen, an open older tab gets a "superseded" banner, its
-  controls turn off, and the server rejects its clicks, so a stale click can't advance you.
-- **Terminal outranks clicks** here too. If the user types while you are blocked in `wait`, treat
-  the typed text as the answer.
+Rules that hold for every step:
 
-Remind the user of the URL and what's on screen before you call `wait`.
+- **Recommended means labeled and first, never preselected.** The shell renders the option marked by `recommended` first, with its own "(Recommended)" tag, so leave that suffix out of the label. Each answer stays a deliberate pick. Every `single` or `multi` question shows its own Other box, `text` questions carry no options, and the batch has one comment box. Skipping is always allowed.
+- **A revision sets `changed`** (`{summary, blocks}`): the shell highlights the named blocks and shows your one-line summary of what changed.
+- **Show options visually** whenever they differ in anything the user could see or feel. See [Showing options](#showing-options).
 
-## Authoring Screens
+## Showing options
 
-A `screen.json` looks like this:
+Default to a picture. When the options in a question differ visibly (layout, density, a state, how something moves or responds), give **every** option a `preview_html`; the shell then lays that question's options out as a side-by-side gallery instead of a list. Keep text-only options for choices with nothing to see, such as a policy or a default. A question-level `content_html` or `diagram` shows what all the options share, such as the structure they plug into. `diagram` takes Mermaid source only; put a `<q-flow>`, `<q-schema>` or `<q-sequence>` in `content_html` (or a design section's `body_html`), because the shell rejects HTML in `diagram`.
+
+What a preview can hold, cheapest first:
+
+- **A static mockup.** Inline HTML styled with the `--q-color-*` and `--q-space-*` tokens so it follows the theme, inline SVG, or an `<img>` with a `data:` URI. Draw an SVG's `viewBox` in real pixels and set `width` to the viewBox width, never `100%`: a fluid SVG scales to the column, so a 300-unit diagram on a wide screen renders its text several times too big. The shell still shrinks it on narrow screens. Show the real content the user will see (task names, statuses, counts), not lorem ipsum.
+- **Motion,** for anything that changes over time: a status ticking from running to passed, a row arriving, a fix loop retrying. Put a `<style>` block with `@keyframes` in the preview. The shell stops animations for users who ask for reduced motion, so the final frame must make sense on its own.
+- **Interaction,** when the difference is in how it feels to use. Kit elements (`q-tabs`, `q-board`, `q-flow`, `q-chart`, `q-compare`, `q-table`) are interactive and load on their own. For anything that needs script, use `<iframe sandbox="allow-scripts" srcdoc="...">` with a set `height`, because a `<script>` placed directly in `preview_html` never runs. An iframe does not inherit the page's theme, so give it colors that work in both schemes.
+
+A `<style>` block applies to the whole page, so scope every selector and keyframe name under a class unique to the step, such as `.s3-board`. Users can comment on any block, so label the nodes and options you expect them to react to. Which diagram fits which job is in the writing-html-artifacts components reference.
+
+Example, a first question batch (the adhd offer and the gray-area pick together):
 
 ```json
 {
-  "title": "Homepage layout",
-  "question": "Which homepage layout fits a reading-first product?",
-  "select": "single",
-  "options": [
-    {"id": "single-col", "label": "Single column", "description": "Focused, linear reading"},
-    {"id": "two-col", "label": "Two column", "description": "Sidebar nav beside main content",
-     "html": "<div style=\"display:flex;gap:8px\"><nav>Nav</nav><main>Content</main></div>"}
-  ],
-  "content": "<p>Optional notes, a comparison, or a larger mockup.</p>",
-  "diagram": "flowchart LR\n  A[Landing] --> B[Article]"
+  "v": 1, "kind": "questions", "stage": "gray-areas", "title": "What to clarify first",
+  "questions": [
+    {"id": "find-areas", "type": "single", "header": "Find gray areas",
+     "prompt": "Want me to run adhd to surface non-obvious decision areas for this request?",
+     "recommended": "standard",
+     "options": [
+       {"id": "standard", "label": "Use the standard set (Recommended)", "description": "Catalog areas only. No extra cost."},
+       {"id": "adhd", "label": "Add adhd areas", "description": "Spend 5-10x to surface ambiguities the catalog misses, added on top."}]},
+    {"id": "areas", "type": "multi", "header": "Gray areas",
+     "prompt": "Which of these areas should we clarify before designing?",
+     "options": [{"id": "layout-style", "label": "Layout style", "description": "Cards, list or grid changes how results scan."},
+                 {"id": "empty-state", "label": "Empty state", "description": "What a new user sees first."}]}
+  ]
 }
 ```
 
-- `title` is short and becomes the page `<title>`. `question` is what the user is deciding.
-- `select` is `"single"` (picking one deselects the others) or `"multi"` (each click toggles).
-- `options` has **2 to 4 entries**. Each `id` is stable and matches `[a-z0-9-]{1,40}`; it comes
-  back as the event `choice`. `label` comes back as `text`. `description` and `html` are optional;
-  `html` is a small mockup shown inside the card.
-- `content` is optional freeform HTML above the options: a mockup, a comparison, notes.
-- `diagram` is optional Mermaid source, rendered with the companion's built-in Mermaid build. It
-  works offline.
-- A screen that only shows something still offers choices about it ("Looks right", "Needs changes").
+## Waiting and acting on events
 
-Keep mockups simple: layout and structure, not pixel-perfect design.
+Run `next` **in the background** (`run_in_background: true`) with a long timeout, so its completion wakes you when the user acts. Keep the `cursor` it returns and pass it as `--after` next time.
 
-## Browser Events Format
-
-Events are recorded to `<session>/state/events`, one JSON object per line. The file is append-only
-and is never cleared, so filter by `screen` (`events --screen ID` does this) rather than assuming
-the last lines belong to the current screen.
-
-```jsonl
-{"type":"click","screen":"0003-layout","nonce":"...","choice":"two-col","text":"Two column","selected":["two-col"],"note":null,"timestamp":1781015415.2}
-{"type":"proceed","screen":"0003-layout","nonce":"...","choice":null,"text":"Proceed","selected":["two-col"],"note":"keep the sidebar narrow","timestamp":1781015420.4}
+```bash
+python3 "$COMPANION" next "$SESSION" --after "$CURSOR" --timeout 1800
+# {"events":[{"seq":12,"type":"submit","step":"0004-questions","payload":{...}}], "cursor":12}
 ```
 
-- `choice` / `text` come from the toggled option's `id` / `label`. On a `proceed`, `choice` is null.
-- `selected` is the full set of currently selected option ids (most useful in multi-select).
-- `note` is whatever the user typed in the note field, or null.
-- The click sequence can reveal hesitation worth asking about. With no events for the screen, use
-  only the user's terminal text.
+- Exit `1` is a timeout. Re-run with the same cursor; nothing is lost.
+- Exit `2` with `{"status":"no-server"}` means the server stopped (see Restarts).
+- Keep one `next` outstanding at a time. Drafts (half-typed answers) are never returned.
 
-## Design Tips
+Events, and what each one means for you:
 
-- **Scale fidelity to the question.** Wireframes for layout, polish for polish questions.
-- **Explain the question on each screen.** "Which layout feels more professional?" beats "Pick one".
-- **Iterate before advancing.** If feedback changes the screen, show a new version; never reuse one.
-- **2 to 4 options per screen.** More than that belongs in the terminal as a list.
+| Event | Payload | Act |
+|---|---|---|
+| `submit` | by step kind: `questions` `{answers: {qid: {selected, other, text, skipped}}}`, `approaches` `{pick}`, `mock-review` `{verdict: "looks-right"\|"needs-changes"\|"skip", comment?, visited, marks}`, `design-section` `{verdict}`, `spec-review` `{verdict: "sign-off"\|"changes"}`, `hand-off` `{pick}`; plus an optional `comment` | record the decisions and send the next step. A skip is logged as an open item, and re-asked only if a later step depends on it. |
+| `continue` | `{}` | "Continue without the rest" during research: stop the outstanding researchers, proceed with what returned, and mark the unfinished options "(research pending)" in the spec's Industry Insights |
+| `chat` | `{text}` | answer with `say`; leave the current step untouched. A chat message that changes a decision gets an edit card, never a silent change. |
+| `comment` | `{block_id, text, thread_id?}` | answer with `reply` |
+| `edit-request` | `{decision_id, to?, note?}` | send an `edit-card` (below) |
+| `edit-decision` | `{decision: "confirm"\|"cancel"}` | on `confirm`, apply the change; on `cancel`, change nothing and send the interrupted step again |
+| `review-export` | `{path, kind, stage?, signed?}` | an interactive review export, already written to the spec folder; continue the interactive rubric |
 
-## Cleaning Up
+Typed terminal input wins over the tab. Treat it as the user's answer, echo it into the chat with `python3 "$COMPANION" say "$SESSION" --from user --text "..."`, and update the step to match.
+
+## While you work
+
+Right after an event wakes you, set the status line, because the tab shows the waiting view until the next step arrives:
+
+```bash
+python3 "$COMPANION" status "$SESSION" --text "Checking 3 approaches against real-world reports, 2 of 3 done" --stage approaches --progress 2/3 --interruptible
+```
+
+- One plain line: the activity, counts and elapsed time are shown for you. Name the operation ("Reading recent commits"), never "Thinking".
+- Add `--interruptible` only during research, where Continue without the rest makes sense. `status --clear` removes the line.
+- Chat messages and comments sent now show as queued. Answer them as soon as you are free.
+
+## Recording decisions
+
+After each answered step, replace the Decisions panel's list with `decide`, which takes a JSON file holding the full list:
+
+```bash
+python3 "$COMPANION" decide "$SESSION" "$SESSION/decisions.json"
+# {"decisions": 7}
+```
+
+Each decision is `{id, stage, area, label, value, status, note?}` with `status` `confirmed`, `assumed` or `open`. `assumed` is a fast-tracked decision, shown as "assumed, fast-tracked". Skipped questions go in as `open`. The list is the source for the spec's Decisions Locked section, so keep it complete and current.
+
+## Chat and threads
+
+- **Chat is your whole voice.** Anything you would have said in the terminal goes through `say`:
+
+  ```bash
+  python3 "$COMPANION" say "$SESSION" --text "Context done. I found the export module and two prior formats."
+  ```
+
+  Use `--file F` for longer text. Chat text and comments render as plain text, so skip markup.
+- **Reply in the thread.** A `comment` event opens a thread pinned to its block (the thread id is on the event, and `snapshot` lists every thread). Answer with `python3 "$COMPANION" reply "$SESSION" THREAD_ID --text "..."`. When a revision addresses the comment, add `--resolve addressed`; use `--resolve not-addressed` when you decided against it.
+- **Edits go through an edit card.** For a rail Change or a chat request, send an `edit-card` step naming the decision, the old and new values, and everything it invalidates, then wait for `edit-decision`. On `confirm`, update `decide` and redo only the invalidated work.
+
+## Mock review
+
+For UI work, the UX review step shows a clickable mock inside the tab. Register each mock version, then send a `mock-review` step naming it:
+
+```bash
+python3 "$COMPANION" mock "$SESSION" mock-v1.html --version 1 --screens screens.json [--changed changed.json]
+# {"version": 1, "mock_url": "/_quirk/mock/1"}
+python3 "$COMPANION" mock-export "$SESSION" --version 3 --out docs/quirk/specs/<date-slug>/mock
+# {"files": ["...mock.html", "...screens.md", "...review.json"]}
+```
+
+Pins arrive as ordinary `comment` events and get a `reply` in their thread. The screens file, the mock's `data-*` keys, the review loop and the export are in [references/ux-review.md](references/ux-review.md); the full contract is in `docs/quirk/specs/2026-11-03-ux-review-step/tech.md`.
+
+## Interactive spec review
+
+When the user chose the interactive spec format, register the review page and send a `spec-review` step with `format: "interactive"`:
+
+```bash
+python3 "$COMPANION" review "$SESSION" path/to/review.html
+# {"review_url": "/_quirk/review"}
+```
+
+The page opens inside the tab and posts each stage's export straight back as a `review-export` event, with no downloaded file. A signed stage-2 export is the final approval, as in the interactive rubric. A markdown spec uses `format: "markdown"` instead: the user's Sign off is the review gate's approval, and per-section comments (block ids like `spec:<section_id>`) get `reply`.
+
+## Restarts and recovery
+
+State persists on disk, and `snapshot` prints exactly what the tab sees:
+
+```bash
+python3 "$COMPANION" snapshot "$SESSION"
+```
+
+If `next` reports `no-server`, or the tab shows "Paused, reconnecting", run `start "$SESSION" --app` again. It reuses the saved session and token and tries the previous port first. **When the port is the same, the open tab picks up where it was. When the new `url` differs, print it in the terminal**: an open tab can't follow a port change, and opening the new URL restores the step, drafts, chat and threads. App-state subcommands (`step`, `status`, `decide`, `say`, `reply`, `review`) write to disk and work even when the server is down.
+
+## The loop
+
+1. `start --app` once; print the URL.
+2. Send a `step`.
+3. Run `next` in the background and end your turn, or do independent work.
+4. On wake, read the events and act on each (table above). Run `status` before any slow work.
+5. Run `decide` with the updated list.
+6. Send the next `step`, then `next` again with the cursor.
+
+Finish with a `hand-off` step, then a `done` step. When the pick is quirk:subagent-driven-development, the `done` message is "Starting SDD in this tab": do not run `stop`, and hand SDD the session path so its run shows in this tab. For any other pick, clean up:
 
 ```bash
 python3 "$COMPANION" stop "$SESSION"
 # {"stopped": true}
 ```
 
-`stopped: false` just means no server was running. Screens persist in `.quirk/brainstorm/` for
-later reference, and the server also exits on its own after the idle timeout.
+`stopped: false` means no server was running. The session directory stays in `.quirk/brainstorm/` for reference, and that folder is self-ignored by git.

@@ -236,9 +236,39 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Priority**: P3
 - **Proposed owner**: unassigned
 
-## DEFER-29: making-videos: review half-resolution still copies to cut frame-review image tokens
+## DEFER-29: SDD Step 5 must pass each plan task's effort hint to the implementer dispatch
+- **Deferred**: 2026-11-02
+- **Session context**: plans-dag-shape: writing-plans task-sizing and effort rules
+- **Why deferred**: writing-plans now requires effort: lower | default | higher on every task, relative to the executor's implementer default. SDD Step 5 pins effort: "high" for every implementer and the Roles table lists Implementer effort as high, so the hint is dropped. The writing-plans change that added the hint kept SDD edits out of scope. Map the hint absolutely, because the Agent tool's relative lower/higher steps from the session effort, not from SDD's pinned high: lower -> medium, default -> high, higher -> xhigh. The pi binding maps to the matching --thinking level, capped by model.json. Fixers stay high. tests/test_adversarial_review_skill.py asserts 'effort: "high"' in sdd_step(5) and needs updating with it.
+- **Estimated effort**: S
+- **Priority**: P2
+- **Proposed owner**: the next SDD change (per-task dispatch landed in #61)
+
+## DEFER-30: Speed up the full test suite with pytest-xdist and Playwright context reuse
+- **Deferred**: 2026-11-03
+- **Session context**: SDD live task view run, final gate
+- **Why deferred**: Full suite takes ~29 min locally (python3 -m pytest -q, 8164 tests, measured 2026-11-03 during the SDD task-view run); out of scope for that work
+- **Estimated effort**: M
+- **Priority**: P3
+
+## DEFER-31: full-code-review: UI lens that runs interface-design's Review job
+- **Deferred**: 2026-11-05
+- **Session context**: quirk:interface-design skill landed on branch zpyoung/interface-design; logic spec docs/quirk/specs/2026-11-05-interface-design/logic.md lists it under Deferred Ideas.
+- **Why deferred**: User chose to ship the skill first (scope decision during brainstorm).
+- **Estimated effort**: M
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-32: interface-design detector: Vue, Svelte and plain-HTML coverage, and a real TSX lexer
+- **Deferred**: 2026-11-05
+- **Session context**: Branch zpyoung/interface-design; the regex detector covers CSS/SCSS/JSX/TSX only and documents comment/template edge cases as known limits (review.md 'What the detector cannot see') after three review rounds kept finding lexing edge cases.
+- **Why deferred**: Out of scope per logic spec non-goals; user picked documented limits over writing a lexer.
+- **Estimated effort**: L
+- **Priority**: P4
+- **Proposed owner**: unassigned
+
+## DEFER-33: making-videos: review half-resolution still copies to cut frame-review image tokens
 - **Deferred**: 2026-11-19
 - **Why deferred**: Verify takes one 1920x1080 still per storyboard scene and the agent reads each (~1.5k tokens, ~30k for a 20-scene 3-min video). 960x540 review copies (~0.7k each, full-res only to zoom on a typeface) would roughly halve that, but legibility of 20-30px text at half size is untested: no Pillow or ffmpeg drawtext on the machine to render a test frame. Test on a real render before adopting.
 - **Estimated effort**: S
 - **Priority**: P3
-

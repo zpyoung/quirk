@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock review</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --surface-2: #efefec;
+  --border: #d6d6d0;
+  --text: #1c1c1a;
+  --muted: #62625c;
+  --accent: #2f5fd0;
+  --accent-text: #ffffff;
+  --accent-soft: #e4ebfb;
+  --warn: #8a5a00;
+  --warn-soft: #fbf0d6;
+  --danger: #b3261e;
+  --ok: #1f7a3d;
+  --change: #c2410c;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --surface: #1f1f1d;
+    --surface-2: #2a2a27;
+    --border: #3d3d38;
+    --text: #ececE8;
+    --muted: #a5a59d;
+    --accent: #7ba0ff;
+    --accent-text: #0d1424;
+    --accent-soft: #232c45;
+    --warn: #f0c36a;
+    --warn-soft: #3a2f14;
+    --danger: #ff8a80;
+    --ok: #6fd08c;
+    --change: #fb923c;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, select, textarea { font: inherit; color: inherit; }
+button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+select { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+[hidden] { display: none !important; }
+
+.app { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.banner {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 12px;
+  font-weight: 600;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.chip {
+  display: inline-block;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); position: relative; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.status { color: var(--muted); font-size: 13px; margin-left: auto; min-height: 1.4em; }
+.status.error { color: var(--danger); }
+
+.body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr); }
+.rail {
+  overflow: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 10px 10px 16px;
+}
+.rail h2 { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 14px 4px 6px; }
+.rail h2:first-child { margin-top: 2px; }
+.rail ul { list-style: none; margin: 0; padding: 0; }
+.screen-item { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
+.screen-item.current { background: var(--accent-soft); }
+.screen-item > button.go {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+}
+.screen-item .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 2px solid var(--muted); align-self: center; }
+.dot.visited { background: var(--ok); border-color: var(--ok); }
+.count { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.mark { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); padding-right: 6px; cursor: pointer; }
+.note { color: var(--muted); font-size: 12px; margin: 2px 8px 4px; }
+.skipped li { margin: 2px 8px; font-size: 12px; color: var(--muted); }
+.pin-row { border: 1px solid var(--border); border-radius: 8px; margin: 0 2px 6px; background: var(--surface); }
+.pin-row.selected { border-color: var(--accent); }
+.pin-row > button.head { width: 100%; text-align: left; border: 0; background: transparent; padding: 6px 8px; display: block; }
+.pin-row .meta { color: var(--muted); font-size: 12px; }
+.badge { font-size: 11px; border-radius: 999px; padding: 0 7px; background: var(--surface-2); border: 1px solid var(--border); margin-left: 4px; white-space: nowrap; }
+.badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.ok { color: var(--ok); }
+.thread { padding: 0 8px 8px; }
+.msg { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.agent { background: var(--accent-soft); }
+.msg .who { display: block; font-size: 11px; color: var(--muted); }
+.msg.last-reply { outline: 2px solid var(--ok); }
+
+.stage { position: relative; min-width: 0; min-height: 0; overflow: auto; display: flex; justify-content: center; padding: 12px; background: var(--surface-2); }
+.frame-box { position: relative; width: 100%; max-width: 100%; height: 100%; min-height: 360px; background: #fff; border-radius: 6px; box-shadow: 0 0 0 1px var(--border), 0 1px 4px rgba(0,0,0,0.12); }
+.frame-box.mobile { width: 390px; }
+.frame-box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; border-radius: 6px; }
+.overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: 6px; }
+.box { position: absolute; pointer-events: none; border-radius: 2px; }
+.box.hover { outline: 2px solid var(--accent); outline-offset: 0; background: rgba(47, 95, 208, 0.08); }
+.box.changed { outline: 2px dashed var(--change); outline-offset: 1px; }
+.box .tag { position: absolute; left: 0; top: -20px; background: var(--accent); color: var(--accent-text); font-size: 11px; line-height: 16px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+.box.changed .tag { background: var(--change); color: #fff; }
+.pin {
+  position: absolute;
+  pointer-events: auto;
+  width: 26px; height: 26px; padding: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50% 50% 50% 4px;
+  background: var(--accent); color: var(--accent-text); border: 2px solid #fff;
+  font-weight: 700; font-size: 12px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.pin:hover:not(:disabled) { background: var(--accent); filter: brightness(1.12); }
+.pin.resolved { background: var(--ok); color: #fff; }
+.pin.selected { outline: 3px solid var(--text); }
+.pop {
+  position: absolute;
+  pointer-events: auto;
+  width: min(300px, calc(100% - 16px));
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+  padding: 10px;
+  z-index: 5;
+}
+.pop h3 { margin: 0 0 6px; font-size: 13px; }
+.pop textarea { width: 100%; min-height: 76px; resize: vertical; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.pop .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; align-items: center; }
+.pop .err { color: var(--danger); font-size: 12px; margin-right: auto; }
+
+.verdict { background: var(--surface); border-top: 1px solid var(--border); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.verdict .spacer { flex: 1; }
+.verdict .panel { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+.verdict .panel textarea { width: 100%; min-height: 64px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.verdict .panel .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.verdict .err { color: var(--danger); }
+.verdict .info { color: var(--muted); }
+
+@media (max-width: 760px) {
+  .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .rail { max-height: 34vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  .stage { padding: 6px; }
+  .frame-box.mobile { width: 390px; max-width: 100%; }
+  .status { margin-left: 0; flex-basis: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="banner" id="banner" hidden></div>
+  <header class="bar" id="toolbar">
+    <span class="chip" id="version-chip"></span>
+    <label id="version-wrap" hidden>Version <select id="version-picker" aria-label="Mock version"></select></label>
+    <div class="seg" role="group" aria-label="Mode">
+      <button type="button" id="mode-interact" aria-pressed="true">Interact</button>
+      <button type="button" id="mode-comment" aria-pressed="false">Comment</button>
+    </div>
+    <div class="seg" role="group" aria-label="Viewport">
+      <button type="button" id="vp-desktop" aria-pressed="true">Desktop</button>
+      <button type="button" id="vp-mobile" aria-pressed="false">Mobile 390px</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="show-changes"> Show changes</label>
+    <div class="seg" role="group" aria-label="State" id="state-switch" hidden></div>
+    <span class="status" id="status" role="status" aria-live="polite"></span>
+  </header>
+  <div class="body">
+    <nav class="rail" id="rail" aria-label="Screens"></nav>
+    <main class="stage">
+      <div class="frame-box" id="frame-box">
+        <iframe id="mock-frame" title="Mock under review"></iframe>
+        <div class="overlay" id="overlay">
+          <div id="layer-changes"></div>
+          <div id="layer-hover"></div>
+          <div id="layer-pins"></div>
+          <div id="layer-pop"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <footer class="verdict" id="verdict" hidden></footer>
+</div>
+<script id="quirk-mock-boot" type="application/json">null</script>
+<!--quirk-harness-core-->
+<script>
+(function () {
+  'use strict'
+  var Core = window.QuirkMockCore
+  var bootNode = document.querySelector('script[type="application/json"]')
+  var boot = null
+  try { boot = JSON.parse(bootNode.textContent) } catch (e) { boot = null }
+  var $ = function (id) { return document.getElementById(id) }
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag)
+    Object.keys(attrs || {}).forEach(function (k) {
+      var v = attrs[k]
+      if (v === null || v === undefined || v === false) return
+      if (k === 'class') n.className = v
+      else if (k === 'text') n.textContent = v
+      else if (k.slice(0, 2) === 'on') n.addEventListener(k.slice(2), v)
+      else n.setAttribute(k, v === true ? '' : v)
+    })
+    ;(kids || []).forEach(function (c) {
+      if (c === null || c === undefined || c === false) return
+      n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c)
+    })
+    return n
+  }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild) }
+
+  if (!boot || !boot.screens) {
+    document.body.insertBefore(el('p', { text: 'This page needs a mock to review. It was opened without one.', style: 'padding:16px' }), document.body.firstChild)
+    return
+  }
+
+  var appMode = boot.mode === 'app' && !!boot.token
+  var screens = boot.screens.screens || []
+  var uiLayer = boot.screens.ui_layer === true
+  var changed = new Set(boot.changed || [])
+  var gaps = Core.deriveGaps(boot.screens)
+  var frame = $('mock-frame')
+  var frameBox = $('frame-box')
+
+  var S = {
+    mode: 'interact',
+    viewport: 'desktop',
+    showChanges: false,
+    screenId: Core.currentScreenId('', boot.screens),
+    states: {},
+    visited: new Set(),
+    marks: new Set(),
+    snap: null,
+    paused: false,
+    openThread: null,
+    note: null,
+    panel: null,
+    changesText: '',
+    submitting: false,
+    verdictError: '',
+    notice: '',
+    noticeError: false,
+  }
+  var inner = null
+  var hoverEl = null
+  var dotPos = {}
+  var noticeTimer = null
+  var frameTick = 0
+
+  var visitedKey = 'quirk-mock-visited-v' + boot.version
+  try {
+    var saved = JSON.parse(sessionStorage.getItem(visitedKey) || '[]')
+    if (Array.isArray(saved)) saved.forEach(function (id) { S.visited.add(id) })
+  } catch (e) { /* storage can be unavailable; visited then lives for this page only */ }
+  function saveVisited() {
+    try { sessionStorage.setItem(visitedKey, JSON.stringify(Array.from(S.visited))) } catch (e) { /* see above */ }
+  }
+
+  // ---- derived values -------------------------------------------------------
+  function screenById(id) {
+    for (var i = 0; i < screens.length; i += 1) if (screens[i].id === id) return screens[i]
+    return null
+  }
+  function currentState() {
+    var s = screenById(S.screenId)
+    if (!s || !s.states || !s.states.length) return null
+    return S.states[s.id] || s.states[0]
+  }
+  function latestVersion() {
+    return S.snap && S.snap.mocks && S.snap.mocks.latest ? S.snap.mocks.latest : boot.latest
+  }
+  function versionList() {
+    var v = S.snap && S.snap.mocks && S.snap.mocks.versions ? S.snap.mocks.versions : boot.versions
+    return v && v.length ? v : [boot.version]
+  }
+  function canReview() { return Core.canReview(boot, S.snap) }
+  function staleVersion() { return Core.isStale(boot, S.snap) }
+  function readOnlyVersion() { return appMode && S.snap !== null && boot.version !== latestVersion() }
+
+  // ---- inner document lookups (attribute compares avoid selector escaping) ----
+  function findAttr(nodes, attr, value) {
+    for (var i = 0; i < nodes.length; i += 1) if (nodes[i].getAttribute(attr) === value) return nodes[i]
+    return null
+  }
+  function screenEl(id) {
+    return inner ? findAttr(inner.doc.querySelectorAll('[data-screen]'), 'data-screen', id) : null
+  }
+  function stateEls(scr) {
+    return Array.prototype.filter.call(scr.querySelectorAll('[data-state]'), function (e) { return e.closest('[data-screen]') === scr })
+  }
+  /** Elements keyed with data-pin in a screen and state, or null when the screen is not in the DOM. */
+  function pinEls(screenId, state) {
+    var scr = screenEl(screenId)
+    if (!scr) return null
+    var states = stateEls(scr)
+    if (states.length && state && !findAttr(states, 'data-state', state)) return []
+    return Core.pinNodes(scr, state, scr.querySelectorAll('[data-pin]'))
+  }
+  function visibleBox(node) {
+    var r = node.getBoundingClientRect()
+    return r.width > 0 || r.height > 0 ? r : null
+  }
+  function inventoryLabel(key) {
+    var s = screenById(S.screenId)
+    var elements = (s && s.elements) || []
+    for (var i = 0; i < elements.length; i += 1) {
+      if (elements[i].pin !== key) continue
+      if (uiLayer) return elements[i].component === null ? 'gap' : elements[i].component
+      return elements[i].label
+    }
+    return ''
+  }
+
+  // ---- pins -----------------------------------------------------------------
+  /** Every thread that is a pin, with its placement relative to the version on screen. */
+  function pinThreads() {
+    var out = []
+    var threads = (S.snap && S.snap.threads) || []
+    var n = 0
+    threads.forEach(function (t) {
+      var pin = Core.parsePinId(t.block_id)
+      if (!pin) return
+      n += 1
+      var placement = Core.classifyPin(pin, boot.version, latestVersion(), boot.screens, function (screenId, state) {
+        var els = pinEls(screenId, state)
+        return Core.viewedKeys(!!inner, S.screenId, screenId, els === null ? null : els.map(function (e) { return e.getAttribute('data-pin') }))
+      })
+      out.push({ n: n, thread: t, pin: pin, placement: placement })
+    })
+    return out.filter(function (p) { return p.placement !== 'hidden' })
+  }
+
+  function renderOverlay() {
+    var changesLayer = $('layer-changes')
+    var pinsLayer = $('layer-pins')
+    clear(changesLayer)
+    clear(pinsLayer)
+    dotPos = {}
+    if (!inner) return
+    if (S.showChanges) {
+      Array.prototype.forEach.call(inner.doc.querySelectorAll('[data-pin]'), function (node) {
+        if (!changed.has(node.getAttribute('data-pin'))) return
+        var r = visibleBox(node)
+        if (!r) return
+        changesLayer.appendChild(el('div', { class: 'box changed', style: 'left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px' }, [el('span', { class: 'tag', text: 'changed' })]))
+      })
+    }
+    if (appMode) {
+      var state = currentState()
+      pinThreads().forEach(function (p) {
+        if (p.placement !== 'draw' && p.placement !== 'reanchored') return
+        if (p.pin.screen !== S.screenId || (state && p.pin.state !== state)) return
+        var els = pinEls(p.pin.screen, p.pin.state) || []
+        var target = null
+        for (var i = 0; i < els.length; i += 1) {
+          if (els[i].getAttribute('data-pin') === p.pin.pin && visibleBox(els[i])) { target = els[i]; break }
+        }
+        if (!target) return
+        var r = target.getBoundingClientRect()
+        var left = r.left + (p.pin.x / 100) * r.width
+        var top = r.top + (p.pin.y / 100) * r.height
+        dotPos[p.thread.id] = { left: left, top: top }
+        var cls = 'pin' + (p.thread.resolution ? ' resolved' : '') + (S.openThread === p.thread.id ? ' selected' : '')
+        pinsLayer.appendChild(el('button', {
+          type: 'button',
+          class: cls,
+          style: 'left:' + left + 'px;top:' + top + 'px',
+          'aria-label': 'Pin ' + p.n + (p.thread.resolution ? ' (resolved)' : ''),
+          onclick: function (ev) { ev.stopPropagation(); selectThread(p.thread.id, false) },
+          text: String(p.n),
+        }))
+      })
+    }
+    renderThreadPop()
+  }
+
+  function messageNode(m, isLastReply) {
+    return el('div', { class: 'msg ' + (m.from === 'agent' ? 'agent' : 'user') + (isLastReply ? ' last-reply' : '') }, [
+      el('span', { class: 'who', text: m.from === 'agent' ? 'Agent' : 'You' }),
+      el('span', { text: String(m.text) }),
+    ])
+  }
+  function threadBody(p) {
+    var reply = Core.lastAgentMessage(p.thread)
+    var wrap = el('div', { class: 'thread' })
+    if (p.thread.resolution) {
+      wrap.appendChild(el('div', { class: 'meta', text: 'Resolved' + (typeof p.thread.resolution === 'string' ? ': ' + p.thread.resolution : '') }))
+      if (reply) wrap.appendChild(messageNode(reply, true))
+      var rest = p.thread.messages.filter(function (m) { return m !== reply })
+      rest.forEach(function (m) { wrap.appendChild(messageNode(m, false)) })
+    } else {
+      p.thread.messages.forEach(function (m) { wrap.appendChild(messageNode(m, false)) })
+    }
+    return wrap
+  }
+
+  function renderThreadPop() {
+    var layer = $('layer-pop')
+    layer.querySelectorAll('.pop.thread-pop').forEach(function (n) { n.parentNode.removeChild(n) })
+    if (!S.openThread || !dotPos[S.openThread]) return
+    var p = pinThreads().filter(function (x) { return x.thread.id === S.openThread })[0]
+    if (!p) return
+    var at = dotPos[S.openThread]
+    var boxW = frameBox.clientWidth
+    var left = Math.max(8, Math.min(at.left, boxW - 308))
+    var pop = el('div', { class: 'pop thread-pop', style: 'left:' + left + 'px;top:' + (at.top + 16) + 'px' }, [
+      el('h3', { text: 'Pin ' + p.n + ' on ' + p.pin.pin }),
+      el('div', { class: 'meta', text: p.placement === 'reanchored' ? 'Placed in v' + p.pin.version + ', shown on the same element here' : 'v' + p.pin.version }),
+      threadBody(p),
+      el('div', { class: 'row' }, [el('button', { type: 'button', text: 'Close', onclick: function () { S.openThread = null; renderOverlay(); renderRail() } })]),
+    ])
+    layer.appendChild(pop)
+  }
+
+  var noteShown = null
+  var noteUi = null
+  var NOTE_CLOSED_REASON = 'This review is no longer open for comments. Your text is kept so you can copy it.'
+
+  function syncNoteGate() {
+    if (!noteUi) return
+    var open = canReview()
+    noteUi.send.disabled = !open || noteUi.busy
+    if (!open) noteUi.err.textContent = NOTE_CLOSED_REASON
+    else if (noteUi.err.textContent === NOTE_CLOSED_REASON) noteUi.err.textContent = ''
+  }
+
+  function renderNote() {
+    var layer = $('layer-pop')
+    if (S.note && S.note === noteShown && layer.querySelector('.pop.note-pop')) { syncNoteGate(); return }
+    noteUi = null
+    layer.querySelectorAll('.pop.note-pop').forEach(function (n) { n.parentNode.removeChild(n) })
+    noteShown = S.note
+    if (!S.note) return
+    var note = S.note
+    var boxW = frameBox.clientWidth
+    var left = Math.max(8, Math.min(note.x, boxW - 308))
+    var area = el('textarea', { 'aria-label': 'Comment', placeholder: 'What should change here?' })
+    var err = el('span', { class: 'err' })
+    var send = el('button', { type: 'button', class: 'primary', text: 'Send' })
+    var cancel = el('button', { type: 'button', text: 'Cancel', onclick: function () { S.note = null; renderNote() } })
+    var ui = { send: send, err: err, busy: false }
+    send.addEventListener('click', function () {
+      if (!canReview()) { syncNoteGate(); return }
+      var text = area.value.trim()
+      if (!text) { err.textContent = 'Write a comment first.'; return }
+      ui.busy = true
+      send.disabled = true
+      cancel.disabled = true
+      err.textContent = ''
+      postEvent('comment', { block_id: note.blockId, text: text }, {}).then(function (result) {
+        ui.busy = false
+        if (result === 'ok') {
+          S.note = null
+          renderNote()
+          setNotice('Comment sent.', false)
+          pollNow()
+        } else {
+          cancel.disabled = false
+          err.textContent = 'Could not send. Try again.'
+          syncNoteGate()
+        }
+      })
+    })
+    var pop = el('div', { class: 'pop note-pop', style: 'left:' + left + 'px;top:' + (note.y + 10) + 'px', role: 'dialog', 'aria-label': 'New comment' }, [
+      el('h3', { text: 'Comment on ' + note.label }),
+      area,
+      el('div', { class: 'row' }, [err, cancel, send]),
+    ])
+    layer.appendChild(pop)
+    noteUi = ui
+    syncNoteGate()
+    area.focus()
+  }
+
+  function selectThread(id, navigate) {
+    S.openThread = S.openThread === id && !navigate ? null : id
+    var p = pinThreads().filter(function (x) { return x.thread.id === id })[0]
+    if (navigate && p && inner && p.placement !== 'orphaned') {
+      var s = screenById(p.pin.screen)
+      if (s && s.states.indexOf(p.pin.state) !== -1) S.states[s.id] = p.pin.state
+      if (p.pin.screen !== S.screenId) {
+        goToScreen(p.pin.screen)
+        S.openThread = id
+      }
+    }
+    renderAll()
+  }
+
+  // ---- hover and click in the mock -----------------------------------------
+  function commentAllowed() { return S.mode === 'comment' && canReview() }
+
+  function onInnerMove(ev) {
+    if (!commentAllowed()) return clearHover()
+    var node = ev.target && ev.target.closest ? ev.target.closest('[data-pin]') : null
+    if (node === hoverEl) return
+    hoverEl = node
+    paintHover()
+  }
+  function clearHover() {
+    if (!hoverEl) return
+    hoverEl = null
+    paintHover()
+  }
+  function paintHover() {
+    var layer = $('layer-hover')
+    clear(layer)
+    if (!hoverEl || !hoverEl.isConnected) return
+    var r = visibleBox(hoverEl)
+    if (!r) return
+    var label = inventoryLabel(hoverEl.getAttribute('data-pin'))
+    layer.appendChild(el('div', { class: 'box hover', style: 'left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px' }, [label ? el('span', { class: 'tag', text: label }) : null]))
+  }
+  function onInnerClick(ev) {
+    if (!commentAllowed()) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    var node = ev.target && ev.target.closest ? ev.target.closest('[data-pin]') : null
+    if (!node) {
+      setNotice('This element has no pin key, so it cannot take a comment. Hover to see which elements can.', true)
+      return
+    }
+    var state = currentState()
+    if (!screenById(S.screenId) || !state) {
+      setNotice('Open a screen from the rail first. Comments need a screen and state from the inventory.', true)
+      return
+    }
+    var r = node.getBoundingClientRect()
+    var off = Core.offsetPct(r, ev.clientX, ev.clientY)
+    var blockId
+    try {
+      blockId = Core.formatPinId({ version: boot.version, screen: S.screenId, state: state, pin: node.getAttribute('data-pin'), x: off.x, y: off.y })
+    } catch (e) {
+      setNotice('This element\'s pin key is not valid, so it cannot take a comment.', true)
+      return
+    }
+    S.openThread = null
+    S.note = { blockId: blockId, x: ev.clientX, y: ev.clientY, label: inventoryLabel(node.getAttribute('data-pin')) || node.getAttribute('data-pin') }
+    renderOverlay()
+    renderNote()
+  }
+
+  // ---- inner frame wiring ---------------------------------------------------
+  function applyStates() {
+    var scr = screenEl(S.screenId)
+    if (!scr) return
+    var cur = currentState()
+    stateEls(scr).forEach(function (node) {
+      var hide = node.getAttribute('data-state') !== cur
+      if (node.hidden !== hide) node.hidden = hide
+    })
+  }
+  function refreshFrame() {
+    frameTick = 0
+    if (!inner) return
+    applyStates()
+    renderOverlay()
+    paintHover()
+    renderRail()
+  }
+  function scheduleRefresh() {
+    if (frameTick) return
+    frameTick = requestAnimationFrame(refreshFrame)
+  }
+  function onInnerHash() {
+    if (!inner) return
+    var nextId = Core.currentScreenId(inner.win.location.hash, boot.screens)
+    var moved = nextId !== S.screenId
+    S.screenId = nextId
+    if (Core.isKnownScreen(boot.screens, S.screenId) && !S.visited.has(S.screenId)) {
+      S.visited.add(S.screenId)
+      saveVisited()
+    }
+    if (moved) {
+      S.note = null
+      S.openThread = null
+    }
+    hoverEl = null
+    renderAll()
+  }
+  function goToScreen(id) {
+    if (!inner) return
+    inner.win.location.hash = '#/' + id
+    onInnerHash()
+  }
+  function attach() {
+    var win = frame.contentWindow
+    var doc = null
+    try { doc = frame.contentDocument } catch (e) { doc = null }
+    if (!doc || !doc.documentElement) {
+      inner = null
+      setNotice('The mock document could not be read, so review tools are unavailable.', true)
+      return
+    }
+    inner = { win: win, doc: doc }
+    var style = doc.createElement('style')
+    style.textContent = '[hidden]{display:none !important}'
+    ;(doc.head || doc.documentElement).appendChild(style)
+    win.addEventListener('hashchange', onInnerHash)
+    win.addEventListener('resize', scheduleRefresh)
+    doc.addEventListener('scroll', scheduleRefresh, true)
+    doc.addEventListener('click', onInnerClick, true)
+    doc.addEventListener('mousemove', onInnerMove, true)
+    doc.documentElement.addEventListener('mouseleave', clearHover)
+    if (win.MutationObserver && doc.body) new win.MutationObserver(scheduleRefresh).observe(doc.body, { childList: true, subtree: true })
+    onInnerHash()
+  }
+
+  // ---- rail -----------------------------------------------------------------
+  function pinCountFor(list, id) {
+    return list.filter(function (p) { return p.pin.screen === id }).length
+  }
+  function renderRail() {
+    var rail = $('rail')
+    var list = appMode ? pinThreads() : []
+    var reviewing = canReview()
+    clear(rail)
+    rail.appendChild(el('h2', { text: 'Screens' }))
+    var ul = el('ul')
+    screens.forEach(function (s) {
+      var seen = S.visited.has(s.id)
+      var count = pinCountFor(list, s.id)
+      var item = el('li', { class: 'screen-item' + (s.id === S.screenId ? ' current' : '') }, [
+        el('button', { type: 'button', class: 'go', 'aria-current': s.id === S.screenId ? 'page' : null, onclick: function () { goToScreen(s.id) } }, [
+          el('span', { class: 'dot' + (seen ? ' visited' : ''), title: seen ? 'Visited' : 'Not visited' }),
+          el('span', { class: 'title', text: s.title }),
+          el('span', { class: 'count', text: (seen ? 'visited' : 'not visited') + (appMode ? ', ' + count + (count === 1 ? ' pin' : ' pins') : '') }),
+        ]),
+      ])
+      if (reviewing) {
+        var box = el('input', { type: 'checkbox', 'aria-label': 'Mark ' + s.title + ' as reviewed' })
+        box.checked = S.marks.has(s.id)
+        box.addEventListener('change', function () { if (box.checked) S.marks.add(s.id); else S.marks.delete(s.id) })
+        item.appendChild(el('label', { class: 'mark', title: 'Mark this screen as reviewed' }, [box, 'ok']))
+      }
+      ul.appendChild(item)
+    })
+    rail.appendChild(ul)
+
+    var cur = screenById(S.screenId)
+    if (!cur && S.screenId) {
+      rail.appendChild(el('p', { class: 'note' }, [el('span', { class: 'chip warn', text: 'Screen "' + S.screenId + '" is not in the inventory' })]))
+    }
+    if (cur && cur.skipped_states && cur.skipped_states.length) {
+      rail.appendChild(el('h2', { text: 'Skipped states here' }))
+      rail.appendChild(el('ul', { class: 'skipped' }, cur.skipped_states.map(function (k) { return el('li', { text: k.state + ': ' + k.reason }) })))
+    }
+    var gapsHere = gaps.filter(function (g) { return g.screen === S.screenId })
+    if (gapsHere.length) {
+      rail.appendChild(el('h2', { text: 'Gaps on this screen' }))
+      rail.appendChild(el('ul', { class: 'skipped' }, gapsHere.map(function (g) { return el('li', { text: g.label + ': no matching component' }) })))
+    }
+
+    if (appMode && list.length) {
+      var orphaned = list.filter(function (p) { return p.placement === 'orphaned' })
+      var placed = list.filter(function (p) { return p.placement !== 'orphaned' })
+      if (placed.length) {
+        rail.appendChild(el('h2', { text: 'Pins' }))
+        placed.forEach(function (p) { rail.appendChild(pinRow(p)) })
+      }
+      if (orphaned.length) {
+        rail.appendChild(el('h2', { text: 'Orphaned pins' }))
+        orphaned.forEach(function (p) { rail.appendChild(pinRow(p)) })
+      }
+    }
+  }
+  function pinRow(p) {
+    var open = S.openThread === p.thread.id
+    var first = p.thread.messages[0]
+    var badges = []
+    if (p.thread.resolution) badges.push(el('span', { class: 'badge ok', text: 'resolved' }))
+    if (p.placement === 'reanchored') badges.push(el('span', { class: 'badge', text: 'from v' + p.pin.version }))
+    if (p.placement === 'orphaned') badges.push(el('span', { class: 'badge warn', text: 'element removed in v' + boot.version }))
+    var screen = screenById(p.pin.screen)
+    var head = el('button', { type: 'button', class: 'head', 'aria-expanded': open ? 'true' : 'false', onclick: function () { selectThread(p.thread.id, true) } }, [
+      el('strong', { text: 'Pin ' + p.n }),
+      ' ',
+      el('span', { class: 'meta', text: (screen ? screen.title : p.pin.screen) + ' / ' + p.pin.state + ' / ' + p.pin.pin }),
+      ...badges,
+      el('div', { text: first ? String(first.text).slice(0, 90) : '' }),
+    ])
+    var row = el('div', { class: 'pin-row' + (open ? ' selected' : '') }, [head])
+    var reply = p.thread.resolution ? Core.lastAgentMessage(p.thread) : null
+    if (open) row.appendChild(threadBody(p))
+    else if (reply) row.appendChild(el('div', { class: 'thread' }, [messageNode(reply, true)]))
+    return row
+  }
+
+  // ---- toolbar, banner, verdict bar ----------------------------------------
+  function setNotice(text, isError) {
+    S.notice = text
+    S.noticeError = !!isError
+    clearTimeout(noticeTimer)
+    renderStatus()
+    if (text) noticeTimer = setTimeout(function () { S.notice = ''; renderStatus() }, 6000)
+  }
+  function renderStatus() {
+    var node = $('status')
+    var text = S.paused ? 'Lost contact with the companion, retrying' : S.notice
+    node.textContent = text
+    node.className = 'status' + (S.paused || S.noticeError ? ' error' : '')
+  }
+  function pressed(id, on) { $(id).setAttribute('aria-pressed', on ? 'true' : 'false') }
+
+  function renderToolbar() {
+    $('version-chip').textContent = 'Mock v' + boot.version + (!appMode || boot.version === latestVersion() ? '' : ' (not latest)')
+    var wrap = $('version-wrap')
+    var picker = $('version-picker')
+    if (appMode) {
+      wrap.hidden = false
+      clear(picker)
+      var latest = latestVersion()
+      versionList().forEach(function (v) {
+        var o = el('option', { value: String(v), text: 'v' + v + (v === latest ? ' (latest)' : '') })
+        if (v === boot.version) o.selected = true
+        picker.appendChild(o)
+      })
+    }
+    var reviewing = canReview()
+    if (!reviewing && S.mode === 'comment') { S.mode = 'interact'; clearHover() }
+    pressed('mode-interact', S.mode === 'interact')
+    pressed('mode-comment', S.mode === 'comment')
+    var cm = $('mode-comment')
+    cm.hidden = !appMode
+    cm.disabled = !reviewing
+    cm.title = reviewing ? 'Click an element to pin a comment' : (readOnlyVersion() ? 'Only the latest version takes comments' : 'Comments are open while a review is waiting on you')
+    pressed('vp-desktop', S.viewport === 'desktop')
+    pressed('vp-mobile', S.viewport === 'mobile')
+    frameBox.className = 'frame-box' + (S.viewport === 'mobile' ? ' mobile' : '')
+    var sw = $('state-switch')
+    clear(sw)
+    var s = screenById(S.screenId)
+    if (s && s.states && s.states.length > 1) {
+      sw.hidden = false
+      s.states.forEach(function (st) {
+        sw.appendChild(el('button', { type: 'button', 'aria-pressed': currentState() === st ? 'true' : 'false', onclick: function () { S.states[s.id] = st; S.note = null; renderAll() }, text: st }))
+      })
+    } else sw.hidden = true
+    renderStatus()
+  }
+
+  function renderBanner() {
+    var b = $('banner')
+    clear(b)
+    if (!appMode) {
+      b.hidden = false
+      b.appendChild(el('span', { text: 'Mock v' + boot.version + ' · not the product' }))
+    } else if (staleVersion()) {
+      b.hidden = false
+      b.appendChild(el('span', { role: 'alert', text: 'This version was updated \u2014 reload to review it' }))
+      b.appendChild(el('button', { type: 'button', text: 'Reload', onclick: function () { window.location.reload() } }))
+    } else if (readOnlyVersion()) {
+      b.hidden = false
+      var latest = latestVersion()
+      b.appendChild(el('span', { text: 'v' + boot.version + ' is read-only. New comments go on v' + latest + '.' }))
+      b.appendChild(el('button', { type: 'button', text: 'Go to v' + latest, onclick: function () { goToVersion(latest) } }))
+    } else b.hidden = true
+  }
+  function goToVersion(v) {
+    window.location.href = '/_quirk/mock/' + encodeURIComponent(String(v)) + '?t=' + encodeURIComponent(boot.token)
+  }
+
+  var verdictSig = ''
+  function renderVerdict() {
+    var bar = $('verdict')
+    if (!appMode) { bar.hidden = true; return }
+    var reviewing = canReview()
+    var unvisited = Core.unvisitedScreens(boot.screens, S.visited)
+    var sig = JSON.stringify([reviewing, S.panel, S.submitting, S.verdictError, unvisited])
+    if (sig === verdictSig) return
+    verdictSig = sig
+    var typing = document.activeElement && bar.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA'
+      ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+      : null
+    clear(bar)
+    if (!reviewing) {
+      bar.hidden = true
+      return
+    }
+    bar.hidden = false
+    bar.appendChild(el('strong', { text: 'Your verdict' }))
+    var busy = S.submitting
+    bar.appendChild(el('button', { type: 'button', class: 'primary', disabled: busy, text: 'Looks right', onclick: onLooksRight }))
+    bar.appendChild(el('button', { type: 'button', disabled: busy, text: 'Needs changes', onclick: function () { S.panel = 'changes'; S.verdictError = ''; renderVerdict() } }))
+    bar.appendChild(el('span', { class: 'spacer' }))
+    bar.appendChild(el('button', { type: 'button', disabled: busy, text: 'Skip review', onclick: function () { submitVerdict('skip', null) } }))
+    if (S.verdictError) bar.appendChild(el('span', { class: 'err', role: 'alert', text: S.verdictError }))
+    if (S.panel === 'confirm') {
+      var names = unvisited.map(function (id) { var s = screenById(id); return s ? s.title : id })
+      bar.appendChild(el('div', { class: 'panel' }, [
+        el('div', { text: 'You have not opened ' + names.join(', ') + '. Sign off anyway?' }),
+        el('div', { class: 'row' }, [
+          el('button', { type: 'button', class: 'primary', disabled: busy, text: 'Confirm: looks right', onclick: function () { submitVerdict('looks-right', null) } }),
+          el('button', { type: 'button', disabled: busy, text: 'Keep reviewing', onclick: function () { S.panel = null; renderVerdict() } }),
+        ]),
+      ]))
+    }
+    if (S.panel === 'changes') {
+      var area = el('textarea', { 'aria-label': 'Overall comment (optional)', placeholder: 'Overall comment (optional)' })
+      area.value = S.changesText
+      area.addEventListener('input', function () { S.changesText = area.value })
+      if (typing) {
+        queueMicrotask(function () {
+          area.focus()
+          area.setSelectionRange(typing.start, typing.end)
+        })
+      }
+      bar.appendChild(el('div', { class: 'panel' }, [
+        area,
+        el('div', { class: 'row' }, [
+          el('button', { type: 'button', class: 'primary', disabled: busy, text: 'Send: needs changes', onclick: function () { submitVerdict('needs-changes', S.changesText.trim()) } }),
+          el('button', { type: 'button', disabled: busy, text: 'Cancel', onclick: function () { S.panel = null; renderVerdict() } }),
+        ]),
+      ]))
+    }
+  }
+  function onLooksRight() {
+    S.verdictError = ''
+    if (Core.unvisitedScreens(boot.screens, S.visited).length) { S.panel = 'confirm'; renderVerdict() } else submitVerdict('looks-right', null)
+  }
+  function submitVerdict(verdict, comment) {
+    if (S.submitting || !canReview()) return
+    var ids = screens.map(function (s) { return s.id })
+    var payload = {
+      verdict: verdict,
+      visited: ids.filter(function (id) { return S.visited.has(id) }),
+      marks: ids.filter(function (id) { return S.marks.has(id) }),
+    }
+    if (comment) payload.comment = comment
+    S.submitting = true
+    S.verdictError = ''
+    renderVerdict()
+    var step = S.snap.step
+    postEvent('submit', payload, { nonce: step.nonce, step: step.id }).then(function (result) {
+      S.submitting = false
+      if (result === 'ok') {
+        S.panel = null
+        setNotice('Verdict sent.', false)
+      } else if (result === 'superseded') {
+        S.panel = null
+        S.verdictError = 'That review was replaced by a newer one. Refreshing.'
+      } else S.verdictError = 'Could not send the verdict. Try again.'
+      renderVerdict()
+      pollNow()
+    })
+  }
+
+  function renderAll() {
+    renderToolbar()
+    renderBanner()
+    applyStates()
+    renderRail()
+    renderOverlay()
+    renderNote()
+    paintHover()
+    renderVerdict()
+  }
+
+  // ---- companion transport (same-origin app endpoints only) ------------------
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID()
+    return 'c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+  }
+  /** Posts one event, retrying network errors with the same client_id so the server can dedupe. */
+  function postEvent(type, payload, scope) {
+    var body = { client_id: uuid(), type: type, payload: payload }
+    if (scope.nonce) body.nonce = scope.nonce
+    if (scope.step) body.step = scope.step
+    var text = JSON.stringify(body)
+    function attempt(n) {
+      return fetch('/_quirk/app/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Quirk-Token': boot.token },
+        body: text,
+      }).then(function (r) {
+        if (r.status === 409) return 'superseded'
+        return r.ok ? 'ok' : 'error'
+      }, function () {
+        if (n >= 3) return 'error'
+        return new Promise(function (resolve) { setTimeout(resolve, 200 * (n + 1)) }).then(function () { return attempt(n + 1) })
+      })
+    }
+    return attempt(0)
+  }
+
+  var rev = ''
+  var failures = 0
+  var inflight = false
+  var pollTimer = null
+  function pollDelay() {
+    return failures < 3 ? 1000 : Math.min(5000, 1000 * Math.pow(2, failures - 2))
+  }
+  function poll() {
+    if (inflight) return
+    inflight = true
+    fetch('/_quirk/app/snapshot?rev=' + encodeURIComponent(rev), { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 200) {
+          return r.json().then(function (snap) {
+            rev = String(snap.rev)
+            S.snap = snap
+            renderAll()
+          })
+        }
+        if (r.status !== 204) throw new Error('snapshot ' + r.status)
+        return null
+      })
+      .then(function () {
+        var recovered = failures > 0
+        failures = 0
+        if (S.paused || recovered) { S.paused = false; renderStatus() }
+      })
+      .catch(function () {
+        failures += 1
+        if (failures >= 3 && !S.paused) { S.paused = true; renderStatus() }
+      })
+      .then(function () {
+        inflight = false
+        clearTimeout(pollTimer)
+        pollTimer = setTimeout(poll, pollDelay())
+      })
+  }
+  function pollNow() {
+    if (!appMode) return
+    clearTimeout(pollTimer)
+    poll()
+  }
+
+  // ---- controls ------------------------------------------------------------
+  $('mode-interact').addEventListener('click', function () { S.mode = 'interact'; clearHover(); renderToolbar() })
+  $('mode-comment').addEventListener('click', function () { if (canReview()) { S.mode = 'comment'; renderToolbar() } })
+  $('vp-desktop').addEventListener('click', function () { S.viewport = 'desktop'; renderToolbar(); scheduleRefresh() })
+  $('vp-mobile').addEventListener('click', function () { S.viewport = 'mobile'; renderToolbar(); scheduleRefresh() })
+  $('show-changes').addEventListener('change', function (ev) {
+    S.showChanges = ev.target.checked
+    if (S.showChanges && !changed.size) setNotice('Nothing was recorded as changed in this version.', false)
+    renderOverlay()
+  })
+  $('version-picker').addEventListener('change', function (ev) {
+    var v = Number(ev.target.value)
+    if (v !== boot.version) goToVersion(v)
+  })
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && (S.note || S.openThread)) { S.note = null; S.openThread = null; renderNote(); renderOverlay(); renderRail() }
+  })
+  window.addEventListener('resize', scheduleRefresh)
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pollNow() })
+
+  frame.addEventListener('load', attach)
+  frame.srcdoc = Core.withBase(String(boot.mock_html || ''))
+  renderAll()
+  if (appMode) poll()
+})()
+</script>
+</body>
+</html>

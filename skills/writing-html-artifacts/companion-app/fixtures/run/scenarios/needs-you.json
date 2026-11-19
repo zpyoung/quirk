@@ -1,0 +1,256 @@
+{
+  "actions": [],
+  "git": {
+    "changed_at": 1793664640.0,
+    "observed_at": 1793664660.0,
+    "tasks": {
+      "T1": {
+        "commits": 1,
+        "files": [
+          "a.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T2": {
+        "commits": 1,
+        "files": [
+          "b.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T5": {
+        "commits": 0,
+        "files": [
+          "e.py",
+          "appstate.py"
+        ],
+        "merged": false,
+        "worktree_present": true
+      },
+      "T6": {
+        "commits": 1,
+        "files": [
+          "f.py"
+        ],
+        "merged": true,
+        "worktree_present": false
+      },
+      "T9": {
+        "commits": 0,
+        "files": [
+          "j.py"
+        ],
+        "merged": false,
+        "worktree_present": true
+      }
+    }
+  },
+  "now": 1793664670.0,
+  "questions": [
+    {
+      "asked_at": 1793664640.0,
+      "header": "T9 contract",
+      "id": "t9-contract",
+      "options": [
+        {
+          "label": "Update T9's contract",
+          "value": "widen"
+        },
+        {
+          "description": "Stop and ask for a new contract.",
+          "label": "Re-plan the task",
+          "value": "replan"
+        }
+      ],
+      "prompt": "T9 depends on a field T6 renamed. Update T9's contract or re-plan?",
+      "recommended": "widen",
+      "state": "open",
+      "task": "T9"
+    },
+    {
+      "asked_at": 1793664600.0,
+      "header": "T5 scope",
+      "id": "t5-scope",
+      "options": [
+        {
+          "label": "Widen T5's scope to include appstate.py",
+          "value": "widen"
+        },
+        {
+          "description": "Stop and ask for a new contract.",
+          "label": "Re-plan the task",
+          "value": "replan"
+        }
+      ],
+      "prompt": "T5 wrote a file outside its scope. Widen scope or re-plan?",
+      "recommended": "widen",
+      "state": "open",
+      "task": "T5"
+    }
+  ],
+  "reports": [
+    {
+      "at": 1793664000.0,
+      "kind": "status",
+      "n": 1,
+      "text": "Dispatching T4, T6 and T7"
+    },
+    {
+      "at": 1793664020.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T1",
+      "kind": "dispatch",
+      "n": 2,
+      "task": "T1",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "at": 1793664300.0,
+      "commit": "0101010101010101010101010101010101010101",
+      "kind": "commit",
+      "n": 3,
+      "task": "T1"
+    },
+    {
+      "at": 1793664305.0,
+      "head": "0101010101010101010101010101010101010101",
+      "kind": "merge",
+      "n": 4,
+      "task": "T1"
+    },
+    {
+      "at": 1793664025.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T2",
+      "kind": "dispatch",
+      "n": 5,
+      "task": "T2",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "at": 1793664320.0,
+      "commit": "0202020202020202020202020202020202020202",
+      "kind": "commit",
+      "n": 6,
+      "task": "T2"
+    },
+    {
+      "at": 1793664325.0,
+      "head": "0202020202020202020202020202020202020202",
+      "kind": "merge",
+      "n": 7,
+      "task": "T2"
+    },
+    {
+      "at": 1793664400.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T5",
+      "kind": "dispatch",
+      "n": 8,
+      "task": "T5",
+      "worktree": "/work/recharge/.worktrees/T5"
+    },
+    {
+      "at": 1793664400.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T6",
+      "kind": "dispatch",
+      "n": 9,
+      "task": "T6",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "at": 1793664450.0,
+      "commit": "0606060606060606060606060606060606060606",
+      "kind": "commit",
+      "n": 10,
+      "task": "T6"
+    },
+    {
+      "at": 1793664455.0,
+      "head": "0606060606060606060606060606060606060606",
+      "kind": "merge",
+      "n": 11,
+      "task": "T6"
+    },
+    {
+      "at": 1793664460.0,
+      "attempt": 1,
+      "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "branch": "sdd/sdd-run-view/T9",
+      "kind": "dispatch",
+      "n": 12,
+      "task": "T9",
+      "worktree": "/work/recharge/.worktrees/T9"
+    },
+    {
+      "at": 1793664600.0,
+      "kind": "question",
+      "n": 13,
+      "question": "t5-scope",
+      "task": "T5"
+    },
+    {
+      "at": 1793664640.0,
+      "kind": "question",
+      "n": 14,
+      "question": "t9-contract",
+      "task": "T9"
+    }
+  ],
+  "run": {
+    "base": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+    "branch": "feature/sdd-run-view",
+    "branch_pattern": "sdd/{run}/{task}",
+    "repo": "/work/recharge",
+    "run_id": "sdd-run-view",
+    "tasks": [
+      {
+        "deps": [],
+        "id": "T1",
+        "order_after": [],
+        "title": "Run store"
+      },
+      {
+        "deps": [],
+        "id": "T2",
+        "order_after": [],
+        "title": "Run fold"
+      },
+      {
+        "contract_md": "Add `ask`, `await` and `answer` to `companion.py`.",
+        "deps": [
+          "T1",
+          "T2"
+        ],
+        "id": "T5",
+        "order_after": [],
+        "title": "Ask and answer commands"
+      },
+      {
+        "deps": [
+          "T1",
+          "T2"
+        ],
+        "id": "T6",
+        "order_after": [],
+        "title": "Snapshot run key"
+      },
+      {
+        "deps": [
+          "T6"
+        ],
+        "id": "T9",
+        "order_after": [],
+        "title": "Shell run view"
+      }
+    ],
+    "v": 1
+  }
+}

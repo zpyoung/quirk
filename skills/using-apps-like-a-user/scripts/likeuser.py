@@ -46,7 +46,7 @@ import _desktop  # noqa: E402
 import _effects  # noqa: E402
 import _run  # noqa: E402
 from _native import NATIVE_DRIVER_PREFERENCE, NativeDriver, get_native_driver, stable_ref  # noqa: E402
-from _types import (  # noqa: E402
+from _likeuser_types import (  # noqa: E402
     Action, DriverError, DriverResult, MissingError, Observation, RunStateError, UsageError,
 )
 from _web import PIN_TEXT, WebDriver  # noqa: E402

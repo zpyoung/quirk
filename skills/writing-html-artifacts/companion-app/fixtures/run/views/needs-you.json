@@ -1,0 +1,219 @@
+{
+  "branch": "feature/sdd-run-view",
+  "chains": [],
+  "counts": {
+    "failed": 0,
+    "missing": 0,
+    "needs-you": 2,
+    "passed": 3,
+    "queued": 0,
+    "retrying": 0,
+    "running": 0,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "edges": [
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T5"
+    },
+    {
+      "from": "T1",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T2",
+      "kind": "dep",
+      "to": "T6"
+    },
+    {
+      "from": "T6",
+      "kind": "dep",
+      "to": "T9"
+    }
+  ],
+  "last_update_at": 1793664640.0,
+  "now": 1793664670.0,
+  "questions": [
+    {
+      "asked_at": 1793664600.0,
+      "header": "T5 scope",
+      "id": "t5-scope",
+      "options": [
+        {
+          "label": "Widen T5's scope to include appstate.py",
+          "value": "widen"
+        },
+        {
+          "description": "Stop and ask for a new contract.",
+          "label": "Re-plan the task",
+          "value": "replan"
+        }
+      ],
+      "prompt": "T5 wrote a file outside its scope. Widen scope or re-plan?",
+      "recommended": "widen",
+      "state": "open",
+      "task": "T5"
+    },
+    {
+      "asked_at": 1793664640.0,
+      "header": "T9 contract",
+      "id": "t9-contract",
+      "options": [
+        {
+          "label": "Update T9's contract",
+          "value": "widen"
+        },
+        {
+          "description": "Stop and ask for a new contract.",
+          "label": "Re-plan the task",
+          "value": "replan"
+        }
+      ],
+      "prompt": "T9 depends on a field T6 renamed. Update T9's contract or re-plan?",
+      "recommended": "widen",
+      "state": "open",
+      "task": "T9"
+    }
+  ],
+  "rounds": [],
+  "run_id": "sdd-run-view",
+  "stale": null,
+  "stale_after_s": 180,
+  "started_at": 1793664000.0,
+  "status_text": "Dispatching T4, T6 and T7",
+  "tasks": [
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664300.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664020.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T5",
+        "T9"
+      ],
+      "ended_at": 1793664300.0,
+      "files": 1,
+      "id": "T1",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664020.0,
+      "status": "passed",
+      "title": "Run store",
+      "worktree": "/work/recharge/.worktrees/T1"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664320.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664025.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T5",
+        "T9"
+      ],
+      "ended_at": 1793664320.0,
+      "files": 1,
+      "id": "T2",
+      "labels": [],
+      "level": 1,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664025.0,
+      "status": "passed",
+      "title": "Run fold",
+      "worktree": "/work/recharge/.worktrees/T2"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "contract_md": "Add `ask`, `await` and `answer` to `companion.py`.",
+      "downstream": [],
+      "files": 2,
+      "id": "T5",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "question": "t5-scope",
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "needs-you",
+      "title": "Ask and answer commands",
+      "worktree": "/work/recharge/.worktrees/T5"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "end": 1793664450.0,
+          "n": 1,
+          "outcome": "passed",
+          "start": 1793664400.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [
+        "T9"
+      ],
+      "ended_at": 1793664450.0,
+      "files": 1,
+      "id": "T6",
+      "labels": [],
+      "level": 2,
+      "mismatch": null,
+      "ready": true,
+      "started_at": 1793664400.0,
+      "status": "passed",
+      "title": "Snapshot run key",
+      "worktree": "/work/recharge/.worktrees/T6"
+    },
+    {
+      "attempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "start": 1793664460.0
+        }
+      ],
+      "blocked_by": [],
+      "downstream": [],
+      "files": 1,
+      "id": "T9",
+      "labels": [],
+      "level": 3,
+      "mismatch": null,
+      "question": "t9-contract",
+      "ready": true,
+      "started_at": 1793664460.0,
+      "status": "needs-you",
+      "title": "Shell run view",
+      "worktree": "/work/recharge/.worktrees/T9"
+    }
+  ]
+}

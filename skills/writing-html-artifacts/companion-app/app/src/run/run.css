@@ -1,0 +1,180 @@
+@import './graph.css';
+@import './panels.css';
+@import './pages.css';
+
+.run-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--q-space-3);
+  min-height: 100vh;
+  padding: var(--q-space-4);
+  color: var(--q-color-text);
+  background: var(--q-color-bg);
+
+  .run-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--q-space-2);
+  }
+
+  .run-header-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--q-space-3);
+  }
+
+  /* the counts take the leftover width and wrap inside it, so the toggle stays right-aligned on the first row */
+  .run-header-main > .run-counts {
+    flex: 1 1 0;
+    min-width: 8rem;
+  }
+
+  .run-header-main > .theme-toggle {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .run-branch {
+    font-family: var(--q-font-mono, monospace);
+    color: var(--q-color-text-muted);
+  }
+
+  .run-counts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--q-space-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .run-counts-passed {
+    margin-right: var(--q-space-1);
+  }
+
+  .run-counts-chips {
+    display: contents;
+  }
+
+  .run-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--q-space-2);
+    border: 1px solid color-mix(in srgb, var(--run-status, var(--q-color-text-muted)) 55%, transparent);
+    border-radius: var(--q-radius-pill);
+    background: color-mix(in srgb, var(--run-status, var(--q-color-text-muted)) 10%, transparent);
+    color: var(--run-status, var(--q-color-text-muted));
+    font-size: var(--q-size-small);
+    font-weight: 500;
+    line-height: 1.6;
+    white-space: nowrap;
+  }
+
+  .run-chip[data-strong='true'] {
+    border-color: var(--run-status);
+    background: var(--run-status);
+    color: var(--q-color-bg);
+    font-weight: 700;
+  }
+
+  .run-chip[data-status='queued'],
+  .run-chip[data-status='skipped'] {
+    color: var(--q-color-text-muted);
+  }
+
+  [data-status='running'] {
+    --run-status: var(--q-color-accent);
+  }
+  [data-status='needs-you'],
+  [data-status='missing'] {
+    --run-status: var(--q-color-warn);
+  }
+  [data-status='retrying'] {
+    --run-status: var(--q-color-chart-5, var(--q-color-warn));
+  }
+  [data-status='passed'] {
+    --run-status: var(--q-color-good);
+  }
+  [data-status='failed'] {
+    --run-status: var(--q-color-critical);
+  }
+  [data-status='stopped'] {
+    --run-status: color-mix(in srgb, var(--q-color-critical) 55%, var(--q-color-text-muted));
+  }
+  [data-status='queued'],
+  [data-status='skipped'] {
+    --run-status: var(--q-color-text-muted);
+  }
+
+  .run-status-line,
+  .run-stale,
+  .run-lost {
+    margin: 0;
+  }
+
+  .run-stale,
+  .run-lost {
+    color: var(--q-color-warn);
+  }
+
+  .run-main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--q-space-3);
+  }
+
+  .run-switch {
+    display: inline-flex;
+    align-self: flex-start;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--q-color-border);
+    border-radius: var(--q-radius-pill);
+    background: var(--q-color-surface);
+  }
+
+  .run-switch-seg {
+    min-width: 5.5rem;
+    padding: var(--q-space-1) var(--q-space-3);
+    border: 1px solid transparent;
+    border-radius: var(--q-radius-pill);
+    background: transparent;
+    color: var(--q-color-text);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .run-switch-seg:hover:not([aria-pressed='true']) {
+    background: color-mix(in srgb, var(--q-color-text) 8%, transparent);
+  }
+
+  .run-switch-seg:focus-visible {
+    outline: 2px solid var(--q-color-focus);
+    outline-offset: 1px;
+  }
+
+  .run-switch-seg[aria-pressed='true'] {
+    background: var(--q-color-accent);
+    color: var(--q-color-accent-text);
+    font-weight: 600;
+    cursor: default;
+  }
+}
+
+/* wide screens reserve the open drawer's width so it never covers the graph tools or the theme toggle */
+@media (min-width: 1024px) {
+  .run-view[data-drawer='open'] {
+    padding-right: calc(28rem + var(--q-space-4));
+    transition: padding-right 160ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-view,
+  .run-view * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

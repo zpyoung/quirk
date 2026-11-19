@@ -341,3 +341,24 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: In the mini-full month grid, day numbers outside the current month render at about 1.6:1 to 2.2:1 against the panel in light mode, including Neutral House (2.07:1), so it is not caused by a style. Found by the 2026-10-23 gallery pass over every style (screenshots under skills/building-mini-apps/references/media/styles/, gitignored). The block dims them with an opacity or muted class rather than a token pair the style gate checks.
 - **Severity**: low
 - **Proposed fix**: Render out-of-month days with text-muted-foreground at full opacity (a pair the AA gate already checks), or keep them dim but non-interactive and mark them aria-hidden if they carry no meaning.
+
+## BUG-42: making-videos cloud POST test fails: request arrives without Content-Type
+- **Observed**: 2026-11-02
+- **File**: tests/test_making_videos_cloud.py:249
+- **Description**: test_post_json_inline_and_from_file fails deterministically with KeyError: 'Content-Type'; the POST sent with --json reaches the stub server without a Content-Type header. Reproduces at eb13d77, before the companion-first work, on macOS with python3. Found during the SDD wave gate for companion-first brainstorming; unrelated to that change. Two more tests in the same file also fail at eb13d77 and likely share the cause: test_total_timeout_covers_every_phase_and_spares_an_existing_out_file[/stall-error-500] and test_connection_failure_is_logged_with_status_zero.
+- **Severity**: medium
+
+## BUG-43: Companion design paragraphs wrapped in a link get no comment block ids
+- **Observed**: 2026-11-02
+- **File**: skills/writing-html-artifacts/companion-app/app/src/section-blocks.ts:127
+- **Description**: annotateSectionHtml only numbers a paragraph-like element when every open ancestor is a container tag, so agent HTML like <div><a href="#x"><p>One</p><p>Two</p></a></div> puts one section:<id>/p0 id on the div and none on the paragraphs; those paragraphs can't take comment pins and a changed-block highlight lands on the next paragraph. Found in the final review loop of the companion-first brainstorming run (third numbering defect in a row in this scanner); the user chose to ship and log it. Likely fix: treat every non-paragraph-like tag as transparent, or number in the live DOM.
+- **Introduced by**: companion-first brainstorming SDD run (FR1-O1 fix)
+- **Severity**: low
+
+## BUG-44: q-flow in a design-section step freezes the companion main thread for ~12s before the step paints
+- **Observed**: 2026-11-03
+- **File**: skills/writing-html-artifacts/companion-app/app/e2e/run.ts:544
+- **Description**: In e2e scenario i, a 4-node direction=down q-flow in a design section's body_html at a 2400px viewport produced a 12556ms long task (PerformanceObserver), and the step took ~15.5s to appear. The CPU profile puts the time in vendor/flow/0.12.0/flow.bundle.js layout. A similar flow in a question's content_html paints in ~3s. The whole UI freezes while a design step with a q-flow lays out. The e2e now waits DIAGRAM_MS for that step.
+- **Severity**: medium
+- **Proposed fix**: Profile why the design view lays the flow out so much slower than the questions view (repeated layout from section annotation or resize?) and debounce or defer it
+
