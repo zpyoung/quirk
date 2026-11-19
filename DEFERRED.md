@@ -235,3 +235,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-29: making-videos: review half-resolution still copies to cut frame-review image tokens
+- **Deferred**: 2026-11-19
+- **Why deferred**: Verify takes one 1920x1080 still per storyboard scene and the agent reads each (~1.5k tokens, ~30k for a 20-scene 3-min video). 960x540 review copies (~0.7k each, full-res only to zoom on a typeface) would roughly halve that, but legibility of 20-30px text at half size is untested: no Pillow or ffmpeg drawtext on the machine to render a test frame. Test on a real render before adopting.
+- **Estimated effort**: S
+- **Priority**: P3
+

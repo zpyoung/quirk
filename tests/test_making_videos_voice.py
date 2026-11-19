@@ -313,7 +313,7 @@ def test_align_runs_worker_over_project_wavs(env, tmp_path):
     fake_venv_python(tmp_path, reply)
     code, out, _ = run_voice("align", "--project", project, "--model", "small.en", env=env)
     assert code == 0
-    assert out == json.loads(reply)
+    assert out == {**json.loads(reply), "mismatches": None, "lines_checked": 0}
     argv = (tmp_path / "worker.log.argv").read_text().split()
     assert argv[1] == "align"
     assert argv[argv.index("--model") + 1] == "small.en"
@@ -332,6 +332,71 @@ def test_align_skips_the_untouched_raw_clips(env, tmp_path):
     assert code == 0
     argv = (tmp_path / "worker.log.argv").read_text().split()
     assert argv[argv.index("--wavs") + 1 :] == [str(voice_dir / "a.wav")]
+
+
+def _aligned_project(tmp_path: Path, lines: "list[dict]", words: dict) -> Path:
+    project = make_project(tmp_path)
+    voice_dir = project / "assets" / "voice"
+    voice_dir.mkdir(parents=True)
+    for line in lines:
+        (voice_dir / f"{line['id']}.wav").write_bytes(b"")
+    for clip, timed in words.items():
+        write_words(project, clip, timed)
+    write_json(project / "assets" / "lines.json", lines)
+    # the stub worker writes nothing, so the words.json files above stand in for whisper's output
+    fake_venv_python(tmp_path, json.dumps({"words": [{"clip": c, "path": "p"} for c in words]}))
+    return project
+
+
+def test_align_reports_where_the_heard_words_differ_from_the_script(env, tmp_path):
+    lines = [
+        {"id": "a", "text": "Upsert validates the plan.", "start_s": 0},
+        {"id": "b", "text": "Claude Code ships it.", "start_s": 3},
+        {"id": "c", "text": "All clean, 3 times.", "start_s": 6},
+    ]
+    words = {
+        "a": [("Absert", 0.0, 0.4), ("validates", 0.5, 0.9), ("the", 1.0, 1.1), ("plan.", 1.2, 1.5)],
+        "b": [("cloud", 0.1, 0.3), ("code", 0.3, 0.6), ("ships", 0.7, 0.9), ("it.", 1.0, 1.2)],
+        "c": [("All", 0.0, 0.2), ("clean,", 0.2, 0.5), ("3", 0.6, 0.8), ("times.", 0.8, 1.1)],
+    }
+    project = _aligned_project(tmp_path, lines, words)
+    code, out, _ = run_voice("align", "--project", project, env=env)
+    assert code == 0, out
+    assert out["lines_checked"] == 3
+    assert out["mismatches"] == [
+        {"clip": "a", "script": "Upsert", "heard": "Absert", "at_s": 0.0},
+        {"clip": "b", "script": "Claude", "heard": "cloud", "at_s": 0.1},
+    ]
+
+
+def test_align_reports_dropped_and_extra_words(env, tmp_path):
+    lines = [{"id": "a", "text": "Then tests run quickly.", "start_s": 0}]
+    words = {"a": [("Then", 0.0, 0.3), ("the", 0.3, 0.4), ("tests", 0.4, 0.8), ("quickly.", 1.2, 1.8)]}
+    project = _aligned_project(tmp_path, lines, words)
+    code, out, _ = run_voice("align", "--project", project, env=env)
+    assert code == 0, out
+    assert out["mismatches"] == [
+        {"clip": "a", "script": "", "heard": "the", "at_s": 0.3},
+        {"clip": "a", "script": "run", "heard": "", "at_s": 0.8},
+    ]
+
+
+def test_align_takes_another_lines_file(env, tmp_path):
+    lines = [{"id": "a", "text": "Ship it.", "start_s": 0}]
+    project = _aligned_project(tmp_path, lines, {"a": [("Ship", 0.0, 0.3), ("it.", 0.3, 0.5)]})
+    other = write_json(tmp_path / "other.json", [{"id": "a", "text": "Ship them.", "start_s": 0}])
+    code, out, _ = run_voice("align", "--project", project, "--lines", other, env=env)
+    assert code == 0, out
+    assert out["mismatches"] == [{"clip": "a", "script": "them.", "heard": "it.", "at_s": 0.3}]
+
+
+def test_align_without_a_lines_file_skips_the_script_check(env, tmp_path):
+    lines = [{"id": "a", "text": "Ship it.", "start_s": 0}]
+    project = _aligned_project(tmp_path, lines, {"a": [("Ship", 0.0, 0.3)]})
+    (project / "assets" / "lines.json").unlink()
+    code, out, _ = run_voice("align", "--project", project, env=env)
+    assert code == 0, out
+    assert out["mismatches"] is None and out["lines_checked"] == 0
 
 
 def test_align_with_no_clips_exits_1(env, tmp_path):
@@ -987,6 +1052,52 @@ def worker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_worker_say_prints_the_clip_folder_once_and_no_per_clip_paths(worker, tmp_path, monkeypatch, capsys):
+    import argparse
+    import types
+
+    class Tokenizer:
+        def phonemize(self, text, lang):
+            return text
+
+    class Kokoro:
+        def __init__(self, *paths):
+            pass
+
+        def create(self, phonemes, voice, is_phonemes):
+            return [0.0] * 12000, 24000
+
+    kokoro = types.ModuleType("kokoro_onnx")
+    kokoro.Kokoro = Kokoro
+    tokenizer = types.ModuleType("kokoro_onnx.tokenizer")
+    tokenizer.Tokenizer = Tokenizer
+    soundfile = types.ModuleType("soundfile")
+    soundfile.write = lambda path, samples, rate: Path(path).write_bytes(b"")
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", kokoro)
+    monkeypatch.setitem(sys.modules, "kokoro_onnx.tokenizer", tokenizer)
+    monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    # leveling shells out to ffmpeg; its measurement is not what this test is about
+    monkeypatch.setattr(worker, "normalize_clip", lambda *a: {"lufs": -16.0, "true_peak_dbtp": -1.5, "normalization": "linear"})
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/bin/" + name)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / worker.MODEL_FILE).write_bytes(b"")
+    (models / worker.VOICES_FILE).write_bytes(b"")
+    lines = write_json(tmp_path / "lines.json", [{"id": "a", "text": "Hi."}, {"id": "b", "text": "Bye."}])
+    out_dir = tmp_path / "voice"
+    args = argparse.Namespace(model_dir=str(models), ffmpeg="ffmpeg", lines=str(lines), pronunciations="{}",
+                              out_dir=str(out_dir), voice="af_heart")
+    result = worker._cmd_say(args)
+    assert result == {
+        "dir": str(out_dir),
+        "clips": [
+            {"id": "a", "duration_s": 0.5, "lufs": -16.0, "true_peak_dbtp": -1.5, "normalization": "linear"},
+            {"id": "b", "duration_s": 0.5, "lufs": -16.0, "true_peak_dbtp": -1.5, "normalization": "linear"},
+        ],
+    }
+    assert capsys.readouterr().err == ""
 
 
 def test_worker_apply_patches_rewrites_every_occurrence(worker):

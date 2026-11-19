@@ -52,14 +52,19 @@ python3 "$SKILL_DIR/scripts/voice.py" align --project "$PROJECT"
   mix: a gentle compressor and peak limiter, then a two-pass `loudnorm` to -16 LUFS with true peak at or below -1.5 dBTP (linear gain when the
   clip allows it). The untouched synthesis stays beside it as `<id>.raw.wav`; `align` and the project
   copy skip the `.raw.wav` files. It prints
-  `{"clips": [{"id", "wav", "raw", "duration_s", "lufs", "true_peak_dbtp", "normalization"}]}` with the
+  `{"dir", "clips": [{"id", "duration_s", "lufs", "true_peak_dbtp", "normalization"}]}`, where `dir` holds
+  `<id>.wav` and `<id>.raw.wav`, with the
   levels measured on the written clip; `normalization` is `linear` or `dynamic`. The render resamples
   to 48 kHz. Ids ending in `.raw` are refused.
 - `align` runs faster-whisper (`small.en`, CPU) on every wav in `assets/voice` and writes
   `assets/voice/<id>.words.json`: `[{"text", "start", "end"}]`, seconds from the start of that clip. The
-  film time of a word is the clip's `start_s` plus its `start`.
+  film time of a word is the clip's `start_s` plus its `start`. It then compares the heard words with
+  each line's `text` in `assets/lines.json` (or `--lines FILE`) and prints `mismatches`, one
+  `{"clip", "script", "heard", "at_s"}` per differing span, ignoring case and punctuation, plus
+  `lines_checked`. `mismatches` is `null` when there is no lines file.
 - Exit 3 means the venv is missing; the JSON carries the doctor command.
-- Read every `words.json` against the script. Whisper can mishear a clean TTS word (the t2 trial got
+- Read `mismatches` instead of every `words.json`; open a clip's `words.json` only for a clip listed
+  there or when you need its word times. Whisper can mishear a clean TTS word (the t2 trial got
   "Claude Code" back as "cloud code"), invent a word over trailing silence, and mistime fricative onsets
   by about 40 ms. Captions take their words from the script in the lines file and only their timing
   from `words.json`, so a misheard `text` does not reach the captions (see [Captions](#captions)).
@@ -85,7 +90,7 @@ phoneme symbols outside the vocabulary are silently dropped, so patch with symbo
    (use `$QUIRK_VIDEO_CACHE` instead of `~/.cache/quirk-video` when it is set).
 2. Copy the word's phonemes as `from`, write the corrected `to`, and keep `from` long enough not to match
    inside other words.
-3. Re-run `say` and `align`, and check that `words.json` now spells the word right. That is an ASR proxy,
+3. Re-run `say` and `align`, and check that the word is gone from `mismatches`. That is an ASR proxy,
    not a listener, so say in the delivery note that the voice was measured, not heard.
 
 Patches apply to Kokoro only. For a cloud voice, respell the word in the line instead.
