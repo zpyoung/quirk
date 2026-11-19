@@ -98,6 +98,7 @@ _HREF = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
 _INJECTED = re.compile(r"Injected deterministic @font-face rules for (\d+) requested font famil", re.I)
 _FONT_VALUE = re.compile(r"(--font-[A-Za-z0-9_-]*)\s*:\s*([^;}]*)")
 _FONT_NAMED = re.compile(r"""Fetched\s+\d+\s+font face\(s\) for ["']([^"']+)["']""", re.I)
+_FONT_EMBEDDED = re.compile(r"Embedded local font file:\s*(.+?)\s*(?:\(\d[^)]*\)\s*)?$", re.I | re.M)
 _STILL_NAME = re.compile(r"^still-\d+-\d+(?:\.\d+)?s\.png$")
 _RATIO = re.compile(r"Contrast is ([0-9.]+):1")
 _LOUDNESS_I = re.compile(r"^\s*I:\s+(-?[0-9.]+|-inf)\s+LUFS", re.M)
@@ -278,6 +279,27 @@ def brand_families(project: Path, brief: dict) -> "tuple[list[str], int, bool]":
     return names, (len(names) or len(fonts) or 1), True
 
 
+def brand_font_files(brief: dict) -> "dict[str, set[str]]":
+    """Lowercase brand family name to the basenames of its font files, from brand.json; empty when unreadable."""
+    path = studio_root() / "brands" / str(brief.get("product")) / "brand.json"
+    try:
+        fonts = json.loads(path.read_text(encoding="utf-8")).get("fonts") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    files: "dict[str, set[str]]" = {}
+    for font in fonts.values():
+        if isinstance(font, dict) and font.get("family"):
+            names = {Path(str(f)).name.lower() for f in font.get("files") or []}
+            files.setdefault(str(font["family"]).lower(), set()).update(names)
+    return files
+
+
+def embedded_brand_families(log_text: str, brief: dict) -> "set[str]":
+    """Lowercase brand families the compiler embedded from one of the brand's own font files."""
+    embedded = {Path(m).name.lower() for m in _FONT_EMBEDDED.findall(log_text)}
+    return {family for family, files in brand_font_files(brief).items() if files & embedded}
+
+
 def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4: Path) -> dict:
     names, required, _ = brand_families(project, brief)
     wanted = {n.lower() for n in names}
@@ -291,9 +313,11 @@ def check_fonts(project: Path, brief: dict, render_log: Path, version: str, mp4:
     else:
         log_text = render_log.read_text(encoding="utf-8", errors="replace")
         counts = [int(n) for n in _INJECTED.findall(log_text)]
-        logged = {n.strip().lower() for n in _FONT_NAMED.findall(log_text)}
-        injected = max(counts) if counts else 0
-        if not counts:
+        fetched = {n.strip().lower() for n in _FONT_NAMED.findall(log_text)}
+        embedded = embedded_brand_families(log_text, brief)
+        logged = fetched | embedded
+        injected = (max(counts) if counts else 0) + len(embedded - fetched)
+        if not counts and not embedded:
             problems.append(
                 "%s has no 'Injected deterministic @font-face rules' line, so the MP4 may use fallback fonts"
                 % render_log

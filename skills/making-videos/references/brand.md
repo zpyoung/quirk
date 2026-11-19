@@ -128,7 +128,7 @@ from `brand.json`: `--<token>` for each color, `--font-<role>` for each font wit
 Why: a `<link rel="stylesheet">` that holds the font families renders the MP4 in system fallback fonts,
 while `check`, snapshots and preview all look right. The renderer injects `@font-face` rules only for
 families it sees inline. Verify checks that every `var(--font-*)` resolves in an inline `<style>` and that
-the render log's `Injected deterministic @font-face rules` line lists every brand family; decode a frame
+the render log delivers every brand family, fetched by name or embedded from a brand font file; decode a frame
 from the MP4 to confirm. Details and the HyperFrames rules are in [hyperframes.md](hyperframes.md).
 
 - Do not copy a token file into `assets/` and link it; the t1 trial did, and the fonts broke.

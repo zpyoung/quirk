@@ -353,6 +353,82 @@ def test_fonts_name_comparison_ignores_case(tmp_path):
     assert check_of(out, "fonts")["status"] == "pass"
 
 
+def _brand_with_local_display_file(s: Studio, name: str = "Outfit-SemiBold.ttf") -> None:
+    brand = s.studio / "brands" / "acme" / "brand.json"
+    doc = json.loads(brand.read_text())
+    doc["fonts"]["display"]["files"] = ["fonts/" + name]
+    write_json(brand, doc)
+
+
+# the compiler fetches only Google families; a brand font file is embedded and logged on its own line
+LOCAL_FONT_LOG = (
+    '[INFO] [Compiler] Fetched 9 font face(s) for "IBM Plex Mono" from Google Fonts\n'
+    "[INFO] [Compiler] Injected deterministic @font-face rules for 1 requested font families\n"
+    "[INFO] [Compiler] Embedded local font file: assets/fonts/%s (152 KB → data URI)\n")
+
+
+def test_fonts_pass_when_a_brand_family_is_embedded_from_its_own_font_file(tmp_path):
+    s = Studio(tmp_path)
+    _brand_with_local_display_file(s)
+    (s.vdir / "render.log").write_text(LOCAL_FONT_LOG % "Outfit-SemiBold.ttf", encoding="utf-8")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "pass", fonts["detail"]
+    assert fonts["measured"]["injected"] == 2 and fonts["measured"]["required"] == 2
+
+
+def test_fonts_credit_an_embedded_brand_file_whose_name_has_a_space(tmp_path):
+    s = Studio(tmp_path)
+    _brand_with_local_display_file(s, "Outfit SemiBold.ttf")
+    (s.vdir / "render.log").write_text(LOCAL_FONT_LOG % "Outfit SemiBold.ttf", encoding="utf-8")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "pass", fonts["detail"]
+    assert fonts["measured"]["injected"] == 2
+
+
+def test_fonts_pass_on_a_log_with_only_embedded_brand_files_and_no_injected_line(tmp_path):
+    s = Studio(tmp_path)
+    brand = s.studio / "brands" / "acme" / "brand.json"
+    doc = json.loads(brand.read_text())
+    doc["fonts"]["display"]["files"] = ["fonts/Outfit-SemiBold.ttf"]
+    doc["fonts"]["mono"]["files"] = ["fonts/IBMPlexMono-Regular.ttf"]
+    write_json(brand, doc)
+    (s.vdir / "render.log").write_text(
+        "[INFO] [Compiler] Embedded local font file: assets/fonts/Outfit-SemiBold.ttf (152 KB → data URI)\n"
+        "[INFO] [Compiler] Embedded local font file: assets/fonts/IBMPlexMono-Regular.ttf (98 KB → data URI)\n",
+        encoding="utf-8")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "pass", fonts["detail"]
+    assert fonts["measured"]["injected"] == 2
+
+
+def test_a_family_both_fetched_and_embedded_counts_once(tmp_path):
+    s = Studio(tmp_path)
+    _brand_with_local_display_file(s)
+    (s.vdir / "render.log").write_text(
+        '[INFO] [Compiler] Fetched 3 font face(s) for "Outfit" from Google Fonts\n'
+        '[INFO] [Compiler] Fetched 9 font face(s) for "IBM Plex Mono" from Google Fonts\n'
+        "[INFO] [Compiler] Injected deterministic @font-face rules for 2 requested font families\n"
+        "[INFO] [Compiler] Embedded local font file: assets/fonts/Outfit-SemiBold.ttf (152 KB → data URI)\n",
+        encoding="utf-8")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "pass", fonts["detail"]
+    assert fonts["measured"]["injected"] == 2
+
+
+def test_fonts_fail_when_the_embedded_file_is_not_one_of_the_brand_files(tmp_path):
+    s = Studio(tmp_path)
+    _brand_with_local_display_file(s)
+    (s.vdir / "render.log").write_text(LOCAL_FONT_LOG % "SomethingElse.ttf", encoding="utf-8")
+    code, out = s.run()
+    fonts = check_of(out, "fonts")
+    assert fonts["status"] == "fail"
+    assert fonts["measured"]["injected"] == 1
+
+
 def test_fonts_fail_when_a_count_only_log_meets_the_count_but_a_token_is_another_family(tmp_path):
     s = Studio(tmp_path, render_log="render_other_warn.log")
     _wrong_family_scenes(s)
